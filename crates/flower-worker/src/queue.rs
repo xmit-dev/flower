@@ -1030,59 +1030,69 @@ impl<C: QueueClient> Worker<C> {
         let sent_at = self.now();
         let reply = self.send(method.name(), args, until).await;
         let (id, error) = id;
-        let guard = self.core.enter();
-        match reply {
-            Ok(reply) => {
-                self.core.emit(match method {
-                    Method::Complete => QueueWorkerEvent::Completed { id },
-                    Method::Release => QueueWorkerEvent::Released { id },
-                    Method::Fail => QueueWorkerEvent::Failed {
-                        id,
-                        error: error.unwrap_or_default(),
-                    },
-                });
-                if take > 0 {
-                    let next = match reply {
-                        Value::Object(mut reply) => reply.remove("next").unwrap_or(Value::Null),
-                        _ => Value::Null,
-                    };
-                    match claimed_jobs(next) {
-                        Ok(jobs) => {
-                            guard.borrow_mut().claimed(jobs.len(), take);
-                            let count = jobs.len() as i64;
-                            for job in jobs {
-                                self.start(&guard, job, sent_at);
+        {
+            let guard = self.core.enter();
+            match reply {
+                Ok(reply) => {
+                    self.core.emit(match method {
+                        Method::Complete => QueueWorkerEvent::Completed { id },
+                        Method::Release => QueueWorkerEvent::Released { id },
+                        Method::Fail => QueueWorkerEvent::Failed {
+                            id,
+                            error: error.unwrap_or_default(),
+                        },
+                    });
+                    if take > 0 {
+                        let next = match reply {
+                            Value::Object(mut reply) => reply.remove("next").unwrap_or(Value::Null),
+                            _ => Value::Null,
+                        };
+                        match claimed_jobs(next) {
+                            Ok(jobs) => {
+                                guard.borrow_mut().claimed(jobs.len(), take);
+                                let count = jobs.len() as i64;
+                                for job in jobs {
+                                    self.start(&guard, job, sent_at);
+                                }
+                                let mut state = guard.borrow_mut();
+                                if count == take && state.busy() >= state.limit() {
+                                    state.limiter.want();
+                                }
                             }
-                            let mut state = guard.borrow_mut();
-                            if count == take && state.busy() >= state.limit() {
-                                state.limiter.want();
+                            Err(message) => {
+                                guard.borrow_mut().fail(Halt::Protocol(message));
+                                self.core.signal.cancel();
                             }
-                        }
-                        Err(message) => {
-                            guard.borrow_mut().fail(Halt::Protocol(message));
-                            self.core.signal.cancel();
                         }
                     }
                 }
+                Err(error) => {
+                    // Refused (the lease moved on) or never answered: either way the queue hands the
+                    // job out again once the lease ends.
+                    if error.failure_code() == Some("LEASE_LOST") {
+                        self.core.emit(QueueWorkerEvent::Lost { id });
+                    } else {
+                        self.core.emit(QueueWorkerEvent::Unreported {
+                            id,
+                            error: error.describe(),
+                        });
+                    }
+                }
             }
-            Err(error) => {
-                // Refused (the lease moved on) or never answered: either way the queue hands the
-                // job out again once the lease ends.
-                if error.failure_code() == Some("LEASE_LOST") {
-                    self.core.emit(QueueWorkerEvent::Lost { id });
-                } else {
-                    self.core.emit(QueueWorkerEvent::Unreported {
-                        id,
-                        error: error.describe(),
-                    });
+            {
+                let mut state = guard.borrow_mut();
+                if take > 0 {
+                    state.claiming -= take - 1;
+                    state.wake(Some(take - 1));
                 }
             }
         }
+        // TS leaves `running` in the task promise's `.finally`, a microtask after the report code:
+        // jobs the report chained in get their first step while this job still counts as busy (a
+        // chained job that fails at once chains nothing, for one). Yield once to keep that order.
+        tokio::task::yield_now().await;
+        let guard = self.core.enter();
         let mut state = guard.borrow_mut();
-        if take > 0 {
-            state.claiming -= take - 1;
-            state.wake(Some(take - 1));
-        }
         state.running.remove(&key);
         state.wake(Some(1));
         drop(state);

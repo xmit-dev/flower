@@ -148,6 +148,8 @@ async fn the_processes_health_reads_its_runtime_and_memory_since_the_last_read_a
     })
     .await
     .unwrap();
+    // A worker thread hands in its busy time when it next parks, not as each task ends.
+    tokio::time::sleep(Duration::from_millis(5)).await;
     let busy = flower_worker::Health::load(&health);
     assert!(busy.load > 0.5, "a spinning runtime reads as busy: {busy:?}");
     assert!(matches_percent(&busy.reason, "event loop ", "% busy"), "{busy:?}");

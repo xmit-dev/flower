@@ -1,0 +1,73 @@
+{
+  "scoped line chain": {
+    "mutate sjobs.claim": [
+      "{\"owner\":\"w1\",\"leaseMs\":10000,\"scope\":\"s1\",\"max\":1,\"waitMs\":20000}",
+      "{\"owner\":\"w1\",\"max\":0,\"waitMs\":0,\"scope\":\"s1\"}"
+    ],
+    "mutate sjobs.complete": [
+      "{\"id\":\"a\",\"owner\":\"w1\",\"token\":1,\"scope\":\"s1\",\"result\":{\"done\":\"a\"},\"next\":{\"max\":1,\"leaseMs\":10000,\"waitMs\":20000}}",
+      "{\"id\":\"c\",\"owner\":\"w1\",\"token\":3,\"scope\":\"s1\",\"result\":{\"zeta\":1,\"alpha\":{\"b\":2,\"a\":[1.5,\"é \",1e+21]}},\"next\":{\"max\":1,\"leaseMs\":10000,\"waitMs\":20000}}"
+    ],
+    "mutate sjobs.fail": [
+      "{\"id\":\"b\",\"owner\":\"w1\",\"token\":2,\"scope\":\"s1\",\"error\":{\"message\":\"boom\"}}"
+    ],
+    "watch sjobs.ready": [
+      "{\"scope\":\"s1\",\"owner\":\"w1\"}"
+    ]
+  },
+  "renew drain release": {
+    "mutate jobs.claim": [
+      "{\"owner\":\"w2\",\"leaseMs\":300}"
+    ],
+    "mutate jobs.release": [
+      "{\"id\":\"long\",\"owner\":\"w2\",\"token\":1}"
+    ],
+    "mutate jobs.renew": [
+      "{\"leases\":[{\"id\":\"long\",\"owner\":\"w2\",\"token\":1}],\"leaseMs\":300}"
+    ],
+    "watch jobs.ready": [
+      "null"
+    ]
+  },
+  "scoped claims": {
+    "mutate sjobs.claim": [
+      "{\"owner\":\"w3\",\"leaseMs\":30000,\"scope\":\"s3\"}"
+    ],
+    "mutate sjobs.complete": [
+      "{\"id\":\"x\",\"owner\":\"w3\",\"token\":1,\"scope\":\"s3\",\"result\":null}"
+    ],
+    "watch sjobs.ready": [
+      "{\"scope\":\"s3\"}"
+    ]
+  },
+  "reconcile one key": {
+    "mutate digest.publish": [
+      "{\"args\":\"one\",\"key\":\"[\\\"one\\\",{\\\"recipe\\\":\\\"sha256-v1\\\",\\\"text\\\":\\\"A\\\"}]\",\"value\":\"559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd\"}"
+    ],
+    "watch digest.pending": [
+      "\"one\""
+    ]
+  },
+  "reconcile pool": {
+    "mutate digest.publish": [
+      "{\"args\":\"p\",\"key\":\"[\\\"p\\\",{\\\"recipe\\\":\\\"sha256-v1\\\",\\\"text\\\":\\\"P\\\"}]\",\"value\":\"5c62e091b8c0565f1bafad0dad5934276143ae2ccef7a5381e8ada5b1a8d26d2\"}"
+    ],
+    "watch digest.next": [
+      "{\"limit\":2,\"shard\":[0,1]}"
+    ]
+  },
+  "reconcile leased": {
+    "mutate digest.claim": [
+      "{\"owner\":\"r1\",\"leaseMs\":300,\"limit\":1}"
+    ],
+    "mutate digest.publish": [
+      "{\"args\":\"fast\",\"key\":\"[\\\"fast\\\",{\\\"recipe\\\":\\\"sha256-v1\\\",\\\"text\\\":\\\"fast\\\"}]\",\"value\":\"115dc3606fbf8691fb69f2aefec86f2ecd302362a0502b3a9648bf2c4dc8290f\"}"
+    ],
+    "mutate digest.release": [
+      "{\"args\":\"slow\",\"key\":\"[\\\"slow\\\",{\\\"recipe\\\":\\\"sha256-v1\\\",\\\"text\\\":\\\"slow\\\"}]\",\"owner\":\"r1\",\"attempt\":1,\"delayMs\":0}"
+    ],
+    "mutate digest.renew": [
+      "{\"leases\":[{\"args\":\"slow\",\"key\":\"[\\\"slow\\\",{\\\"recipe\\\":\\\"sha256-v1\\\",\\\"text\\\":\\\"slow\\\"}]\",\"owner\":\"r1\",\"attempt\":1}],\"leaseMs\":300}"
+    ]
+  }
+}

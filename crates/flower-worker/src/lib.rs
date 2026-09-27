@@ -31,6 +31,7 @@ pub use capacity::{
 };
 pub use client::{ClientError, Predicate, QueueClient, RetryPolicy, backoff, default_backoff, non_empty_array, truthy};
 pub use clock::{Clock, system_now_ms};
+pub use json::to_js_raw;
 pub use queue::{EventHandler, QueueWorkerOptions, run_queue_worker};
 pub use reconcile::{ReconcileOptions, reconcile};
 pub use stop::{JobControl, JobStop, WorkError};

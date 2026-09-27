@@ -6,7 +6,41 @@ use serde_json::value::RawValue;
 
 /// Serialize request arguments, keeping the field order of `value`'s type.
 pub(crate) fn raw<T: Serialize + ?Sized>(value: &T) -> Box<RawValue> {
-    serde_json::value::to_raw_value(value).expect("worker arguments serialize")
+    to_js_raw(value).expect("worker arguments serialize")
+}
+
+/// `JSON.stringify`: serde_json's output with JS number spelling (`1e+21`, `-0` as `0`), so the
+/// bytes a worker sends equal the TS SDK's. Keys keep the order they serialize in.
+pub fn to_js_raw<T: Serialize + ?Sized>(value: &T) -> Result<Box<RawValue>, serde_json::Error> {
+    let mut out = Vec::with_capacity(128);
+    value.serialize(&mut serde_json::Serializer::with_formatter(&mut out, JsFormatter))?;
+    let text = String::from_utf8(out).expect("serde_json writes UTF-8");
+    RawValue::from_string(text)
+}
+
+/// Numbers as `JSON.stringify` spells them.
+struct JsFormatter;
+
+impl serde_json::ser::Formatter for JsFormatter {
+    fn write_f64<W: ?Sized + std::io::Write>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()> {
+        if !value.is_finite() {
+            return writer.write_all(b"null");
+        }
+        if value == 0.0 {
+            return writer.write_all(b"0");
+        }
+        writer.write_all(ryu_js::Buffer::new().format_finite(value).as_bytes())
+    }
+
+    fn write_f32<W: ?Sized + std::io::Write>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()> {
+        if !value.is_finite() {
+            return writer.write_all(b"null");
+        }
+        if value == 0.0 {
+            return writer.write_all(b"0");
+        }
+        writer.write_all(ryu_js::Buffer::new().format_finite(value).as_bytes())
+    }
 }
 
 /// `storable(result)`: the result as Flower will store it. One it cannot store fails the attempt
@@ -20,7 +54,7 @@ pub(crate) fn storable<R: Serialize + ?Sized>(result: &R) -> Result<Box<RawValue
 pub(crate) fn checked_raw<R: Serialize + ?Sized>(value: &R) -> Result<Box<RawValue>, String> {
     value
         .serialize(Check { depth: 0 })
-        .and_then(|()| serde_json::value::to_raw_value(value).map_err(|error| Invalid(error.to_string())))
+        .and_then(|()| to_js_raw(value).map_err(|error| Invalid(error.to_string())))
         .map_err(|Invalid(reason)| reason)
 }
 
@@ -283,6 +317,15 @@ mod tests {
         let raw = storable(&Outcome { zeta: 1, alpha: "a" }).unwrap();
         assert_eq!(raw.get(), r#"{"zeta":1,"alpha":"a"}"#);
         assert_eq!(storable(&json!({"b": [1, 2.5, null]})).unwrap().get(), r#"{"b":[1,2.5,null]}"#);
+    }
+
+    #[test]
+    fn numbers_are_spelled_as_json_stringify_spells_them() {
+        let numbers = [1e21, 1e-7, -0.0, 0.1 + 0.2, 123456789012345680000.0, 5e-324, f64::MAX, 100.0, 1.5, 1e20, 0.000001, -2.5e-8];
+        // JSON.stringify of the same array, from Node.
+        let expected = "[1e+21,1e-7,0,0.30000000000000004,123456789012345680000,5e-324,1.7976931348623157e+308,100,1.5,100000000000000000000,0.000001,-2.5e-8]";
+        assert_eq!(raw(&numbers).get(), expected);
+        assert_eq!(raw(&json!({"n": 1e21, "i": -3, "u": u64::MAX})).get(), r#"{"i":-3,"n":1e+21,"u":18446744073709551615}"#);
     }
 
     #[test]
