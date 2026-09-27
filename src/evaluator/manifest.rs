@@ -2,7 +2,7 @@
 //! maintenance and authorization methods, key declarations and index schema
 //! Flower stores. Every guest kind goes through these same checks.
 use super::{
-    rust_engine::{IndexSpec, Policy, Rule, Schema},
+    rust_engine::{validate_targets, IndexSpec, Policy, Rule, Schema},
     AuthorizationMethod, HttpMethod, MaintenanceMethod, Manifest, MethodKind, QueryConsistency,
 };
 use anyhow::{anyhow, bail, ensure, Result};
@@ -170,6 +170,7 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
             }
         }
     }
+    validate_targets(&policies).map_err(|error| anyhow!("Invalid access policy: {error}"))?;
     let mut aggregates = BTreeMap::new();
     for (name, definition) in definitions {
         let Some(aggregate) = definition.aggregate else {
@@ -553,6 +554,30 @@ mod tests {
             (
                 json!({"definitions": definitions, "http": {}, "collections": [{"name": "a", "indexes": {}, "access": {"read": true}}]}),
                 "Invalid access policy for collection a",
+            ),
+            (
+                json!({"definitions": definitions, "http": {}, "collections": [{"name": "a", "indexes": {}, "access": {"read": {"readable": ["b", {"ref": ["key"]}]}}}, {"name": "b", "indexes": {}}]}),
+                "Invalid access policy: a: readable(\"b\") needs a collection with an access policy",
+            ),
+            (
+                json!({"definitions": definitions, "http": {}, "collections": [
+                    {"name": "a", "indexes": {}, "access": {"read": {"readable": ["b", {"ref": ["key"]}]}}},
+                    {"name": "b", "indexes": {}, "access": {"read": {"readable": ["c", {"ref": ["key"]}]}}},
+                    {"name": "c", "indexes": {}, "access": {"read": {"const": true}}},
+                ]}),
+                "Invalid access policy: a: readable(\"b\") names a collection whose read rule uses readable itself",
+            ),
+            (
+                json!({"definitions": definitions, "http": {}, "collections": [{"name": "a", "indexes": {}, "access": {"read": {"readable": ["", {"ref": ["key"]}]}}}]}),
+                "Invalid access policy for collection a: read: readable needs a collection name",
+            ),
+            (
+                json!({"definitions": definitions, "http": {}, "collections": [{"name": "a", "indexes": {}, "access": {"insert": {"readable": ["a", {"ref": ["row", "x"]}]}}}]}),
+                "Invalid access policy for collection a: insert: row.x cannot be used here",
+            ),
+            (
+                json!({"definitions": {"d": {"kind": "derived", "access": {"readable": ["a", {"ref": ["args"]}]}}}, "http": {}}),
+                "Invalid access rule for derived d: access: readable cannot be used here",
             ),
             (
                 json!({"definitions": {"q": {"kind": "query", "access": {"const": true}}}, "http": {}}),

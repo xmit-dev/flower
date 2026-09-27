@@ -97,6 +97,9 @@ export interface PrincipalFields {
   readonly authenticated: Rule;
 }
 
+/** A collection a rule names: a collection reference, or its name. */
+export type CollectionName = string | { readonly kind: "collection"; readonly name: string };
+
 /** What access rules can refer to. `row` is absent on insert; `next` exists only while writing. */
 export interface AccessScope<T> {
   readonly principal: PrincipalFields;
@@ -114,6 +117,16 @@ export interface AccessScope<T> {
   all(...rules: RuleLike[]): Rule;
   any(...rules: RuleLike[]): Rule;
   not(rule: RuleLike): Rule;
+  /**
+   * The caller may read the row of `collection` at `key`: it exists (this invocation's
+   * own writes included), and that collection's read rule allows it. Rows can so follow
+   * another row's rule, like a log's entries their session's (`readable(sessions,
+   * key.at(0))`), without copying what it depends on into each of them; a result that
+   * used it changes when that row does. A string key is used as is; an array or object,
+   * as canonical JSON, like typed keys. The collection needs an access policy whose read
+   * rule doesn't use readable itself.
+   */
+  readable(collection: CollectionName, key: OperandLike<Json>): Rule;
 }
 
 export interface FieldAccess {
@@ -233,6 +246,14 @@ const combinators = {
   not: (rule: RuleLike) => new RuleNode({ not: ruleJson(rule, "not()") }),
 };
 
+function collectionName(collection: unknown): string {
+  const name = typeof collection === "string" ? collection
+    : collection !== null && typeof collection === "object" && (collection as { kind?: unknown }).kind === "collection" ? (collection as { name?: unknown }).name
+    : undefined;
+  if (typeof name !== "string" || !name) throw new TypeError("readable() needs a collection or its name");
+  return name;
+}
+
 const scope: AccessScope<any> = Object.freeze({
   principal: principalFields,
   row: fieldsOf("row"),
@@ -240,6 +261,7 @@ const scope: AccessScope<any> = Object.freeze({
   key: new PartsNode({ ref: ["key"] }),
   now: new OperandNode({ ref: ["now"] }),
   ...combinators,
+  readable: (collection: CollectionName, key: unknown) => new RuleNode({ readable: [collectionName(collection), operand(key)] }),
 });
 
 const derivedScope: DerivedScope<any> = Object.freeze({
@@ -342,6 +364,9 @@ type Row = { key: string; value: Json };
 type Subject = { key: string; row?: Json; next?: Json; parts?: Json | undefined | null };
 /** The invocation's clock, as rules read it: the time, and a flip to report. */
 interface Clock { now(): number; note(flip: number | undefined): void }
+/** Whether the caller may read the row of `collection` at `key`, for `readable`. */
+type Rows = (collection: string, key: string) => boolean;
+const noRows: Rows = () => false;
 type Host = Record<string, (...args: any[]) => any>;
 
 function lookup(value: Json | undefined, path: readonly string[]): Json | undefined {
@@ -420,14 +445,19 @@ function same(left: Json | undefined, right: Json | undefined): boolean | undefi
 
 const isNow = (operand: OperandJson) => "ref" in operand && operand.ref[0] === "now";
 
-function holds(rule: RuleJson, caller: Json, subject: Subject, clock: Clock): boolean {
+function holds(rule: RuleJson, caller: Json, subject: Subject, clock: Clock, rows: Rows): boolean {
   const [operator, body] = Object.entries(rule)[0] as [string, any];
   switch (operator) {
     case "const": return body === true;
-    case "all": return (body as RuleJson[]).every((each) => holds(each, caller, subject, clock));
-    case "any": return (body as RuleJson[]).some((each) => holds(each, caller, subject, clock));
-    case "not": return !holds(body, caller, subject, clock);
+    case "all": return (body as RuleJson[]).every((each) => holds(each, caller, subject, clock, rows));
+    case "any": return (body as RuleJson[]).some((each) => holds(each, caller, subject, clock, rows));
+    case "not": return !holds(body, caller, subject, clock, rows);
     case "exists": return isNow(body) || present(resolve(body, caller, subject, clock));
+    case "readable": {
+      const key = resolve(body[1], caller, subject, clock);
+      const text = typeof key === "string" ? key : key !== null && typeof key === "object" ? canonicalJson(key) : undefined;
+      return text !== undefined && rows(body[0], text);
+    }
   }
   const left = resolve(body[0], caller, subject, clock);
   const right = resolve(body[1], caller, subject, clock);
@@ -454,14 +484,16 @@ class Guard {
   readonly policy: AccessManifest;
   readonly caller: Json;
   readonly clock: Clock;
-  constructor(collection: string, policy: AccessManifest, caller: Json, clock: Clock) {
+  readonly readable: Rows;
+  constructor(collection: string, policy: AccessManifest, caller: Json, clock: Clock, readable: Rows) {
     this.collection = collection;
     this.policy = policy;
     this.caller = caller;
     this.clock = clock;
+    this.readable = readable;
   }
   private rule(body: Json): RuleJson { return body as RuleJson; }
-  private check(rule: Json, subject: Subject): boolean { return holds(this.rule(rule), this.caller, subject, this.clock); }
+  private check(rule: Json, subject: Subject): boolean { return holds(this.rule(rule), this.caller, subject, this.clock, this.readable); }
   private fieldReadable(field: string, key: string, row: Json): boolean {
     const read = this.policy.fields?.[field]?.read;
     return read === undefined || this.check(read, { key, row });
@@ -549,11 +581,20 @@ export function enforceAccess(
     now: () => host.now() as number,
     note: (flip) => { if (flip !== undefined) host.changesAt(flip); },
   };
+  // `readable` reads the named row with the application's rights, this invocation's
+  // writes included, and checks the collection's read rule on it, which can't look
+  // further. The raw read makes a result depend on the row.
+  const readable: Rows = (collection, key) => {
+    const policy = policies.get(collection);
+    if (!policy) return false;
+    const row = host.get({ kind: "collection", name: collection }, key) as Json;
+    return row !== null && row !== undefined && holds(policy.read as RuleJson, caller, { key, row }, clock, noRows);
+  };
   // Triggers run between definer(true) and definer(false), with the application's rights.
   let definer = 0;
   const guard = (name: unknown) => {
     const policy = typeof name === "string" && definer === 0 ? policies.get(name) : undefined;
-    return policy ? new Guard(name as string, policy, caller, clock) : undefined;
+    return policy ? new Guard(name as string, policy, caller, clock, readable) : undefined;
   };
   const name = (reference: any): string | undefined =>
     typeof reference?.collection === "string" ? reference.collection : reference?.collection?.name ?? reference?.name;
@@ -567,7 +608,7 @@ export function enforceAccess(
     },
     get(reference: any, key: any) {
       const rule = reference?.kind === "derived" && definer === 0 ? derived.get(reference.name) : undefined;
-      if (rule && !holds(rule, caller, { key: "", row: key ?? null }, clock)) {
+      if (rule && !holds(rule, caller, { key: "", row: key ?? null }, clock, noRows)) {
         throw Object.assign(new Error(`Access policy denies reading ${reference.name}`), { code: "ACCESS_DENIED" });
       }
       const value = host.get(reference, key);

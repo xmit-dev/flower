@@ -380,3 +380,95 @@ test("a collection with access must be declared, and callers' views never reach 
   assert.throws(() => db.mutate("login", "t1"), (error: any) => error.failure?.code === "ACCESS_DENIED");
   assert.throws(() => db.query("stray"), /declares access; list it in define/);
 });
+
+test("readable lets rows follow another row's rule, even one written just before", async () => {
+  const sessions = collection<{ owner: string; private?: boolean }>("sessions").access(({ principal, row, next, any, not }) => ({
+    read: any(principal.claim("role").eq("admin"), row("owner").eq(principal.subject), not(row("private").eq(true))),
+    insert: next("owner").eq(principal.subject),
+    update: row("owner").eq(principal.subject),
+  }));
+  const events = collection<{ session: string; text: string }>("events")
+    .key(v.tuple([v.string({ min: 1 }), v.int({ min: 1 })]))
+    .index("bySession", ["session"])
+    .access(({ principal, key, readable, any }) => {
+      const entries = any(principal.claim("role").eq("admin"), readable(sessions, key.at(0)));
+      return { read: entries, write: entries };
+    });
+  const entry = v.object({ session: v.string({ min: 1 }), n: v.int({ min: 1 }) });
+  const session = v.object({ id: v.string({ min: 1 }), owner: v.string(), private: v.optional(v.boolean()) });
+  const open = { access: "public" } as const;
+  const app = define({
+    collections: [sessions, events],
+    auth: {
+      authenticate: (_ctx, credentials) => typeof credentials === "string"
+        ? { subject: credentials, claims: { role: credentials === "root" ? "admin" : "user" } }
+        : null,
+    },
+    http: {
+      list: query("list", open, (ctx) => ctx.scan(events).map((row) => row.value.text)),
+      get: query("get", { ...open, args: entry }, (ctx, { session, n }) => ctx.get(events, [session, n])?.text ?? null),
+      of: query("of", { ...open, args: v.string() }, (ctx, id) => ctx.query(events.by("bySession").eq(id)).map((row) => row.text)),
+      append: mutation("append", { args: entry }, (ctx, { session, n }) => { ctx.set(events, [session, n], { session, text: `${session}/${n}` }); return null; }),
+      // A session and its first entry in one mutation.
+      start: mutation("start", { args: session }, (ctx, { id, ...row }) => {
+        ctx.set(sessions, id, row);
+        ctx.set(events, [id, 1], { session: id, text: `${id}/1` });
+        return null;
+      }),
+      share: mutation("share", { args: v.object({ id: v.string(), private: v.boolean() }) }, (ctx, { id, private: hidden }) => {
+        const row = ctx.get(sessions, id);
+        if (!row) fail("NOT_FOUND", "No such session");
+        ctx.set(sessions, id, { ...row, private: hidden });
+        return null;
+      }),
+    },
+  });
+  const entryAccess = app.collections!.find((each) => each.name === "events")!.access!;
+  assert.deepEqual(entryAccess.read, {
+    any: [{ eq: [{ ref: ["principal", "claims", "role"] }, { value: "admin" }] }, { readable: ["sessions", { ref: ["key", "0"] }] }],
+  });
+
+  const db = await testDatabase(app);
+  const as = (credentials: string) => ({ credentials });
+  db.mutate("start", { id: "s1", owner: "alice", private: true }, as("alice"));
+  db.mutate("start", { id: "s2", owner: "bob", private: true }, as("bob"));
+  db.mutate("start", { id: "s3", owner: "bob" }, as("bob"));
+  db.mutate("append", { session: "s1", n: 2 }, as("alice"));
+  // An entry whose session doesn't exist, which only admins see.
+  db.mutate("append", { session: "gone", n: 1 }, as("root"));
+
+  assert.deepEqual(db.query("list", null, as("alice")), ["s1/1", "s1/2", "s3/1"]);
+  assert.deepEqual(db.query("list", null, as("bob")), ["s2/1", "s3/1"]);
+  assert.deepEqual(db.query("list", null, as("root")), ["gone/1", "s1/1", "s1/2", "s2/1", "s3/1"]);
+  assert.equal(db.query("get", { session: "s2", n: 1 }, as("alice")), null);
+  assert.equal(db.query("get", { session: "gone", n: 1 }, as("alice")), null);
+  assert.equal(db.query("get", { session: "s1", n: 2 }, as("alice")), "s1/2");
+  assert.deepEqual(db.query("of", "s2", as("alice")), []);
+
+  const denied = (run: () => unknown) => assert.throws(run, (error: any) => error instanceof FlowerError && error.failure?.code === "ACCESS_DENIED");
+  denied(() => db.mutate("append", { session: "s2", n: 2 }, as("alice")));
+  denied(() => db.mutate("append", { session: "nowhere", n: 1 }, as("alice")));
+  // Bob opening his session shows its entries to alice at once, and closing it hides them.
+  db.mutate("share", { id: "s2", private: false }, as("bob"));
+  assert.deepEqual(db.query("of", "s2", as("alice")), ["s2/1"]);
+  db.mutate("append", { session: "s2", n: 2 }, as("alice"));
+  db.mutate("share", { id: "s2", private: true }, as("bob"));
+  assert.deepEqual(db.query("list", null, as("alice")), ["s1/1", "s1/2", "s3/1"]);
+  assert.deepEqual(db.query("of", "s2", as("bob")), ["s2/1", "s2/2"]);
+});
+
+test("readable must name a collection declared with access whose read rule doesn't use readable", () => {
+  const plain = collection("plain");
+  const guarded = collection("guarded").access({ read: true });
+  const follows = (target: { readonly kind: "collection"; readonly name: string }, name = "follows") =>
+    collection(name).access(({ key, readable }) => ({ read: readable(target, key) }));
+  assert.throws(() => define({ collections: [plain, follows(plain)], http: {} }), /use readable\("plain"\); declare that collection with access/);
+  assert.throws(() => define({ collections: [follows(guarded)], http: {} }), /use readable\("guarded"\); declare that collection with access/);
+  const chained = follows(guarded, "chained");
+  assert.throws(() => define({ collections: [guarded, chained, follows(chained)], http: {} }), /use readable\("chained"\), whose read rule uses readable itself/);
+  define({ collections: [guarded, chained], http: {} });
+  // A collection's own writes may follow its read rule's view of another row, itself included.
+  const self = collection<{ parent: string }>("self").access(({ next, readable, principal }) => ({ read: principal.authenticated, insert: readable("self", next("parent")) }));
+  assert.deepEqual(define({ collections: [self], http: {} }).collections![0].access!.insert, { readable: ["self", { ref: ["next", "parent"] }] });
+  assert.throws(() => collection("bad").access(({ key, readable }) => ({ read: readable("" as never, key) })), /readable\(\) needs a collection or its name/);
+});

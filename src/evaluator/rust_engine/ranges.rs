@@ -569,8 +569,10 @@ impl Engine<'_> {
     fn scan_rows(&mut self, query: &RangeQuery, access: Option<&access::Access>) -> EngineResult<Scanned> {
         // A row found through an index field the caller can't read stays hidden.
         let selecting: &[String] = if query.source_keys { &[] } else { &query.fields };
+        // Rows the caller's `readable` rules look up, recorded as read below.
+        let lookup = access::RowLookup::new(self);
         let visible = |key: &str, value: &Value| {
-            access.is_none_or(|access| access.visible(key, value, selecting))
+            access.is_none_or(|access| access.visible(key, value, selecting, &lookup))
         };
         if query.lower >= query.upper || query.limit == 0 {
             return Ok(Scanned {
@@ -809,6 +811,8 @@ impl Engine<'_> {
         } else {
             None
         };
+        let looked_up = lookup.into_reads();
+        self.record_lookups(looked_up)?;
         for (key, _) in found.values() {
             self.record_read(source_id(&query.collection, key));
         }
@@ -828,13 +832,14 @@ impl Engine<'_> {
         };
         let rows = match access {
             Some(access) => {
-                let rows = rows
-                    .into_iter()
-                    .map(|(key, value)| {
-                        let shown = access.redact(&key, &value);
-                        (key, shown)
-                    })
-                    .collect();
+                let rows = self.looking_up(|lookup| {
+                    rows.into_iter()
+                        .map(|(key, value)| {
+                            let shown = access.redact(&key, &value, lookup);
+                            (key, shown)
+                        })
+                        .collect()
+                })?;
                 self.settle_access(access)?;
                 rows
             }

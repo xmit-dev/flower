@@ -129,6 +129,9 @@ impl Schema {
                 EngineError::new("INPUT_INVALID", format!("Malformed access policy: {error}"))
             })?;
         }
+        super::validate_targets(&self.policies).map_err(|error| {
+            EngineError::new("INPUT_INVALID", format!("Malformed access policy: {error}"))
+        })?;
         for (name, rule) in &self.derived_access {
             if name.is_empty() {
                 return Err(EngineError::new("INPUT_INVALID", "Malformed access rule"));

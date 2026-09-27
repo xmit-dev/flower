@@ -73,8 +73,38 @@ const clearToken = mutation("clearToken", { args: id }, (ctx, key) => {
   return null;
 });
 const entries = query("audit", open, (ctx) => ctx.scan(audit).map((row) => row.value));
+// Sessions people see when they own them or they aren't private, and a log whose entries
+// follow their session's rule through readable().
+const sessions = collection("sessions", v.object({ owner: v.string(), private: v.boolean() }))
+  .access(({ principal, row, next, any, not }) => ({
+    read: any(principal.claim("role").eq("admin"), row("owner").eq(principal.subject), not(row("private").eq(true))),
+    insert: next("owner").eq(principal.subject),
+    update: row("owner").eq(principal.subject),
+  }));
+const events = collection("events", v.object({ session: v.string(), text: v.string() }))
+  .key(v.tuple([v.string({ min: 1 }), v.int({ min: 1 })]))
+  .access(({ principal, key, readable, any }) => {
+    const entries = any(principal.claim("role").eq("admin"), readable(sessions, key.at(0)));
+    return { read: entries, write: entries };
+  });
+const timeline = query("timeline", open, (ctx) => ctx.scan(events).map((row) => row.value.text));
+const start = mutation("start", { args: v.object({ id, private: v.boolean() }) }, (ctx, { id, private: hidden }) => {
+  ctx.set(sessions, id, { owner: ctx.principal().subject, private: hidden });
+  ctx.set(events, [id, 1], { session: id, text: id + "/1" });
+  return null;
+});
+const append = mutation("append", { args: v.object({ session: id, n: v.int({ min: 1 }) }) }, (ctx, { session, n }) => {
+  ctx.set(events, [session, n], { session, text: session + "/" + n });
+  return null;
+});
+const share = mutation("share", { args: v.object({ id, private: v.boolean() }) }, (ctx, { id, private: hidden }) => {
+  const row = ctx.get(sessions, id);
+  if (!row) fail("NOT_FOUND", "No such session");
+  ctx.set(sessions, id, { ...row, private: hidden });
+  return null;
+});
 export default define({
-  collections: [notes, audit],
+  collections: [notes, audit, sessions, events],
   definitions: [total, countFor],
   triggers: [log],
   auth: {
@@ -82,7 +112,7 @@ export default define({
       ? { subject: credentials, claims: credentials === "root" ? { role: "admin" } : {} }
       : null,
   },
-  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries },
+  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share },
 });`;
 }
 
@@ -151,13 +181,38 @@ try {
   assert.deepEqual(trail.at(-1), { by: "alice", secret: "s1" });
   assert.deepEqual(await value(alice.query("audit")), []);
 
+  // readable(): a log's entries follow their session's rule, a session created in the same
+  // mutation included, and a live watch follows the session's privacy.
+  await mutate(alice, "start", { id: "s1", private: true });
+  await mutate(bob, "start", { id: "s2", private: true });
+  await mutate(bob, "start", { id: "s3", private: false });
+  assert.deepEqual(await value(alice.query("timeline")), ["s1/1", "s3/1"]);
+  assert.deepEqual(await value(bob.query("timeline")), ["s2/1", "s3/1"]);
+  assert.deepEqual(await value(rootUser.query("timeline")), ["s1/1", "s2/1", "s3/1"]);
+  await denied(mutate(alice, "append", { session: "s2", n: 2 }));
+  await denied(mutate(alice, "append", { session: "nowhere", n: 1 }));
+  await mutate(alice, "append", { session: "s3", n: 2 });
+  const watching = new AbortController();
+  const watch = alice.watch("timeline", null, { signal: watching.signal });
+  const next = async () => {
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("watch did not update")), 10_000));
+    return (await Promise.race([watch.next(), timeout])).value.value;
+  };
+  assert.deepEqual(await next(), ["s1/1", "s3/1", "s3/2"]);
+  await mutate(bob, "share", { id: "s2", private: false });
+  assert.deepEqual(await next(), ["s1/1", "s2/1", "s3/1", "s3/2"]);
+  await mutate(bob, "share", { id: "s2", private: true });
+  assert.deepEqual(await next(), ["s1/1", "s3/1", "s3/2"]);
+  watching.abort();
+  await watch.return?.().catch(() => {});
+
   // A policy-only redeploy takes effect at once, cached results included.
   await writeFile(fixture, source(`principal.authenticated`));
   await admin().deploy(await buildBundle(fixture, { initialization: "static" }), { requestId: "access-redeploy" });
   assert.deepEqual(await value(alice.query("list")), ["a1", "a3", "b1", "b2"]);
   assert.deepEqual(await value(alice.query("get", "b1")), { owner: "bob", rank: 2, text: "two" });
   assert.deepEqual(await value(anonymous.query("list")), []);
-  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, and follow policy redeploys");
+  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, let rows follow another row's rule (live watches included), and follow policy redeploys");
 } catch (error) {
   console.error(error);
   console.error(cluster.logTails());

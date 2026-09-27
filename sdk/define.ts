@@ -6,7 +6,7 @@ import type {
   Access, AuthorizationRequest, Collection, Component, ComponentParts, Definition, Derived, Failure, FlowerModule, HttpMap,
   ManifestMethod, MutationContext, Principal, QueryContext, SetOptions, Task, TaskFailure, Trigger,
 } from "./core.ts";
-import { aggregateSource, collectionManifest, normalizeAggregateMetadata } from "./indexing.ts";
+import { aggregateSource, checkReadable, collectionManifest, normalizeAggregateMetadata } from "./indexing.ts";
 import { keyManifest, type ManagedKey } from "./keys.ts";
 import { ValidationError, type Schema } from "./schema.ts";
 
@@ -580,6 +580,7 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
   const authenticator = auth?.authenticate;
   const keys = keyManifest([...flat.keys, ...(authenticator && typeof authenticator === "object" ? authenticator.keys : [])]);
   const manifest = collectionManifest(collections);
+  checkReadable(manifest);
   runtime.guarded = new Set(manifest.filter((entry) => entry.access).map((entry) => entry.name));
   return Object.freeze({
     definitions: Object.freeze(definitions),

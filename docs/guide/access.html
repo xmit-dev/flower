@@ -88,6 +88,23 @@ const drafts = collection("drafts", v.object({ text: v.string(), expiresAt: v.in
     read: key.at(0).eq(principal.subject).and(row("expiresAt").gt(now)),
     write: key.at(0).eq(principal.subject),
   }));</code></pre></div>
+<p>A row can follow another row's rule: <code>readable(collection, key)</code> holds when the caller may read that row. A log's entries then follow their session, the moment it turns private too, without a copy of who may see it in every entry.</p>
+<div class="code-block"><div class="code-head"><span>sessions.ts</span><button class="copy-button" type="button" aria-label="Copy sessions.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, v } from "@flower-js/sdk";
+
+const sessions = collection("sessions", v.object({ owner: v.string(), private: v.boolean() }))
+  .access(({ principal, row, next, not }) =&gt; ({
+    read: row("owner").eq(principal.subject).or(not(row("private").eq(true))),
+    insert: next("owner").eq(principal.subject),
+    update: row("owner").eq(principal.subject),
+  }));
+
+// Entries keyed [session, n]: whoever sees a session reads and writes its log.
+const entries = collection("entries", v.object({ text: v.string() }))
+  .key(v.tuple([v.string(), v.int()]))
+  .access(({ key, readable }) =&gt; ({
+    read: readable(sessions, key.at(0)),
+    write: readable(sessions, key.at(0)),
+  }));</code></pre></div>
 <p>Derived values compute over every row too, so give one built from a guarded collection an <code>access</code> rule over the caller and its arguments. Without one, any method may read it.</p>
 <div class="code-block"><div class="code-head"><span>notes.ts, continued</span><button class="copy-button" type="button" aria-label="Copy notes.ts, continued">Copy</button></div><pre tabindex="0"><code class="language-ts">const noteCount = derive("noteCount", (ctx, owner: string) =&gt;
   ctx.scan(notes).filter((row) =&gt; row.value.owner === owner).length, {

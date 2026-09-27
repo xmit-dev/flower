@@ -1093,3 +1093,276 @@ fn owner_scans_read_their_bucket_and_ignore_other_owners_writes() {
     .value;
     assert_eq!(keys(&moved), ["a2", "a3", "b1"]);
 }
+
+fn events() -> Value {
+    json!({"kind":"collection","name":"events","indexes":{"bySession":["session","n"]}})
+}
+
+/// A log whose entries, keyed `[session, n]`, follow their session's rule
+/// through `readable`: people see their own sessions and public ones; admins
+/// see everything without looking sessions up.
+fn log_fixture() -> Fixture {
+    fn append(host: &mut Host<'_>, session: &Value, n: &Value, text: &str) -> EngineResult<Value> {
+        host(
+            "set",
+            json!([events(), canonical_json(&json!([session, n])), {"session":session,"n":n,"text":text}]),
+        )
+    }
+    Fixture::new([
+        (
+            "get",
+            (|args, host| host("get", json!([events(), canonical_json(args)]))) as Callback,
+        ),
+        (
+            "scan",
+            (|_, host| host("scan", json!([events()]))) as Callback,
+        ),
+        (
+            "scanIndex",
+            (|args, host| host("scan", json!([events(), args]))) as Callback,
+        ),
+        (
+            "range",
+            (|args, host| {
+                host(
+                    "range",
+                    json!([{"kind":"range","collection":"events","fields":["session","n"],"options":args}]),
+                )
+            }) as Callback,
+        ),
+        (
+            "bySession",
+            (|args, host| {
+                host(
+                    "query",
+                    json!([{"kind":"query","collection":"events","fields":["session"],"value":args}]),
+                )
+            }) as Callback,
+        ),
+        (
+            "append",
+            (|args, host| append(host, &args["session"], &args["n"], "appended")) as Callback,
+        ),
+        (
+            // Start a session and log its first entry in one mutation.
+            "start",
+            (|args, host| {
+                set(host, "sessions", args["id"].as_str().unwrap(), args["session"].clone())?;
+                append(host, &args["id"], &json!(1), "first")
+            }) as Callback,
+        ),
+        (
+            "delete",
+            (|args, host| host("delete", json!([events(), canonical_json(args)]))) as Callback,
+        ),
+    ])
+}
+
+fn log_policies() -> BTreeMap<String, Policy> {
+    let admin = json!({"eq":[{"ref":["principal","claims","role"]},{"value":"admin"}]});
+    let session = json!({"readable":["sessions",{"ref":["key","0"]}]});
+    let entries = json!({"any":[admin, session]});
+    serde_json::from_value(json!({
+        "sessions": {
+            "read": {"any":[
+                admin,
+                {"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]},
+                {"not":{"eq":[{"ref":["row","private"]},{"value":true}]}},
+            ]},
+            "insert": {"eq":[{"ref":["next","owner"]},{"ref":["principal","subject"]}]},
+        },
+        "events": {"read": entries, "insert": entries, "update": entries, "delete": entries},
+    }))
+    .unwrap()
+}
+
+fn log_setup() -> (Records, Fixture) {
+    let fixture = log_fixture();
+    let mut data = Records::default();
+    let event = |session: &str, n: u64| {
+        json!({"collection":"events","key":canonical_json(&json!([session, n])),"value":{"session":session,"n":n,"text":format!("{session}/{n}")}})
+    };
+    let result = run_with_schema(
+        data.clone(),
+        json!({"requestId":"schema","writes":[
+            {"collection":"sessions","key":"s1","value":{"owner":"alice","private":true}},
+            {"collection":"sessions","key":"s2","value":{"owner":"bob","private":true}},
+            {"collection":"sessions","key":"s3","value":{"owner":"bob"}},
+            event("s1", 1), event("s1", 2), event("s2", 1), event("s3", 1),
+            // An entry whose session doesn't exist.
+            event("gone", 1),
+        ]}),
+        "deployment",
+        None,
+        &fixture,
+        Some(Schema {
+            indexes: vec![
+                IndexSpec {
+                    collection: "events".into(),
+                    fields: vec!["session".into(), "n".into()],
+                },
+                IndexSpec {
+                    collection: "events".into(),
+                    fields: vec!["session".into()],
+                },
+            ],
+            aggregates: BTreeMap::new(),
+            policies: log_policies(),
+            derived_access: BTreeMap::new(),
+        }),
+    )
+    .unwrap();
+    apply(&mut data, result);
+    (data, fixture)
+}
+
+fn bob() -> Value {
+    json!({"subject":"bob"})
+}
+
+fn session_write(key: &str, value: Value) -> Value {
+    json!({"writes":[{"collection":"sessions","key":key,"value":value}]})
+}
+
+fn texts_of(rows: &Value) -> Vec<&str> {
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["value"]["text"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn readable_shows_rows_whose_named_row_the_caller_may_read() {
+    let (data, fixture) = log_setup();
+    // Alice sees her private session's entries and the public one's; not
+    // bob's private session's, nor those of a session that doesn't exist.
+    assert_eq!(
+        texts_of(&query(&data, &fixture, "scan", Value::Null, Some(alice()))),
+        ["s1/1", "s1/2", "s3/1"]
+    );
+    assert_eq!(
+        texts_of(&query(&data, &fixture, "scan", Value::Null, Some(bob()))),
+        ["s2/1", "s3/1"]
+    );
+    assert_eq!(
+        query(&data, &fixture, "get", json!(["s2", 1]), Some(alice())),
+        Value::Null
+    );
+    assert_eq!(
+        query(&data, &fixture, "get", json!(["gone", 1]), Some(alice())),
+        Value::Null
+    );
+    assert_eq!(
+        query(&data, &fixture, "get", json!(["s1", 2]), Some(alice()))["text"],
+        "s1/2"
+    );
+    assert_eq!(
+        query(&data, &fixture, "get", json!(["gone", 1]), Some(admin()))["text"],
+        "gone/1"
+    );
+    // Queries, index scans and range pages skip hidden entries before limits.
+    assert_eq!(
+        query(&data, &fixture, "bySession", json!("s2"), Some(alice())),
+        json!([])
+    );
+    assert_eq!(
+        texts(&query(&data, &fixture, "bySession", json!("s1"), Some(alice()))),
+        ["s1/1", "s1/2"]
+    );
+    assert_eq!(
+        texts_of(&query(
+            &data,
+            &fixture,
+            "scanIndex",
+            json!({"index":"bySession","offset":1,"limit":2}),
+            Some(alice())
+        )),
+        ["s1/2", "s3/1"]
+    );
+    let first = query(&data, &fixture, "range", json!({"limit":2}), Some(alice()));
+    assert_eq!(texts_of(&first["rows"]), ["s1/1", "s1/2"]);
+    let second = query(
+        &data,
+        &fixture,
+        "range",
+        json!({"limit":2,"after":first["cursor"]}),
+        Some(alice()),
+    );
+    assert_eq!(texts_of(&second["rows"]), ["s3/1"]);
+    assert_eq!(second["cursor"], Value::Null);
+    // Invocations without a caller see everything.
+    assert_eq!(
+        query(&data, &fixture, "scan", Value::Null, None)
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+}
+
+#[test]
+fn results_through_readable_follow_the_rows_it_looked_up() {
+    let (mut data, fixture) = log_setup();
+    let scan = |data: &Records, principal: Value| {
+        let result = call(data, &fixture, "query", "scan", Value::Null, Some(principal)).unwrap();
+        (result.value, result.query_certificate.expect("certificate"))
+    };
+    let (_, alices) = scan(&data, alice());
+    let (_, admins) = scan(&data, admin());
+    // A session no entry names changes nothing.
+    deploy(&mut data, session_write("s4", json!({"owner":"bob","private":true})), &fixture);
+    assert!(alices.valid(&data));
+    assert!(admins.valid(&data));
+    // Bob opening his private session reveals its entries to alice at once;
+    // the admin's result never looked sessions up.
+    deploy(&mut data, session_write("s2", json!({"owner":"bob"})), &fixture);
+    assert!(!alices.valid(&data));
+    assert!(admins.valid(&data));
+    let (rows, alices) = scan(&data, alice());
+    assert_eq!(texts_of(&rows), ["s1/1", "s1/2", "s2/1", "s3/1"]);
+    // Closing it again hides them; so would a missing session appearing.
+    deploy(&mut data, session_write("s2", json!({"owner":"bob","private":true})), &fixture);
+    assert!(!alices.valid(&data));
+    let (rows, alices) = scan(&data, alice());
+    assert_eq!(texts_of(&rows), ["s1/1", "s1/2", "s3/1"]);
+    deploy(&mut data, session_write("gone", json!({"owner":"carol"})), &fixture);
+    assert!(!alices.valid(&data));
+    assert_eq!(
+        texts_of(&scan(&data, alice()).0),
+        ["gone/1", "s1/1", "s1/2", "s3/1"]
+    );
+    // A get depends on its entry's session too.
+    let get = call(&data, &fixture, "query", "get", json!(["s1", 1]), Some(alice())).unwrap();
+    let certificate = get.query_certificate.expect("certificate");
+    deploy(&mut data, session_write("s1", json!({"owner":"alice","private":true,"title":"t"})), &fixture);
+    assert!(!certificate.valid(&data));
+}
+
+#[test]
+fn writes_through_readable_need_a_readable_row_even_one_written_just_before() {
+    let (data, fixture) = log_setup();
+    let mutate = |name: &str, args: Value, principal: Value| {
+        call(&data, &fixture, "mutation", name, args, Some(principal))
+    };
+    mutate("append", json!({"session":"s1","n":3}), alice()).unwrap();
+    // Public sessions take entries from whoever sees them, as the rule says.
+    mutate("append", json!({"session":"s3","n":2}), alice()).unwrap();
+    for session in ["s2", "gone"] {
+        let denied = mutate("append", json!({"session":session,"n":9}), alice());
+        assert_eq!(denied.err().unwrap().code, "ACCESS_DENIED", "{session}");
+    }
+    mutate("append", json!({"session":"gone","n":2}), admin()).unwrap();
+    // A session created earlier in the same mutation counts.
+    mutate(
+        "start",
+        json!({"id":"s9","session":{"owner":"alice","private":true}}),
+        alice(),
+    )
+    .unwrap();
+    // A delete of an entry the caller can't see leaves it, as for a missing key.
+    let deleted = mutate("delete", json!(["s2", 1]), alice()).unwrap();
+    assert!(deleted.deletes.is_empty());
+    let deleted = mutate("delete", json!(["s1", 1]), alice()).unwrap();
+    assert!(deleted.deletes.contains(&source_id("events", "[\"s1\",1]")));
+}

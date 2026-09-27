@@ -13,7 +13,7 @@ mod indexes;
 mod ranges;
 mod reducers;
 mod windows;
-pub use access::{Policy, Rule};
+pub use access::{Policy, Rule, validate_targets};
 pub use indexes::{IndexSpec, Schema};
 pub(crate) use indexes::{staged_entries, staged_prefixes, staged_schema, staged_schema_bytes};
 mod json;
@@ -928,7 +928,7 @@ impl Engine<'_> {
             self.count_operations(rows.len())?;
             let rows = match &access {
                 Some(access) => {
-                    let rows = access.filter(rows, &query.fields);
+                    let rows = self.looking_up(|lookup| access.filter(rows, &query.fields, lookup))?;
                     self.settle_access(access)?;
                     rows
                 }
@@ -1019,7 +1019,7 @@ impl Engine<'_> {
         };
         let rows = match &access {
             Some(access) => {
-                let rows = access.filter(rows, &query.fields);
+                let rows = self.looking_up(|lookup| access.filter(rows, &query.fields, lookup))?;
                 self.settle_access(access)?;
                 rows
             }
@@ -1115,9 +1115,11 @@ impl Engine<'_> {
                     match (value, self.read_access(collection)) {
                         (Some(value), None) => self.copy_for_host(&value),
                         (Some(value), Some(access)) => {
-                            let shown = access
-                                .visible(key, &value, &[])
-                                .then(|| access.redact(key, &value));
+                            let shown = self.looking_up(|lookup| {
+                                access
+                                    .visible(key, &value, &[], lookup)
+                                    .then(|| access.redact(key, &value, lookup))
+                            })?;
                             self.settle_access(&access)?;
                             match shown {
                                 Some(shown) => self.copy_for_host(&shown),
@@ -1161,7 +1163,7 @@ impl Engine<'_> {
                 self.count_operations(rows.len())?;
                 let rows = match self.read_access(collection) {
                     Some(access) => {
-                        let rows = access.filter(rows, &[]);
+                        let rows = self.looking_up(|lookup| access.filter(rows, &[], lookup))?;
                         self.settle_access(&access)?;
                         rows
                     }
@@ -1210,7 +1212,9 @@ impl Engine<'_> {
                         let id = source_id(collection, key);
                         self.record_read(&id);
                         let previous = self.source(&id).cloned();
-                        let admitted = access.admit(key, previous.as_deref(), value, &clear);
+                        let admitted = self.looking_up(|lookup| {
+                            access.admit(key, previous.as_deref(), value, &clear, lookup)
+                        })?;
                         self.settle_access(&access)?;
                         match admitted? {
                             access::Admitted::Write(value) => value,

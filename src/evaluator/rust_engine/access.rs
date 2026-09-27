@@ -17,8 +17,15 @@
 //! only looks at the caller (`principal.claims.role == "admin"`) becomes a
 //! constant and costs nothing per row, and a collection without a policy
 //! costs one map lookup per invocation.
+//!
+//! `readable(collection, key)` looks up one row of another guarded collection
+//! and holds when the caller may read it, like Firestore's `get()`: a log's
+//! entries can follow their session's privacy without copying it into every
+//! entry. The target's read rule may not use `readable` itself, so one lookup
+//! never leads to another; each check looks a row up once and records it as
+//! read, so results depending on it follow its changes.
 use super::*;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
@@ -58,11 +65,14 @@ pub struct FieldPolicy {
 
 /// `{"const":true}`, `{"all":[…]}`, `{"any":[…]}`, `{"not":…}`,
 /// `{"eq":[a,b]}`, `{"ne":[a,b]}`, `{"in":[item,list]}`, `{"exists":a}`,
-/// `{"lt":[a,b]}`, `{"lte":…}`, `{"gt":…}`, `{"gte":…}` and
-/// `{"startsWith":[text,prefix]}`. Comparisons with a missing or null side
-/// are false, so a row without an `owner` never matches an anonymous
-/// caller's missing subject. Only numbers order against numbers and strings
-/// against strings (by code point); any other pair compares false.
+/// `{"lt":[a,b]}`, `{"lte":…}`, `{"gt":…}`, `{"gte":…}`,
+/// `{"startsWith":[text,prefix]}` and `{"readable":[collection,key]}`.
+/// Comparisons with a missing or null side are false, so a row without an
+/// `owner` never matches an anonymous caller's missing subject. Only numbers
+/// order against numbers and strings against strings (by code point); any
+/// other pair compares false. `readable` holds when the collection has a row
+/// at the key (a string, or an array or object as canonical JSON) that the
+/// caller may read by that collection's read rule.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Rule {
@@ -80,6 +90,7 @@ pub enum Rule {
     Gte(Operand, Operand),
     #[serde(rename = "startsWith")]
     StartsWith(Operand, Operand),
+    Readable(String, Operand),
 }
 
 impl Default for Rule {
@@ -153,6 +164,17 @@ impl Policy {
         Ok(())
     }
 
+    /// The rules of every operation and field.
+    fn rules(&self) -> impl Iterator<Item = &Rule> {
+        [&self.read, &self.insert, &self.update, &self.delete]
+            .into_iter()
+            .chain(
+                self.fields
+                    .values()
+                    .flat_map(|field| field.read.iter().chain(field.write.iter())),
+            )
+    }
+
     pub(super) fn allocation_cost(&self) -> usize {
         let rules = [&self.read, &self.insert, &self.update, &self.delete]
             .into_iter()
@@ -166,6 +188,33 @@ impl Policy {
             |bytes, field| bytes.saturating_add(128 + field.len()),
         )
     }
+}
+
+/// Checks across policies: each `readable` names a collection with a policy
+/// whose read rule doesn't use `readable` itself.
+pub fn validate_targets(policies: &BTreeMap<String, Policy>) -> Result<(), String> {
+    for (name, policy) in policies {
+        let mut targets = Vec::new();
+        for rule in policy.rules() {
+            rule.targets(&mut targets);
+        }
+        for target in targets {
+            match policies.get(target) {
+                None => {
+                    return Err(format!(
+                        "{name}: readable({target:?}) needs a collection with an access policy"
+                    ));
+                }
+                Some(policy) if policy.read.reads_rows() => {
+                    return Err(format!(
+                        "{name}: readable({target:?}) names a collection whose read rule uses readable itself"
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Rule {
@@ -210,6 +259,32 @@ impl Rule {
                 right.validate(scope)
             }
             Rule::Exists(operand) => operand.validate(scope),
+            Rule::Readable(_, _) if scope == Scope::Derived => {
+                Err("readable cannot be used here".into())
+            }
+            Rule::Readable(collection, _) if collection.is_empty() => {
+                Err("readable needs a collection name".into())
+            }
+            Rule::Readable(_, key) => key.validate(scope),
+        }
+    }
+
+    /// Whether the rule looks up rows with `readable`.
+    fn reads_rows(&self) -> bool {
+        let mut targets = Vec::new();
+        self.targets(&mut targets);
+        !targets.is_empty()
+    }
+
+    /// The collections the rule's `readable`s name.
+    fn targets<'a>(&'a self, targets: &mut Vec<&'a str>) {
+        match self {
+            Rule::All(rules) | Rule::Any(rules) => {
+                rules.iter().for_each(|rule| rule.targets(targets))
+            }
+            Rule::Not(rule) => rule.targets(targets),
+            Rule::Readable(collection, _) => targets.push(collection),
+            _ => {}
         }
     }
 
@@ -227,6 +302,7 @@ impl Rule {
             | Rule::Gte(left, right)
             | Rule::StartsWith(left, right) => left.cost() + right.cost(),
             Rule::Exists(operand) => operand.cost(),
+            Rule::Readable(collection, key) => 32 + collection.len() + key.cost(),
         }
     }
 }
@@ -276,6 +352,13 @@ enum Check {
     Not(Box<Check>),
     Compare(Op, Term, Term),
     Exists(Term),
+    /// A row of `collection` at `key` exists and `read`, the collection's
+    /// read rule for this caller, holds on it.
+    Readable {
+        collection: String,
+        read: Box<Check>,
+        key: Term,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -345,7 +428,60 @@ struct Subject<'a> {
     row: Option<&'a Value>,
     next: Option<&'a Value>,
     clock: &'a Clock,
+    rows: &'a dyn Rows,
 }
+
+/// Where `readable` finds rows: the engine's view of the invocation, its own
+/// writes included.
+pub(super) trait Rows {
+    /// Whether `collection` has a row at `key` on which `visible` holds.
+    fn readable(&self, collection: &str, key: &str, visible: &dyn Fn(&Value) -> bool) -> bool;
+}
+
+/// No rows: for checks that can't look any up.
+pub(super) struct NoRows;
+
+impl Rows for NoRows {
+    fn readable(&self, _: &str, _: &str, _: &dyn Fn(&Value) -> bool) -> bool {
+        false
+    }
+}
+
+/// The rows one access check looks up, each once, remembered so the engine
+/// can record them as reads afterwards.
+pub(super) struct RowLookup<'e, 'a> {
+    engine: &'e Engine<'a>,
+    seen: RefCell<BTreeMap<String, bool>>,
+}
+
+impl<'e, 'a> RowLookup<'e, 'a> {
+    pub(super) fn new(engine: &'e Engine<'a>) -> Self {
+        Self {
+            engine,
+            seen: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    /// The source IDs of the rows looked up.
+    pub(super) fn into_reads(self) -> Vec<String> {
+        self.seen.into_inner().into_keys().collect()
+    }
+}
+
+impl Rows for RowLookup<'_, '_> {
+    fn readable(&self, collection: &str, key: &str, visible: &dyn Fn(&Value) -> bool) -> bool {
+        let id = source_id(collection, key);
+        if let Some(&seen) = self.seen.borrow().get(&id) {
+            return seen;
+        }
+        let shown = self.engine.source(&id).is_some_and(|row| visible(row));
+        self.seen.borrow_mut().insert(id, shown);
+        shown
+    }
+}
+
+/// No policies: what a `readable` target's read rule may look into.
+static NO_POLICIES: BTreeMap<String, Policy> = BTreeMap::new();
 
 #[derive(Clone, Copy)]
 enum Resolved<'a> {
@@ -515,7 +651,14 @@ impl Term {
 }
 
 impl Check {
-    fn new(rule: &Rule, caller: &Value, now: u64, clock: &Clock) -> Self {
+    /// `policies` are the collections `readable` may look into.
+    fn new(
+        rule: &Rule,
+        caller: &Value,
+        now: u64,
+        clock: &Clock,
+        policies: &BTreeMap<String, Policy>,
+    ) -> Self {
         let term = |operand: &Operand| match operand {
             Operand::Value(value) => Term::Value(value.clone()),
             Operand::Ref(path) => match path[0].as_str() {
@@ -542,6 +685,7 @@ impl Check {
                         row: None,
                         next: None,
                         clock,
+                        rows: &NoRows,
                     }))
                 }
                 _ => check,
@@ -549,9 +693,9 @@ impl Check {
         };
         match rule {
             Rule::Const(value) => Check::Const(*value),
-            Rule::All(rules) => Self::join(rules, caller, now, clock, true),
-            Rule::Any(rules) => Self::join(rules, caller, now, clock, false),
-            Rule::Not(rule) => match Check::new(rule, caller, now, clock) {
+            Rule::All(rules) => Self::join(rules, caller, now, clock, policies, true),
+            Rule::Any(rules) => Self::join(rules, caller, now, clock, policies, false),
+            Rule::Not(rule) => match Check::new(rule, caller, now, clock, policies) {
                 Check::Const(value) => Check::Const(!value),
                 check => Check::Not(Box::new(check)),
             },
@@ -568,15 +712,35 @@ impl Check {
                 Term::Now(_) => Check::Const(true),
                 term => Check::Exists(term),
             },
+            // The target's read rule folds for this caller too, without
+            // policies of its own: one it can never satisfy needs no lookup.
+            Rule::Readable(collection, key) => match policies
+                .get(collection)
+                .map(|policy| Check::new(&policy.read, caller, now, clock, &NO_POLICIES))
+            {
+                None | Some(Check::Const(false)) => Check::Const(false),
+                Some(read) => Check::Readable {
+                    collection: collection.clone(),
+                    read: Box::new(read),
+                    key: term(key),
+                },
+            },
         }
     }
 
     /// `all` (a conjunction) or `any`, dropping neutral constants and
     /// short-circuiting on absorbing ones.
-    fn join(rules: &[Rule], caller: &Value, now: u64, clock: &Clock, conjunction: bool) -> Self {
+    fn join(
+        rules: &[Rule],
+        caller: &Value,
+        now: u64,
+        clock: &Clock,
+        policies: &BTreeMap<String, Policy>,
+        conjunction: bool,
+    ) -> Self {
         let mut checks = Vec::new();
         for rule in rules {
-            match Check::new(rule, caller, now, clock) {
+            match Check::new(rule, caller, now, clock, policies) {
                 Check::Const(value) if value == conjunction => {}
                 Check::Const(value) => return Check::Const(value),
                 check => checks.push(check),
@@ -615,6 +779,33 @@ impl Check {
                 op.holds(resolved_left, resolved_right)
             }
             Check::Exists(term) => present(term.resolve(subject)),
+            Check::Readable {
+                collection,
+                read,
+                key,
+            } => {
+                let text;
+                let key = match key.resolve(subject) {
+                    Resolved::Key(key) => key,
+                    Resolved::Json(Value::String(key)) => key.as_str(),
+                    Resolved::Json(value @ (Value::Array(_) | Value::Object(_))) => {
+                        text = canonical_json(value);
+                        text.as_str()
+                    }
+                    _ => return false,
+                };
+                subject.rows.readable(collection, key, &|row| {
+                    let parts = OnceCell::new();
+                    read.holds(Subject {
+                        key,
+                        parts: &parts,
+                        row: Some(row),
+                        next: None,
+                        clock: subject.clock,
+                        rows: &NoRows,
+                    })
+                })
+            }
         }
     }
 
@@ -659,10 +850,16 @@ pub(super) struct Access {
 }
 
 impl Access {
-    fn new(collection: &str, policy: &Policy, principal: &Value, now: u64) -> Self {
+    fn new(
+        collection: &str,
+        policy: &Policy,
+        policies: &BTreeMap<String, Policy>,
+        principal: &Value,
+        now: u64,
+    ) -> Self {
         let caller = caller(principal);
         let clock = Clock::default();
-        let check = |rule: &Rule| Check::new(rule, &caller, now, &clock);
+        let check = |rule: &Rule| Check::new(rule, &caller, now, &clock, policies);
         let fields: Vec<FieldCheck> = policy
             .fields
             .iter()
@@ -698,6 +895,7 @@ impl Access {
         parts: &'a OnceCell<Option<Value>>,
         row: Option<&'a Value>,
         next: Option<&'a Value>,
+        rows: &'a dyn Rows,
     ) -> Subject<'a> {
         Subject {
             key,
@@ -705,6 +903,7 @@ impl Access {
             row,
             next,
             clock: &self.clock,
+            rows,
         }
     }
 
@@ -730,9 +929,15 @@ impl Access {
     /// Whether the caller sees this row at all. `fields` are the index fields
     /// that selected it: finding a row through a field the caller can't read
     /// would reveal that field's value, so such rows stay hidden too.
-    pub(super) fn visible(&self, key: &str, row: &Value, fields: &[String]) -> bool {
+    pub(super) fn visible(
+        &self,
+        key: &str,
+        row: &Value,
+        fields: &[String],
+        rows: &dyn Rows,
+    ) -> bool {
         let parts = OnceCell::new();
-        let subject = self.subject(key, &parts, Some(row), None);
+        let subject = self.subject(key, &parts, Some(row), None, rows);
         self.read.holds(subject)
             && fields.iter().all(|name| {
                 self.fields
@@ -744,7 +949,7 @@ impl Access {
 
     /// The row without the fields the caller can't read. Shares the stored
     /// value when nothing is hidden.
-    pub(super) fn redact(&self, key: &str, row: &Arc<Value>) -> Arc<Value> {
+    pub(super) fn redact(&self, key: &str, row: &Arc<Value>, rows: &dyn Rows) -> Arc<Value> {
         if !self.redacts {
             return row.clone();
         }
@@ -752,7 +957,7 @@ impl Access {
             return row.clone();
         };
         let parts = OnceCell::new();
-        let subject = self.subject(key, &parts, Some(row), None);
+        let subject = self.subject(key, &parts, Some(row), None, rows);
         let hidden: Vec<&str> = self
             .fields
             .iter()
@@ -793,13 +998,15 @@ impl Access {
     /// The visible rows, redacted.
     pub(super) fn filter(
         &self,
-        rows: Vec<(String, Arc<Value>)>,
+        found: Vec<(String, Arc<Value>)>,
         fields: &[String],
+        rows: &dyn Rows,
     ) -> Vec<(String, Arc<Value>)> {
-        rows.into_iter()
-            .filter(|(key, row)| self.visible(key, row, fields))
+        found
+            .into_iter()
+            .filter(|(key, row)| self.visible(key, row, fields, rows))
             .map(|(key, row)| {
-                let shown = self.redact(&key, &row);
+                let shown = self.redact(&key, &row, rows);
                 (key, shown)
             })
             .collect()
@@ -819,6 +1026,7 @@ impl Access {
         previous: Option<&Value>,
         next: Option<Value>,
         clear: &[String],
+        rows: &dyn Rows,
     ) -> EngineResult<Admitted> {
         let denied = || {
             EngineError::new(
@@ -830,7 +1038,7 @@ impl Access {
         let (previous, mut next) = match (previous, next) {
             (None, None) => return Ok(Admitted::Write(None)),
             (Some(previous), None) => {
-                let subject = self.subject(key, &parts, Some(previous), None);
+                let subject = self.subject(key, &parts, Some(previous), None, rows);
                 return if self.delete.holds(subject) {
                     Ok(Admitted::Write(None))
                 } else if !self.read.holds(subject) {
@@ -848,13 +1056,16 @@ impl Access {
                 if !written.contains_key(&field.name)
                     && !clear.contains(&field.name)
                     && let Some(value) = entries.get(&field.name)
-                    && !self.field_readable(field, self.subject(key, &parts, Some(stored), None))
+                    && !self.field_readable(
+                        field,
+                        self.subject(key, &parts, Some(stored), None, rows),
+                    )
                 {
                     written.insert(field.name.clone(), value.clone());
                 }
             }
         }
-        let subject = self.subject(key, &parts, previous, Some(&next));
+        let subject = self.subject(key, &parts, previous, Some(&next), rows);
         let row = if previous.is_some() {
             &self.update
         } else {
@@ -874,7 +1085,13 @@ impl Access {
                     // Change only what you can read: in the stored row, or in
                     // the new one for an insert.
                     (None, Some(read)) => {
-                        read.holds(self.subject(key, &parts, Some(previous.unwrap_or(&next)), None))
+                        read.holds(self.subject(
+                            key,
+                            &parts,
+                            Some(previous.unwrap_or(&next)),
+                            None,
+                            rows,
+                        ))
                     }
                     (None, None) => true,
                 }
@@ -908,7 +1125,15 @@ impl Engine<'_> {
             .schema
             .policies
             .get(collection)
-            .map(|policy| Arc::new(Access::new(collection, policy, &self.principal, self.now)));
+            .map(|policy| {
+                Arc::new(Access::new(
+                    collection,
+                    policy,
+                    &self.schema.policies,
+                    &self.principal,
+                    self.now,
+                ))
+            });
         self.access.insert(collection.to_owned(), access.clone());
         access
     }
@@ -958,7 +1183,7 @@ impl Engine<'_> {
             self.record_read(source_id(collection, key));
         }
         self.count_operations(rows.len())?;
-        let rows = access.filter(rows, &[]);
+        let rows = self.looking_up(|lookup| access.filter(rows, &[], lookup))?;
         self.settle_access(&access)?;
         Ok(Some(rows))
     }
@@ -974,7 +1199,13 @@ impl Engine<'_> {
             return Ok(());
         };
         let clock = Clock::default();
-        let check = Check::new(rule, &caller(&self.principal), self.now, &clock);
+        let check = Check::new(
+            rule,
+            &caller(&self.principal),
+            self.now,
+            &clock,
+            &NO_POLICIES,
+        );
         let parts = OnceCell::new();
         let allowed = check.holds(Subject {
             key: "",
@@ -982,6 +1213,7 @@ impl Engine<'_> {
             row: Some(args),
             next: None,
             clock: &clock,
+            rows: &NoRows,
         });
         self.settle_clock(&clock)?;
         if allowed {
@@ -992,6 +1224,26 @@ impl Engine<'_> {
                 format!("Access policy denies reading {name}"),
             ))
         }
+    }
+
+    /// Run an access check with the rows its `readable` rules look up, then
+    /// record those as read: a result, or an optimistic mutation's decision,
+    /// depends on them like on rows the method read itself.
+    pub(super) fn looking_up<R>(&mut self, check: impl FnOnce(&dyn Rows) -> R) -> EngineResult<R> {
+        let lookup = RowLookup::new(self);
+        let result = check(&lookup);
+        let reads = lookup.into_reads();
+        self.record_lookups(reads)?;
+        Ok(result)
+    }
+
+    /// Record the rows `readable` rules looked up as read, one operation each.
+    pub(super) fn record_lookups(&mut self, reads: Vec<String>) -> EngineResult<()> {
+        self.count_operations(reads.len())?;
+        for id in reads {
+            self.record_read(id);
+        }
+        Ok(())
     }
 
     /// Report what the caller's rules made of the clock, as `ctx.now()` and
@@ -1060,7 +1312,7 @@ mod tests {
             "fields": {"secret": {"read": {"in":[{"value":"admin"},{"ref":["principal","claims","roles"]}]}}},
         }))
         .unwrap();
-        Access::new("notes", &policy, &principal, 1_000)
+        Access::new("notes", &policy, &BTreeMap::new(), &principal, 1_000)
     }
 
     #[test]
@@ -1082,7 +1334,78 @@ mod tests {
         let anonymous = access(json!({"subject":"$anonymous","tenant":"t"}));
         assert!(matches!(anonymous.insert, Check::Const(false)));
         assert!(matches!(anonymous.update, Check::Const(true)));
-        assert!(!access(Value::Null).visible("k", &json!({"owner":null}), &[]));
+        assert!(!access(Value::Null).visible("k", &json!({"owner":null}), &[], &NoRows));
+    }
+
+    #[test]
+    fn readable_folds_the_named_collections_read_rule_for_the_caller() {
+        let policies: BTreeMap<String, Policy> = serde_json::from_value(json!({
+            "sessions": {"read": {"any":[
+                {"eq":[{"ref":["principal","claims","role"]},{"value":"staff"}]},
+                {"all":[
+                    {"exists":{"ref":["principal","subject"]}},
+                    {"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]},
+                ]},
+            ]}},
+            "events": {"read": {"any":[
+                {"eq":[{"ref":["principal","claims","role"]},{"value":"admin"}]},
+                {"readable":["sessions",{"ref":["key","0"]}]},
+            ]}},
+            // Only the engine's validation keeps readable out of a target's
+            // read rule; if one got through, it would look nothing up.
+            "nested": {"read": {"readable":["deeper",{"ref":["key"]}]}},
+            "deeper": {"read": {"const":true}},
+            "via": {"read": {"readable":["nested",{"ref":["key"]}]}},
+        }))
+        .unwrap();
+        let access = |collection: &str, principal: Value| {
+            Access::new(collection, &policies[collection], &policies, &principal, 1_000)
+        };
+        // Admins read every entry without looking a session up.
+        assert!(access("events", json!({"subject":"root","claims":{"role":"admin"}})).open_reads());
+        // So do staff, whose sessions rule folds to true: they still need the
+        // session to exist.
+        let staff = access("events", json!({"subject":"s","claims":{"role":"staff"}}));
+        assert!(
+            matches!(&staff.read, Check::Readable { collection, read, key: Term::KeyPart(path) }
+            if collection == "sessions" && matches!(**read, Check::Const(true)) && path == &["0"])
+        );
+        // Others keep the owner comparison, with their subject inlined.
+        let alice = access("events", json!({"subject":"alice"}));
+        assert!(
+            matches!(&alice.read, Check::Readable { read, .. }
+            if matches!(&**read, Check::Compare(Op::Eq, Term::Row(path), Term::Value(subject))
+                if path == &["owner"] && subject == "alice"))
+        );
+        // A caller no session rule can match needs no lookup either.
+        assert!(matches!(access("events", Value::Null).read, Check::Const(false)));
+        assert!(matches!(access("via", json!({"subject":"alice"})).read, Check::Const(false)));
+        // Checks without rows to look into see none.
+        assert!(!alice.visible(r#"["s1",1]"#, &json!({}), &[], &NoRows));
+        // With rows, the entry shows when its session does.
+        struct Sessions;
+        impl Rows for Sessions {
+            fn readable(&self, collection: &str, key: &str, visible: &dyn Fn(&Value) -> bool) -> bool {
+                assert_eq!(collection, "sessions");
+                match key {
+                    "s1" => visible(&json!({"owner":"alice"})),
+                    "s2" => visible(&json!({"owner":"bob"})),
+                    _ => false,
+                }
+            }
+        }
+        assert!(alice.visible(r#"["s1",1]"#, &json!({}), &[], &Sessions));
+        assert!(!alice.visible(r#"["s2",1]"#, &json!({}), &[], &Sessions));
+        assert!(!alice.visible(r#"["s3",1]"#, &json!({}), &[], &Sessions));
+        assert!(!alice.visible("s1", &json!({}), &[], &Sessions));
+        // Validation names what's wrong.
+        let error = validate_targets(&policies).unwrap_err();
+        assert!(error.contains("via: readable(\"nested\")"), "{error}");
+        let mut valid = policies.clone();
+        valid.remove("via");
+        validate_targets(&valid).unwrap();
+        valid.remove("sessions");
+        assert!(validate_targets(&valid).unwrap_err().contains("needs a collection with an access policy"));
     }
 
     /// `cargo test --release --lib specialization_cost -- --ignored --nocapture`
@@ -1107,7 +1430,7 @@ mod tests {
         let rounds = 200_000u32;
         let started = std::time::Instant::now();
         for _ in 0..rounds {
-            std::hint::black_box(Access::new("notes", &policy, &principal, 1_000));
+            std::hint::black_box(Access::new("notes", &policy, &BTreeMap::new(), &principal, 1_000));
         }
         println!(
             "Access::new for a 5-rule policy: {:?} each",

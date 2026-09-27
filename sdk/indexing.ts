@@ -64,6 +64,33 @@ export function collectionManifest(references: Iterable<Collection<any, any, any
   return [...byName.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }
 
+/**
+ * Check a whole application's collections: each readable(collection, key) names a
+ * collection declared with access whose read rule doesn't use readable itself.
+ */
+export function checkReadable(manifest: readonly CollectionManifest[]): void {
+  const byName = new Map(manifest.map((entry) => [entry.name, entry]));
+  for (const entry of byName.values()) {
+    for (const target of readableTargets(entry.access)) {
+      const policy = byName.get(target)?.access;
+      if (!policy) {
+        throw new TypeError(`Access rules of ${JSON.stringify(entry.name)} use readable(${JSON.stringify(target)}); declare that collection with access in define({ collections })`);
+      }
+      if (readableTargets(policy.read).length) {
+        throw new TypeError(`Access rules of ${JSON.stringify(entry.name)} use readable(${JSON.stringify(target)}), whose read rule uses readable itself`);
+      }
+    }
+  }
+}
+
+/** The collections a compiled rule (or policy) names in readable(). */
+function readableTargets(rule: unknown): string[] {
+  if (Array.isArray(rule)) return rule.flatMap(readableTargets);
+  if (rule === null || typeof rule !== "object" || Object.hasOwn(rule, "value") || Object.hasOwn(rule, "ref")) return [];
+  const own = Object.hasOwn(rule, "readable") ? [(rule as { readable: [string, unknown] }).readable[0]] : [];
+  return [...own, ...Object.values(rule).flatMap(readableTargets)];
+}
+
 function usesKeyParts(rule: unknown): boolean {
   if (Array.isArray(rule)) return rule.some(usesKeyParts);
   if (rule === null || typeof rule !== "object" || Object.hasOwn(rule, "value")) return false;
