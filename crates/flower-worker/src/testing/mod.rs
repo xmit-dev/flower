@@ -157,6 +157,8 @@ pub(crate) struct World {
     pub(crate) queues: BTreeMap<String, FakeQueue>,
     pub(crate) digest: Option<Digest>,
     receipts: HashMap<String, Value>,
+    /// Request IDs answered from their receipt (`duplicate: true`), in order.
+    replays: Vec<String>,
     /// What `ctx.history()` returns: null unless retry retention is initialized.
     pub(crate) history: Option<Value>,
 }
@@ -207,6 +209,7 @@ impl FakeFlower {
                 queues: BTreeMap::new(),
                 digest: None,
                 receipts: HashMap::new(),
+                replays: Vec::new(),
                 history: None,
             })),
             changes: Arc::new(watch::channel(0).0),
@@ -316,6 +319,12 @@ impl FakeFlower {
         job
     }
 
+    /// The request IDs Flower answered from an earlier attempt's receipt (a reply with
+    /// `duplicate: true`), in order.
+    pub fn replays(&self) -> Vec<String> {
+        self.world.lock().replays.clone()
+    }
+
     /// A client over this database.
     pub fn client(&self) -> FakeClient {
         FakeClient {
@@ -331,8 +340,9 @@ impl FakeFlower {
     fn mutate_once(&self, name: &str, args: &Value, request_id: &str) -> Result<Value, FakeError> {
         let result = {
             let mut world = self.world.lock();
-            if let Some(receipt) = world.receipts.get(request_id) {
-                return Ok(receipt.clone());
+            if let Some(receipt) = world.receipts.get(request_id).cloned() {
+                world.replays.push(request_id.to_owned());
+                return Ok(receipt);
             }
             let result = world.call(name, args);
             if let Ok(value) = &result {
