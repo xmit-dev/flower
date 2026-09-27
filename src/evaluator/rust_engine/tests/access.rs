@@ -581,6 +581,60 @@ fn policy_overhead() {
         }
         println!("scan 20,006 rows as {label}: {rows} returned, best of 5 {best:?}");
     }
+    // The cheapest invocation, one point read: with a caller, it also folds
+    // the policy for that caller and checks one row.
+    for (label, principal) in [
+        ("no caller (policy skipped)", None),
+        ("alice (policy folded, one row checked)", Some(alice())),
+    ] {
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..2_000 {
+            let started = std::time::Instant::now();
+            std::hint::black_box(query(
+                &data,
+                &fixture,
+                "get",
+                json!("n00000"),
+                principal.clone(),
+            ));
+            best = best.min(started.elapsed());
+        }
+        println!("get one row as {label}: best of 2,000 {best:?}");
+    }
+    // Many owners: alice owns 20 of 20,000 rows. The same rule, once as an
+    // equality the owner index serves and once double-negated so it can't be,
+    // shows what reading her bucket instead of the collection saves.
+    let writes: Vec<Value> = (0..20_000)
+        .map(|index| {
+            let owner = match index % 1_000 {
+                0 => "alice".to_owned(),
+                other => format!("user{other}"),
+            };
+            json!({"collection":"notes","key":format!("m{index:05}"),
+                "value":{"owner":owner,"rank":index,"text":"note"}})
+        })
+        .collect();
+    let mine = json!({"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]});
+    for (label, read) in [
+        ("owner == subject (owner index bucket)", mine.clone()),
+        (
+            "not(not(owner == subject)) (whole collection)",
+            json!({"not":{"not":mine}}),
+        ),
+    ] {
+        let (data, fixture) = with_policy(json!({"read":read}), Some(json!(writes)));
+        let mut best = std::time::Duration::MAX;
+        let mut rows = 0;
+        for _ in 0..20 {
+            let started = std::time::Instant::now();
+            let value = query(&data, &fixture, "scan", Value::Null, Some(alice()));
+            best = best.min(started.elapsed());
+            rows = value.as_array().unwrap().len();
+        }
+        println!(
+            "alice scans 20,000 rows of 1,000 owners with {label}: {rows} returned, best of 20 {best:?}"
+        );
+    }
 }
 
 fn with_policy(policy: Value, writes: Option<Value>) -> (Records, Fixture) {
@@ -967,4 +1021,75 @@ fn derived_values_answer_only_the_callers_their_rule_allows() {
         let rule: crate::evaluator::rust_engine::Rule = serde_json::from_value(invalid).unwrap();
         assert!(rule.validate_derived().is_err());
     }
+}
+
+#[test]
+fn owner_scans_read_their_bucket_and_ignore_other_owners_writes() {
+    let (mut data, fixture) = setup();
+    let scan = |data: &Records, principal: Value| {
+        let result = call(
+            data,
+            &fixture,
+            "query",
+            "scan",
+            Value::Null,
+            Some(principal),
+        )
+        .unwrap();
+        (result.value, result.query_certificate.expect("certificate"))
+    };
+    // read = owner or admin: for alice it folds to row.owner == "alice", so her
+    // scan reads the owner index's bucket, in key order, like a full scan.
+    let (rows, certificate) = scan(&data, alice());
+    assert_eq!(keys(&rows), ["a1", "a2", "a3"]);
+    assert!(rows[0]["value"].get("secret").is_none());
+    let (_, everything) = scan(&data, admin());
+    // Bob's writes leave alice's result alone; the admin's full scan follows them.
+    deploy(
+        &mut data,
+        json!({"writes":[{"collection":"notes","key":"b1","value":{"owner":"bob","rank":2,"text":"edited"}}]}),
+        &fixture,
+    );
+    assert!(certificate.valid(&data));
+    assert!(!everything.valid(&data));
+    // A row moving into her bucket, or out of it, or changing in it, does not.
+    for write in [
+        json!({"collection":"notes","key":"b2","value":{"owner":"alice","rank":4,"text":"gift"}}),
+        json!({"collection":"notes","key":"b2","value":{"owner":"bob","rank":4,"text":"back"}}),
+        json!({"collection":"notes","key":"a2","value":{"owner":"alice","rank":3,"text":"new"}}),
+    ] {
+        let (_, certificate) = scan(&data, alice());
+        deploy(&mut data, json!({"writes":[write]}), &fixture);
+        assert!(!certificate.valid(&data), "{write}");
+    }
+    assert_eq!(keys(&scan(&data, alice()).0), ["a1", "a2", "a3"]);
+    // Read-your-writes inside a mutation still sees pending changes.
+    let fixture = Fixture::new([(
+        "moveAndScan",
+        (|_, host| {
+            set(
+                host,
+                "notes",
+                "b1",
+                json!({"owner":"alice","rank":2,"text":"mine"}),
+            )?;
+            host("delete", json!([notes(), "a1"]))?;
+            host("scan", json!([notes()]))
+        }) as Callback,
+    )]);
+    let (data, _) = with_policy(
+        json!({"read":{"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]},"insert":{"const":true},"update":{"const":true},"delete":{"const":true}}),
+        None,
+    );
+    let moved = call(
+        &data,
+        &fixture,
+        "mutation",
+        "moveAndScan",
+        Value::Null,
+        Some(alice()),
+    )
+    .unwrap()
+    .value;
+    assert_eq!(keys(&moved), ["a2", "a3", "b1"]);
 }

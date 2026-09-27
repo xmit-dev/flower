@@ -54,7 +54,7 @@ export default app;</code></pre></div>
 <section id="collections">
 <h2>Guard collections</h2>
 <p>Method access decides who may call a method. Collection access decides what a method can see and change for its caller, whatever its code does. The server enforces it on every read and write.</p>
-<div class="code-block"><div class="code-head"><span>notes.ts</span><button class="copy-button" type="button" aria-label="Copy notes.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, mutation, query, v } from "@flower-js/sdk";
+<div class="code-block"><div class="code-head"><span>notes.ts</span><button class="copy-button" type="button" aria-label="Copy notes.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, derive, mutation, query, v } from "@flower-js/sdk";
 
 const notes = collection("notes", v.object({ owner: v.string(), text: v.string(), secret: v.optional(v.string()) }))
   .access(({ principal, row, next }) =&gt; ({
@@ -70,11 +70,29 @@ const write = mutation("note.write", { args: v.object({ id: v.string(), text: v.
   return null;
 });</code></pre></div>
 <ul>
-<li>Rows the caller can't read look absent: <code>get</code> returns <code>null</code>, and scans, queries and pages skip them.</li>
-<li>Fields the caller can't read are left out, and kept as they are when the caller writes the row back.</li>
+<li>Rows the caller can't read look absent: <code>get</code> returns <code>null</code>, scans, queries and pages skip them, and deleting one does nothing.</li>
+<li>Fields the caller can't read are left out, and kept as they are when the caller writes the row back. <code>ctx.set(notes, id, note, { clear: ["secret"] })</code> removes one, if its <code>write</code> rule allows.</li>
 <li>A write the rules deny fails with <code>ACCESS_DENIED</code>. Operations without a rule are denied.</li>
-<li>Derived values and maintenance run without a caller and see every row.</li>
+<li>Maintenance and triggers act with the application's rights: they see every row and field, and can write what callers can't, such as an audit trail.</li>
+<li>The rules guard callers from each other, not from your code. Triggers run between the host context's <code>definer(true)</code> and <code>definer(false)</code>, and any mutation that calls them on the raw context acts with the application's rights too. The SDK's <code>ctx</code> doesn't offer them.</li>
+<li>When the read rule pins a field to the caller (<code>row("owner").eq(principal.subject)</code>) and that field has an index, <code>ctx.scan(notes)</code> reads only the caller's rows, and other callers' writes don't disturb its result.</li>
 </ul>
+<p>Rules can compare (<code>lt</code>, <code>gte</code>, <code>startsWith</code>…), read parts of JSON keys (<code>key.at(0)</code>) and use the time: <code>row("expiresAt").gt(now)</code> hides a row the moment it expires, and results that depend on it update by themselves then.</p>
+<div class="code-block"><div class="code-head"><span>drafts.ts</span><button class="copy-button" type="button" aria-label="Copy drafts.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, v } from "@flower-js/sdk";
+
+// Each caller writes only under its own keys, [subject, id], so whether a write
+// succeeds never reveals anyone else's rows.
+const drafts = collection("drafts", v.object({ text: v.string(), expiresAt: v.int() }))
+  .key(v.tuple([v.string(), v.string()]))
+  .access(({ principal, row, key, now }) =&gt; ({
+    read: key.at(0).eq(principal.subject).and(row("expiresAt").gt(now)),
+    write: key.at(0).eq(principal.subject),
+  }));</code></pre></div>
+<p>Derived values compute over every row too, so give one built from a guarded collection an <code>access</code> rule over the caller and its arguments. Without one, any method may read it.</p>
+<div class="code-block"><div class="code-head"><span>notes.ts, continued</span><button class="copy-button" type="button" aria-label="Copy notes.ts, continued">Copy</button></div><pre tabindex="0"><code class="language-ts">const noteCount = derive("noteCount", (ctx, owner: string) =&gt;
+  ctx.scan(notes).filter((row) =&gt; row.value.owner === owner).length, {
+  access: ({ principal, args }) =&gt; args.eq(principal.subject), // ACCESS_DENIED for anyone else's count.
+});</code></pre></div>
 <p>Every rule is in the <a href="../reference/access.html#collection-access">collection access reference</a>.</p>
 </section>
 <section id="authenticate">

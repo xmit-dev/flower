@@ -771,6 +771,25 @@ impl Access {
         Arc::new(Value::Object(shown))
     }
 
+    /// When every row the caller may read holds one string in one field (the
+    /// read rule is, or has a conjunct, `row.field == "…"` once the caller is
+    /// folded in, like `row.owner == principal.subject`), that field and value.
+    fn bucket(&self) -> Option<(&str, &Value)> {
+        fn equality(check: &Check) -> Option<(&str, &Value)> {
+            match check {
+                Check::Compare(Op::Eq, Term::Row(path), Term::Value(value @ Value::String(_)))
+                | Check::Compare(Op::Eq, Term::Value(value @ Value::String(_)), Term::Row(path))
+                    if path.len() == 1 =>
+                {
+                    Some((path[0].as_str(), value))
+                }
+                Check::All(checks) => checks.iter().find_map(equality),
+                _ => None,
+            }
+        }
+        equality(&self.read)
+    }
+
     /// The visible rows, redacted.
     pub(super) fn filter(
         &self,
@@ -906,6 +925,44 @@ impl Engine<'_> {
             .filter(|access| !access.open_writes())
     }
 
+    /// A caller's plain scan of a collection whose read rule pins a field to
+    /// one string reads that equality bucket through the field's declared
+    /// index instead of the whole collection, and depends on the bucket and
+    /// its rows alone: other callers' writes don't disturb it. `None` when
+    /// no such rule and index apply.
+    pub(super) fn bucket_scan(
+        &mut self,
+        collection: &str,
+    ) -> EngineResult<Option<Vec<(String, Arc<Value>)>>> {
+        let Some(access) = self.read_access(collection) else {
+            return Ok(None);
+        };
+        let Some((field, value)) = access.bucket() else {
+            return Ok(None);
+        };
+        let query = Query {
+            collection: collection.to_owned(),
+            fields: vec![field.to_owned()],
+            expected: value.clone(),
+        };
+        if !self.has_index(&query) {
+            return Ok(None);
+        }
+        self.marker_read(indexes::bucket_id(
+            &query.collection,
+            &query.fields,
+            &query.expected,
+        ));
+        let rows = self.indexed_rows(&query)?;
+        for (key, _) in &rows {
+            self.record_read(source_id(collection, key));
+        }
+        self.count_operations(rows.len())?;
+        let rows = access.filter(rows, &[]);
+        self.settle_access(&access)?;
+        Ok(Some(rows))
+    }
+
     /// A caller's method may read this derived value only where its access
     /// rule allows. Values without a rule, and reads by code without a
     /// caller or with definer rights, are open.
@@ -1026,6 +1083,36 @@ mod tests {
         assert!(matches!(anonymous.insert, Check::Const(false)));
         assert!(matches!(anonymous.update, Check::Const(true)));
         assert!(!access(Value::Null).visible("k", &json!({"owner":null}), &[]));
+    }
+
+    /// `cargo test --release --lib specialization_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn specialization_cost() {
+        let policy: Policy = serde_json::from_value(json!({
+            "read": {"any":[
+                {"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]},
+                {"in":[{"value":"admin"},{"ref":["principal","claims","roles"]}]},
+            ]},
+            "insert": {"eq":[{"ref":["next","owner"]},{"ref":["principal","subject"]}]},
+            "update": {"all":[
+                {"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]},
+                {"eq":[{"ref":["next","owner"]},{"ref":["row","owner"]}]},
+            ]},
+            "delete": {"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]},
+            "fields": {"secret": {"read": {"in":[{"value":"admin"},{"ref":["principal","claims","roles"]}]}}},
+        }))
+        .unwrap();
+        let principal = json!({"subject":"alice","tenant":"t","claims":{"roles":["user"],"email":"a@example.com"}});
+        let rounds = 200_000u32;
+        let started = std::time::Instant::now();
+        for _ in 0..rounds {
+            std::hint::black_box(Access::new("notes", &policy, &principal, 1_000));
+        }
+        println!(
+            "Access::new for a 5-rule policy: {:?} each",
+            started.elapsed() / rounds
+        );
     }
 
     #[test]

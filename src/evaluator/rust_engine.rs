@@ -1153,6 +1153,9 @@ impl Engine<'_> {
                     return Ok(rows);
                 }
                 let collection = reference_name(argument(0), "collection")?;
+                if let Some(rows) = self.bucket_scan(collection)? {
+                    return self.rows_for_host(rows);
+                }
                 self.marker_read(collection_id(collection));
                 let rows = self.collection_rows(collection)?;
                 self.count_operations(rows.len())?;
