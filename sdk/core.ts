@@ -313,6 +313,15 @@ export function materializationOf(definition: object): Materialization<any> | un
 const derivedAccesses = new WeakMap<object, Json>();
 /** A derived value's compiled access rule, if it declares one. */
 export function derivedAccessOf(definition: object): Json | undefined { return derivedAccesses.get(definition); }
+/**
+ * SDK internals: compile `access` (DeriveOptions.access) for derived definitions that
+ * aggregate() and external() build, once, and attach it to each of them.
+ */
+export function declareDerivedAccess(access: unknown, name: string, ...definitions: object[]): void {
+  if (access === undefined) return;
+  const compiled = compileDerivedAccess(access as DerivedAccess<unknown>, name);
+  for (const definition of definitions) derivedAccesses.set(definition, compiled);
+}
 
 /** A pure reactive function of database state. */
 export function derive<A = null, V = Json>(name: string, compute: (ctx: Context, args: A) => V, options: DeriveOptions<A> = {}): Derived<A, V> {
@@ -320,7 +329,7 @@ export function derive<A = null, V = Json>(name: string, compute: (ctx: Context,
   if (typeof compute !== "function") throw new TypeError("A definition requires a compute function");
   const settings = plainObject(options, "Derive options", ["materialize", "access"]);
   const definition = Object.freeze({ kind: "derived" as const, name, compute });
-  if (settings.access !== undefined) derivedAccesses.set(definition, compileDerivedAccess(settings.access as DerivedAccess<A>, name));
+  declareDerivedAccess(settings.access, name, definition);
   if (settings.materialize !== undefined) {
     const policy = settings.materialize as Materialization<A>;
     if (policy !== "always" && (typeof policy !== "object" || policy === null || !collectionInfos.has((policy as { each: object }).each))) {

@@ -472,6 +472,19 @@ mod tests {
             serde_json::to_value(&manifest.schema.derived_access["d"]).unwrap(),
             rule
         );
+        // Aggregates (and SDK externals, plain derived values) carry theirs the same way.
+        let manifest = validate(&json!({
+            "definitions": {"sum": {"kind": "derived", "access": rule,
+                "aggregate": {"collection": "orders", "fields": ["shop"]}}},
+            "http": {},
+            "collections": [{"name": "orders", "indexes": {"shop": ["shop"]}}],
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&manifest.schema.derived_access["sum"]).unwrap(),
+            rule
+        );
+        assert!(manifest.schema.aggregates.contains_key("sum"));
     }
 
     #[test]

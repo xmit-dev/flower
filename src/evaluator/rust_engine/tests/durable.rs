@@ -349,6 +349,67 @@ fn aggregates_apply_only_changed_rows_and_survive_serialized_state() {
 }
 
 #[test]
+fn aggregate_values_answer_only_the_callers_their_rule_allows() {
+    // An aggregate is a derived value: its access rule, over principal and args
+    // (the group), guards methods' reads like any derived value's.
+    let fixture = Reducer::default();
+    let mut data = Records::default();
+    let writes: Vec<_> = [("1", "a", 10), ("2", "a", 20), ("3", "b", 5)]
+        .into_iter()
+        .map(|(key, shop, cents)| json!({"collection":"orders","key":key,"value":{"shop":shop,"cents":cents}}))
+        .collect();
+    let mut guarded = schema(true);
+    guarded.derived_access = serde_json::from_value(json!({
+        "total": {"eq":[{"ref":["args"]},{"ref":["principal","claims","shop"]}]}
+    }))
+    .unwrap();
+    deploy_schema(
+        &mut data,
+        json!({"writes":writes,"materialize":[{"name":"total","args":"a"},{"name":"total","args":"b"}]}),
+        guarded,
+        &fixture,
+    );
+    let read = |group: &str, principal: Option<Value>| {
+        let mut invocation = json!({"name":"read","args":group});
+        if let Some(principal) = principal {
+            invocation["$principal"] = principal;
+        }
+        run(data.clone(), invocation, "query", None, &fixture)
+    };
+    let manager = |shop: &str| Some(json!({"subject":"m","claims":{"shop":shop}}));
+    assert_eq!(read("a", manager("a")).unwrap().value, 30);
+    assert_eq!(read("b", manager("b")).unwrap().value, 5);
+    for (group, principal) in [("b", manager("a")), ("a", Some(Value::Null))] {
+        let error = read(group, principal).err().expect("denied");
+        assert_eq!(error.code, "ACCESS_DENIED");
+        assert_eq!(error.message, "Access policy denies reading total");
+    }
+    // Code without a caller reads every group.
+    assert_eq!(read("b", None).unwrap().value, 5);
+    // Mutations' reads too, after their own writes.
+    let preview = |principal: Value| {
+        run(
+            data.clone(),
+            json!({"name":"change","requestId":"preview","$principal":principal,
+                "args":[{"key":"4","value":{"shop":"a","cents":1},"preview":true}]}),
+            "mutation",
+            None,
+            &fixture,
+        )
+    };
+    assert_eq!(
+        preview(json!({"subject":"m","claims":{"shop":"a"}}))
+            .unwrap()
+            .value,
+        json!([31])
+    );
+    let error = preview(json!({"subject":"m","claims":{"shop":"b"}}))
+        .err()
+        .expect("denied");
+    assert_eq!(error.code, "ACCESS_DENIED");
+}
+
+#[test]
 fn aggregate_previews_do_not_double_apply_deltas_and_errors_rebuild() {
     let fixture = Reducer::default();
     let mut data = Records::default();

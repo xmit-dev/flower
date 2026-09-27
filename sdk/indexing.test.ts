@@ -48,6 +48,51 @@ test("aggregates fold rows per equality group with decoded tuple keys", async ()
   assert.deepEqual(db.query("paid", ["a", true]).keys, [["t", "2"]]);
 });
 
+test("aggregates say who may read each group, like derive(…, { access })", async () => {
+  // Each shop's manager reads its shop's revenue; the group is the rule's args.
+  const guarded = aggregate("guardedRevenue", {
+    source: orders, index: "byShop", initial: () => 0,
+    add: (total, row) => total + row.cents,
+    remove: (total, row) => total - row.cents,
+    access: ({ principal, args }) => args.eq(principal.claim("shop")),
+  });
+  const paidCount = aggregate("paidCount", {
+    source: orders, index: "byShopPaid", initial: () => 0,
+    add: (count) => count + 1, remove: (count) => count - 1,
+    access: ({ principal, args }) => args.at(0).eq(principal.claim("shop")),
+  });
+  const app = define({
+    definitions: [guarded, paidCount],
+    auth: { authenticate: (_ctx, credentials) => typeof credentials === "string" ? { subject: "m", claims: { shop: credentials } } : null, default: "public" },
+    http: {
+      put,
+      read: query("read", { args: v.string() }, (ctx, shop) => ctx.get(guarded, shop)),
+      readPaid: query("readPaid", { args: v.tuple([v.string(), v.boolean()]) }, (ctx, group) => ctx.get(paidCount, group)),
+      bump: mutation("bump", { args: v.string() }, (ctx, shop) => {
+        ctx.set(orders, [shop, "new"], { shop, cents: 1, paid: true });
+        return ctx.get(guarded, shop);
+      }),
+    },
+  });
+  // The rule reaches the manifest as the aggregate definition's access.
+  assert.deepEqual(plain((app.definitions as any).guardedRevenue.access), { eq: [{ ref: ["args"] }, { ref: ["principal", "claims", "shop"] }] });
+  assert.deepEqual(plain((app.definitions as any).guardedRevenue.aggregate), { collection: "orders", fields: ["shop"] });
+  const db = await testDatabase(app);
+  db.mutate("put", { key: ["t", "1"], shop: "a", cents: 10, paid: true }, { credentials: "a" });
+  db.mutate("put", { key: ["u", "1"], shop: "b", cents: 5, paid: false }, { credentials: "b" });
+  assert.equal(db.query("read", "a", { credentials: "a" }), 10);
+  assert.equal(db.query("readPaid", ["a", true], { credentials: "a" }), 1);
+  assert.equal(db.mutate("bump", "a", { credentials: "a" }), 11);
+  const denied = (run: () => unknown) => assert.throws(run, (error: any) => error.failure?.code === "ACCESS_DENIED" && /denies reading/.test(error.failure.message));
+  denied(() => db.query("read", "b", { credentials: "a" }));
+  denied(() => db.query("readPaid", ["b", false], { credentials: "a" }));
+  denied(() => db.query("read", "a"));
+  denied(() => db.mutate("bump", "b", { credentials: "a" }));
+  assert.throws(() => aggregate("bad", { source: orders, index: "byShop", initial: () => 0, add: (x) => x, remove: (x) => x, access: 1 as never }), /must be a rule, true or false/);
+  // @ts-expect-error: a byShop group is a string.
+  aggregate("typed", { source: orders, index: "byShop", initial: () => 0, add: (x) => x, remove: (x) => x, access: ({ args }) => args.eq(1) });
+});
+
 test("aggregate callbacks see decoded keys and groups, and remove undoes add", () => {
   const calls: Json[] = [];
   const options = {

@@ -22,7 +22,7 @@ async function denied(promise) {
 
 // `read` is the knob the redeploy turns: owners and admins first, then any signed-in caller.
 function source(read) {
-  return `import { collection, define, derive, fail, mutation, query, trigger, v } from ${JSON.stringify(join(root, "sdk/index.ts"))};
+  return `import { aggregate, collection, define, derive, external, fail, mutation, query, trigger, v } from ${JSON.stringify(join(root, "sdk/index.ts"))};
 const notes = collection("notes", v.object({ owner: v.string(), rank: v.int(), text: v.string(), secret: v.optional(v.string()), token: v.optional(v.string()) }))
   .index("owner", ["owner"])
   .index("rank", ["rank"])
@@ -49,8 +49,19 @@ const total = derive("total", (ctx) => ctx.scan(notes).length);
 const countFor = derive("countFor", (ctx, owner) => ctx.scan(notes).filter((row) => row.value.owner === owner).length, {
   access: ({ principal, args }) => args.eq(principal.subject).or(principal.claim("role").eq("admin")),
 });
+// Aggregates and external values are derived values: the same kind of rule says who reads them.
+const perOwner = aggregate("perOwner", {
+  source: notes, index: "owner", initial: () => 0, add: (count) => count + 1, remove: (count) => count - 1,
+  access: ({ principal, args }) => args.eq(principal.subject).or(principal.claim("role").eq("admin")),
+});
+const summary = external("summary", {
+  input: (ctx, key) => ctx.get(notes, key)?.text ?? null,
+  access: ({ principal }) => principal.claim("role").eq("admin"),
+});
 const id = v.string({ min: 1 });
 const open = { access: "public" };
+const owned = query("owned", { ...open, args: id }, (ctx, owner) => ctx.get(perOwner, owner));
+const summarized = query("summarized", { ...open, args: id }, (ctx, key) => ctx.get(summary, key));
 const get = query("get", { ...open, args: id }, (ctx, key) => ctx.get(notes, key));
 const list = query("list", open, (ctx) => ctx.scan(notes).map((row) => row.key));
 const mine = query("mine", open, (ctx) => ctx.query(notes.by("owner").eq(ctx.principal()?.subject ?? "")).map((note) => note.text));
@@ -107,14 +118,15 @@ const share = mutation("share", { args: v.object({ id, private: v.boolean() }) }
 const probe = mutation("probe", open, (ctx) => [typeof ctx.definer, typeof globalThis.__flowerContexts?.[0]?.definer, typeof globalThis.__flowerContexts?.[1]?.definer]);
 export default define({
   collections: [notes, audit, sessions, events],
-  definitions: [total, countFor],
+  uses: [summary],
+  definitions: [total, countFor, perOwner],
   triggers: [log],
   auth: {
     authenticate: (_ctx, credentials) => typeof credentials === "string"
       ? { subject: credentials, claims: credentials === "root" ? { role: "admin" } : {} }
       : null,
   },
-  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share, probe },
+  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share, probe, owned, summarized },
 });`;
 }
 
@@ -163,6 +175,12 @@ try {
   assert.equal(await value(rootUser.query("tally", "bob")), 2);
   await denied(alice.query("tally", "bob"));
   await denied(anonymous.query("tally", "alice"));
+  assert.equal(await value(alice.query("owned", "alice")), 3);
+  assert.equal(await value(rootUser.query("owned", "bob")), 2);
+  await denied(alice.query("owned", "bob"));
+  await denied(anonymous.query("owned", "alice"));
+  assert.deepEqual(await value(rootUser.query("summarized", "a1")), { status: "pending" });
+  await denied(alice.query("summarized", "a1"));
 
   // Writes.
   await denied(mutate(alice, "put", { id: "b9", note: { owner: "bob", rank: 9, text: "forged" } }));
@@ -220,7 +238,7 @@ try {
   assert.deepEqual(await value(alice.query("list")), ["a1", "a3", "b1", "b2"]);
   assert.deepEqual(await value(alice.query("get", "b1")), { owner: "bob", rank: 2, text: "two" });
   assert.deepEqual(await value(anonymous.query("list")), []);
-  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, let rows follow another row's rule (live watches included), and follow policy redeploys");
+  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, guard aggregates and external values like derived ones, let rows follow another row's rule (live watches included), and follow policy redeploys");
 } catch (error) {
   console.error(error);
   console.error(cluster.logTails());

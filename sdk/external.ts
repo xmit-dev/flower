@@ -1,6 +1,7 @@
 import { canonicalJson, type Json } from "./json.ts";
-import { collection, component, derive, fail, mutation, plainObject, query, requireName, trigger } from "./core.ts";
+import { collection, component, declareDerivedAccess, derive, fail, mutation, plainObject, query, requireName, trigger } from "./core.ts";
 import type { Access, Collection, Component, Context, Derived, MutationContext, MutationMethod, QueryMethod } from "./core.ts";
+import type { DerivedAccess } from "./access.ts";
 import { schema as adopt, v, ValidationError, type SchemaLike } from "./schema.ts";
 
 export type ExternalState<R> = { readonly status: "pending" } | { readonly status: "ready"; readonly value: R };
@@ -77,19 +78,34 @@ export function external<A extends Json, I extends Json = Json, R extends Json =
   readonly result?: SchemaLike<R>;
   readonly each: Collection<any, A, any>;
   readonly lease?: { readonly defaultMs?: number; readonly maxMs?: number };
+  /**
+   * Who may read the value from a method (ctx.get(value, args)), as derive(…, { access })
+   * says it: a rule over `principal`, `args` and `now`. It guards the value (its state and
+   * result); workers get inputs through pending, next and claim, and `results` is plain
+   * storage: guard those with http(prefix, { access }).
+   */
+  readonly access?: DerivedAccess<NoInfer<A>>;
 }): External<A, I, R, true>;
 export function external<A = string, I extends Json = Json, R extends Json = Json>(name: string, options: {
   readonly input: (ctx: Context, args: A) => I | null;
   readonly result?: SchemaLike<R>;
+  /**
+   * Who may read the value from a method (ctx.get(value, args)), as derive(…, { access })
+   * says it: a rule over `principal`, `args` and `now`. It guards the value (its state and
+   * result); workers get inputs through pending, next and claim, and `results` is plain
+   * storage: guard those with http(prefix, { access }).
+   */
+  readonly access?: DerivedAccess<NoInfer<A>>;
 }): External<A, I, R, false>;
 export function external<A, I extends Json, R extends Json>(name: string, options: {
   readonly input: (ctx: Context, args: A) => I | null;
   readonly result?: SchemaLike<R>;
   readonly each?: Collection<any, any, any>;
   readonly lease?: { readonly defaultMs?: number; readonly maxMs?: number };
+  readonly access?: DerivedAccess<A>;
 }): External<A, I, R, boolean> {
   requireName(name, "External value name");
-  const settings = plainObject(options, "External options", ["input", "result", "each", "lease"]);
+  const settings = plainObject(options, "External options", ["input", "result", "each", "lease", "access"]);
   if (typeof settings.input !== "function") throw new TypeError("An external value requires an input function");
   const describe = settings.input as (ctx: Context, args: A) => I | null;
   const resultSchema = settings.result === undefined ? null : adopt(settings.result as SchemaLike<R>);
@@ -256,7 +272,7 @@ export function external<A, I extends Json, R extends Json>(name: string, option
   })] : [];
   const parts = component({ collections: [results, ...(each ? [stale] : [])], definitions: [desired, value], triggers: tracking });
   const generated = new Map<string, { access: Access | undefined; methods: Record<string, QueryMethod<any, any> | MutationMethod<any, any>> }>();
-  return Object.freeze({
+  const result = Object.freeze({
     ...value,
     component: parts,
     results,
@@ -302,4 +318,8 @@ export function external<A, I extends Json, R extends Json>(name: string, option
       return methods;
     },
   }) as unknown as External<A, I, R, boolean>;
+  // The rule belongs to the value, whether define() meets it through the component or as the
+  // returned object itself.
+  declareDerivedAccess(settings.access, name, value, result);
+  return result;
 }

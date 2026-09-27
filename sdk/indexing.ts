@@ -1,6 +1,7 @@
 import { canonicalJson, type Json } from "./json.ts";
-import { collectionInfo, plainObject, requireName } from "./core.ts";
+import { collectionInfo, declareDerivedAccess, plainObject, requireName } from "./core.ts";
 import type { AggregateMetadata, Collection, CollectionManifest, Derived, EqualityValue, IndexMap } from "./core.ts";
+import type { DerivedAccess } from "./access.ts";
 
 export interface Aggregate<G = Json, V = Json> extends Derived<G, V> { readonly aggregate: AggregateMetadata }
 export interface AggregateOptions<T, K, G, V> {
@@ -9,6 +10,13 @@ export interface AggregateOptions<T, K, G, V> {
   readonly initial: (group: G) => V;
   readonly add: (value: V, row: T, key: K, group: G) => V;
   readonly remove: (value: V, row: T, key: K, group: G) => V;
+  /**
+   * Who may read a group's value from a method, as derive(…, { access }) says it: a rule
+   * over `principal`, `args` (the group, as ctx.get(aggregate, group) passes it) and `now`.
+   * Aggregates fold every row of the source, whoever may read them; without a rule, any
+   * method may read any group.
+   */
+  readonly access?: DerivedAccess<NoInfer<G>>;
 }
 
 const aggregateSources = new WeakMap<object, Collection<any, any, any>>();
@@ -109,7 +117,7 @@ export function aggregate<T, K extends Json, I extends IndexMap, N extends Extra
   options: { readonly source: Collection<T, K, I>; readonly index: N } & Omit<AggregateOptions<T, K, EqualityValue<T, I[N]>, V>, "source" | "index">,
 ): Aggregate<EqualityValue<T, I[N]>, V> {
   requireName(name, "Aggregate name");
-  const settings = plainObject(options, "Aggregate options", ["source", "index", "initial", "add", "remove"]);
+  const settings = plainObject(options, "Aggregate options", ["source", "index", "initial", "add", "remove", "access"]);
   const [declaration] = collectionManifest([options.source]);
   requireName(settings.index, "Aggregate index");
   if (!Object.hasOwn(declaration.indexes, options.index)) throw new TypeError(`Unknown aggregate index ${JSON.stringify(options.index)}`);
@@ -132,5 +140,6 @@ export function aggregate<T, K extends Json, I extends IndexMap, N extends Extra
   };
   const definition = Object.freeze({ kind: "derived" as const, name, compute, aggregate: metadata });
   aggregateSources.set(definition, options.source);
+  declareDerivedAccess(settings.access, name, definition);
   return definition;
 }

@@ -77,6 +77,53 @@ test("external values stay pending until a result for the current input is publi
   assert.throws(() => db.query("words.pending", 1));
 });
 
+test("external values say who may read them, like derive(…, { access }), while workers keep working", async () => {
+  // Each doc's summary is for its owner; the worker pool still sees and publishes every input.
+  const owned = collection("owned", v.object({ owner: v.string(), text: v.string() }));
+  const summary = external("summary", {
+    input: (ctx, id: string) => ctx.get(owned, id)?.text ?? null,
+    each: owned,
+    access: ({ principal, args }) => args.startsWith(principal.subject),
+  });
+  const plainSummary = external("plainSummary", { input: (ctx, id: string) => ctx.get(owned, id)?.text ?? null, access: false });
+  const guardedApp = define({
+    uses: [summary, plainSummary],
+    auth: { authenticate: (_ctx, credentials) => typeof credentials === "string" ? { subject: credentials } : null, default: "public" },
+    http: {
+      write: mutation("write", { args: v.object({ id: v.string(), text: v.string() }) }, (ctx, { id, text }) => {
+        ctx.set(owned, id, { owner: ctx.principal()?.subject ?? "", text });
+        return null;
+      }),
+      read: query("read", { args: v.string() }, (ctx, id) => ctx.get(summary, id)),
+      readPlain: query("readPlain", { args: v.string() }, (ctx, id) => ctx.get(plainSummary, id)),
+      ...summary.http("summary"),
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify((guardedApp.definitions as any).summary.access)), { startsWith: [{ ref: ["args"] }, { ref: ["principal", "subject"] }] });
+  assert.equal((guardedApp.definitions as any)["summary.input"].access, undefined);
+  assert.deepEqual((guardedApp.definitions as any).plainSummary.access, { const: false });
+  // The returned object carries the rule too, for define() meeting it directly.
+  const direct = define({ collections: [owned], definitions: [plainSummary] });
+  assert.deepEqual((direct.definitions as any).plainSummary.access, { const: false });
+  const db = await testDatabase(guardedApp);
+  const alice = { credentials: "alice" }, bob = { credentials: "bob" };
+  db.mutate("write", { id: "alice/1", text: "hello" }, alice);
+  assert.deepEqual(db.query("read", "alice/1", alice), { status: "pending" });
+  const denied = (run: () => unknown) => assert.throws(run, (error: any) => error.failure?.code === "ACCESS_DENIED" && /denies reading/.test(error.failure.message));
+  denied(() => db.query("read", "alice/1", bob));
+  denied(() => db.query("read", "alice/1"));
+  denied(() => db.query("readPlain", "alice/1", alice));
+  // Workers: pending work and publishing aren't reads of the value.
+  const [work] = db.query("summary.next", null, bob);
+  assert.equal(work.args, "alice/1");
+  assert.deepEqual(db.mutate("summary.publish", { args: work.args, key: work.key, value: "HELLO" }, bob), { accepted: true });
+  assert.deepEqual(db.query("read", "alice/1", alice), { status: "ready", value: "HELLO" });
+  denied(() => db.query("read", "alice/1", bob));
+  assert.throws(() => external("bad", { input: () => null, access: 1 as never }), /must be a rule, true or false/);
+  // @ts-expect-error: the arguments are strings.
+  external("typed", { input: (_ctx, id: string) => id, access: ({ args }) => args.eq(1) });
+});
+
 test("publish validates results and its arguments", async () => {
   const db = await testDatabase(app);
   db.mutate("put", { id: "a", text: "x" });
