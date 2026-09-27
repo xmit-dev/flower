@@ -1,0 +1,2793 @@
+[
+ {
+  "input": "null",
+  "canonical": "null",
+  "stringifyBytes": 4
+ },
+ {
+  "input": "true",
+  "canonical": "true",
+  "stringifyBytes": 4
+ },
+ {
+  "input": "false",
+  "canonical": "false",
+  "stringifyBytes": 5
+ },
+ {
+  "input": "\"\"",
+  "canonical": "\"\"",
+  "stringifyBytes": 2
+ },
+ {
+  "input": "\"flower\"",
+  "canonical": "\"flower\"",
+  "stringifyBytes": 8
+ },
+ {
+  "input": "\"a\\u0000b🌸\"",
+  "canonical": "\"a\\u0000b🌸\"",
+  "stringifyBytes": 14
+ },
+ {
+  "input": "\"\\u2028\\u2029\"",
+  "canonical": "\"  \"",
+  "stringifyBytes": 8
+ },
+ {
+  "input": "\"\\u007f\"",
+  "canonical": "\"\"",
+  "stringifyBytes": 3
+ },
+ {
+  "input": "\"\\u0001\\u001f\\b\\f\\n\\r\\t\\u000b\"",
+  "canonical": "\"\\u0001\\u001f\\b\\f\\n\\r\\t\\u000b\"",
+  "stringifyBytes": 30
+ },
+ {
+  "input": "\"\\\"\\\\/\"",
+  "canonical": "\"\\\"\\\\/\"",
+  "stringifyBytes": 7
+ },
+ {
+  "input": "\"\\ud83d\\ude00\"",
+  "canonical": "\"😀\"",
+  "stringifyBytes": 6
+ },
+ {
+  "input": "\"\\uffff\\ue000\"",
+  "canonical": "\"￿\"",
+  "stringifyBytes": 8
+ },
+ {
+  "input": "\"é e\\u0301\"",
+  "canonical": "\"é é\"",
+  "stringifyBytes": 8
+ },
+ {
+  "input": "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\"",
+  "canonical": "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\"",
+  "stringifyBytes": 174
+ },
+ {
+  "input": "0",
+  "canonical": "0",
+  "stringifyBytes": 1,
+  "bits": "0000000000000000"
+ },
+ {
+  "input": "-0",
+  "canonical": "0",
+  "stringifyBytes": 1,
+  "bits": "8000000000000000"
+ },
+ {
+  "input": "-0.0",
+  "canonical": "0",
+  "stringifyBytes": 1,
+  "bits": "8000000000000000"
+ },
+ {
+  "input": "1",
+  "canonical": "1",
+  "stringifyBytes": 1,
+  "bits": "3ff0000000000000"
+ },
+ {
+  "input": "-1",
+  "canonical": "-1",
+  "stringifyBytes": 2,
+  "bits": "bff0000000000000"
+ },
+ {
+  "input": "1.5",
+  "canonical": "1.5",
+  "stringifyBytes": 3,
+  "bits": "3ff8000000000000"
+ },
+ {
+  "input": "1.0",
+  "canonical": "1",
+  "stringifyBytes": 1,
+  "bits": "3ff0000000000000"
+ },
+ {
+  "input": "1.50",
+  "canonical": "1.5",
+  "stringifyBytes": 3,
+  "bits": "3ff8000000000000"
+ },
+ {
+  "input": "0.1",
+  "canonical": "0.1",
+  "stringifyBytes": 3,
+  "bits": "3fb999999999999a"
+ },
+ {
+  "input": "0.2",
+  "canonical": "0.2",
+  "stringifyBytes": 3,
+  "bits": "3fc999999999999a"
+ },
+ {
+  "input": "0.30000000000000004",
+  "canonical": "0.30000000000000004",
+  "stringifyBytes": 19,
+  "bits": "3fd3333333333334"
+ },
+ {
+  "input": "4.35",
+  "canonical": "4.35",
+  "stringifyBytes": 4,
+  "bits": "4011666666666666"
+ },
+ {
+  "input": "0.1e1",
+  "canonical": "1",
+  "stringifyBytes": 1,
+  "bits": "3ff0000000000000"
+ },
+ {
+  "input": "1E+2",
+  "canonical": "100",
+  "stringifyBytes": 3,
+  "bits": "4059000000000000"
+ },
+ {
+  "input": "1e2",
+  "canonical": "100",
+  "stringifyBytes": 3,
+  "bits": "4059000000000000"
+ },
+ {
+  "input": "1e21",
+  "canonical": "1e+21",
+  "stringifyBytes": 5,
+  "bits": "444b1ae4d6e2ef50"
+ },
+ {
+  "input": "1e20",
+  "canonical": "100000000000000000000",
+  "stringifyBytes": 21,
+  "bits": "4415af1d78b58c40"
+ },
+ {
+  "input": "999999999999999999999",
+  "canonical": "1e+21",
+  "stringifyBytes": 5,
+  "bits": "444b1ae4d6e2ef50"
+ },
+ {
+  "input": "99999999999999990000",
+  "canonical": "99999999999999980000",
+  "stringifyBytes": 20,
+  "bits": "4415af1d78b58c3f"
+ },
+ {
+  "input": "100000000000000000000",
+  "canonical": "100000000000000000000",
+  "stringifyBytes": 21,
+  "bits": "4415af1d78b58c40"
+ },
+ {
+  "input": "123e-20",
+  "canonical": "1.23e-18",
+  "stringifyBytes": 8,
+  "bits": "3c36b082c2148b8e"
+ },
+ {
+  "input": "1e-7",
+  "canonical": "1e-7",
+  "stringifyBytes": 4,
+  "bits": "3e7ad7f29abcaf48"
+ },
+ {
+  "input": "1e-6",
+  "canonical": "0.000001",
+  "stringifyBytes": 8,
+  "bits": "3eb0c6f7a0b5ed8d"
+ },
+ {
+  "input": "0.000001",
+  "canonical": "0.000001",
+  "stringifyBytes": 8,
+  "bits": "3eb0c6f7a0b5ed8d"
+ },
+ {
+  "input": "0.0000001",
+  "canonical": "1e-7",
+  "stringifyBytes": 4,
+  "bits": "3e7ad7f29abcaf48"
+ },
+ {
+  "input": "-1e-7",
+  "canonical": "-1e-7",
+  "stringifyBytes": 5,
+  "bits": "be7ad7f29abcaf48"
+ },
+ {
+  "input": "1e300",
+  "canonical": "1e+300",
+  "stringifyBytes": 6,
+  "bits": "7e37e43c8800759c"
+ },
+ {
+  "input": "1e308",
+  "canonical": "1e+308",
+  "stringifyBytes": 6,
+  "bits": "7fe1ccf385ebc8a0"
+ },
+ {
+  "input": "1.7976931348623157e308",
+  "canonical": "1.7976931348623157e+308",
+  "stringifyBytes": 23,
+  "bits": "7fefffffffffffff"
+ },
+ {
+  "input": "5e-324",
+  "canonical": "5e-324",
+  "stringifyBytes": 6,
+  "bits": "0000000000000001"
+ },
+ {
+  "input": "4.9406564584124654e-324",
+  "canonical": "5e-324",
+  "stringifyBytes": 6,
+  "bits": "0000000000000001"
+ },
+ {
+  "input": "2.2250738585072014e-308",
+  "canonical": "2.2250738585072014e-308",
+  "stringifyBytes": 23,
+  "bits": "0010000000000000"
+ },
+ {
+  "input": "2.2250738585072011e-308",
+  "canonical": "2.225073858507201e-308",
+  "stringifyBytes": 22,
+  "bits": "000fffffffffffff"
+ },
+ {
+  "input": "1.1754943508222875e-38",
+  "canonical": "1.1754943508222875e-38",
+  "stringifyBytes": 22,
+  "bits": "3810000000000000"
+ },
+ {
+  "input": "8.98846567431158e307",
+  "canonical": "8.98846567431158e+307",
+  "stringifyBytes": 21,
+  "bits": "7fe0000000000000"
+ },
+ {
+  "input": "1.2345678901234567e-300",
+  "canonical": "1.2345678901234568e-300",
+  "stringifyBytes": 23,
+  "bits": "01aa74fe1c1e8908"
+ },
+ {
+  "input": "9007199254740991",
+  "canonical": "9007199254740991",
+  "stringifyBytes": 16,
+  "bits": "433fffffffffffff"
+ },
+ {
+  "input": "9007199254740992",
+  "canonical": "9007199254740992",
+  "stringifyBytes": 16,
+  "bits": "4340000000000000"
+ },
+ {
+  "input": "9007199254740993",
+  "canonical": "9007199254740992",
+  "stringifyBytes": 16,
+  "bits": "4340000000000000"
+ },
+ {
+  "input": "-9007199254740993",
+  "canonical": "-9007199254740992",
+  "stringifyBytes": 17,
+  "bits": "c340000000000000"
+ },
+ {
+  "input": "12345678901234567890",
+  "canonical": "12345678901234567000",
+  "stringifyBytes": 20,
+  "bits": "43e56a95319d63e1"
+ },
+ {
+  "input": "18446744073709551615",
+  "canonical": "18446744073709552000",
+  "stringifyBytes": 20,
+  "bits": "43f0000000000000"
+ },
+ {
+  "input": "18446744073709551616",
+  "canonical": "18446744073709552000",
+  "stringifyBytes": 20,
+  "bits": "43f0000000000000"
+ },
+ {
+  "input": "123456789012345678901234567890",
+  "canonical": "1.2345678901234568e+29",
+  "stringifyBytes": 22,
+  "bits": "45f8ee90ff6c373e"
+ },
+ {
+  "input": "-123456789012345678901234567890",
+  "canonical": "-1.2345678901234568e+29",
+  "stringifyBytes": 23,
+  "bits": "c5f8ee90ff6c373e"
+ },
+ {
+  "input": "0.1234567890123456789",
+  "canonical": "0.12345678901234568",
+  "stringifyBytes": 19,
+  "bits": "3fbf9add3746f65f"
+ },
+ {
+  "input": "[0,-0,1e21,1e-7,5e-324,9007199254740993]",
+  "canonical": "[0,0,1e+21,1e-7,5e-324,9007199254740992]",
+  "stringifyBytes": 40
+ },
+ {
+  "input": "{\"b\":1,\"a\":2}",
+  "canonical": "{\"a\":2,\"b\":1}",
+  "stringifyBytes": 13
+ },
+ {
+  "input": "{\"10\":10,\"2\":2,\"😀\":2,\"\\ue000\":1,\"\":0}",
+  "canonical": "{\"\":0,\"10\":10,\"2\":2,\"😀\":2,\"\":1}",
+  "stringifyBytes": 37
+ },
+ {
+  "input": "{\"\\uffff\":1,\"😀\":2,\"\\ue000\":3,\"~\":4}",
+  "canonical": "{\"~\":4,\"😀\":2,\"\":3,\"￿\":1}",
+  "stringifyBytes": 32
+ },
+ {
+  "input": "{\"a\":{\"c\":1,\"b\":[{\"z\":1,\"y\":2},{\"b\":{\"d\":[],\"c\":{}}}]}}",
+  "canonical": "{\"a\":{\"b\":[{\"y\":2,\"z\":1},{\"b\":{\"c\":{},\"d\":[]}}],\"c\":1}}",
+  "stringifyBytes": 55
+ },
+ {
+  "input": "{\"é\":1,\"e\\u0301\":2,\"z\":3,\"E\":4}",
+  "canonical": "{\"E\":4,\"é\":2,\"z\":3,\"é\":1}",
+  "stringifyBytes": 28
+ },
+ {
+  "input": "{\"__proto__\":{\"x\":1},\"constructor\":{\"prototype\":1},\"toString\":2}",
+  "canonical": "{\"__proto__\":{\"x\":1},\"constructor\":{\"prototype\":1},\"toString\":2}",
+  "stringifyBytes": 64
+ },
+ {
+  "input": "{\"1\":1,\"01\":2,\"1.5\":3,\"-1\":4,\"a\":5,\"A\":6,\"_\":7}",
+  "canonical": "{\"-1\":4,\"01\":2,\"1\":1,\"1.5\":3,\"A\":6,\"_\":7,\"a\":5}",
+  "stringifyBytes": 47
+ },
+ {
+  "input": "{\"\\u0000\":1,\"\\u001f\":2,\" \":3,\"\\\"\":4,\"\\\\\":5}",
+  "canonical": "{\"\\u0000\":1,\"\\u001f\":2,\" \":3,\"\\\"\":4,\"\\\\\":5}",
+  "stringifyBytes": 43
+ },
+ {
+  "input": "[[],{},[{}],{\"a\":[]}]",
+  "canonical": "[[],{},[{}],{\"a\":[]}]",
+  "stringifyBytes": 21
+ },
+ {
+  "input": "[]",
+  "canonical": "[]",
+  "stringifyBytes": 2
+ },
+ {
+  "input": "{}",
+  "canonical": "{}",
+  "stringifyBytes": 2
+ },
+ {
+  "input": "[[[[[\"deep\"]]]]]",
+  "canonical": "[[[[[\"deep\"]]]]]",
+  "stringifyBytes": 16
+ },
+ {
+  "input": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"key\"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+  "canonical": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"key\"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+  "stringifyBytes": 261
+ },
+ {
+  "input": "{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":0,\"z\":0},\"z\":1},\"z\":2},\"z\":3},\"z\":4},\"z\":5},\"z\":6},\"z\":7},\"z\":8},\"z\":9},\"z\":10},\"z\":11},\"z\":12},\"z\":13},\"z\":14},\"z\":15},\"z\":16},\"z\":17},\"z\":18},\"z\":19},\"z\":20},\"z\":21},\"z\":22},\"z\":23},\"z\":24},\"z\":25},\"z\":26},\"z\":27},\"z\":28},\"z\":29},\"z\":30},\"z\":31},\"z\":32},\"z\":33},\"z\":34},\"z\":35},\"z\":36},\"z\":37},\"z\":38},\"z\":39},\"z\":40},\"z\":41},\"z\":42},\"z\":43},\"z\":44},\"z\":45},\"z\":46},\"z\":47},\"z\":48},\"z\":49},\"z\":50},\"z\":51},\"z\":52},\"z\":53},\"z\":54},\"z\":55},\"z\":56},\"z\":57},\"z\":58},\"z\":59}",
+  "canonical": "{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":{\"k6\":{\"k5\":{\"k4\":{\"k3\":{\"k2\":{\"k1\":{\"k0\":0,\"z\":0},\"z\":1},\"z\":2},\"z\":3},\"z\":4},\"z\":5},\"z\":6},\"z\":7},\"z\":8},\"z\":9},\"z\":10},\"z\":11},\"z\":12},\"z\":13},\"z\":14},\"z\":15},\"z\":16},\"z\":17},\"z\":18},\"z\":19},\"z\":20},\"z\":21},\"z\":22},\"z\":23},\"z\":24},\"z\":25},\"z\":26},\"z\":27},\"z\":28},\"z\":29},\"z\":30},\"z\":31},\"z\":32},\"z\":33},\"z\":34},\"z\":35},\"z\":36},\"z\":37},\"z\":38},\"z\":39},\"z\":40},\"z\":41},\"z\":42},\"z\":43},\"z\":44},\"z\":45},\"z\":46},\"z\":47},\"z\":48},\"z\":49},\"z\":50},\"z\":51},\"z\":52},\"z\":53},\"z\":54},\"z\":55},\"z\":56},\"z\":57},\"z\":58},\"z\":59}",
+  "stringifyBytes": 831
+ },
+ {
+  "input": "59.25",
+  "canonical": "59.25",
+  "stringifyBytes": 5,
+  "bits": "404da00000000000"
+ },
+ {
+  "input": "19361.48e231",
+  "canonical": "1.936148e+235",
+  "stringifyBytes": 13,
+  "bits": "70c85b823725acae"
+ },
+ {
+  "input": "9977.488101e120",
+  "canonical": "9.977488101e+123",
+  "stringifyBytes": 16,
+  "bits": "59ae2fbf79a82d2e"
+ },
+ {
+  "input": "3670322.25",
+  "canonical": "3670322.25",
+  "stringifyBytes": 10,
+  "bits": "414c009920000000"
+ },
+ {
+  "input": "12.27528e-4",
+  "canonical": "0.001227528",
+  "stringifyBytes": 11,
+  "bits": "3f541ca0275aeb67"
+ },
+ {
+  "input": "-514238.213e55",
+  "canonical": "-5.14238213e+60",
+  "stringifyBytes": 15,
+  "bits": "cc8999d47456fb5e"
+ },
+ {
+  "input": "49686598488969",
+  "canonical": "49686598488969",
+  "stringifyBytes": 14,
+  "bits": "42c6984806c9c480"
+ },
+ {
+  "input": "4.7464e-305",
+  "canonical": "4.7464e-305",
+  "stringifyBytes": 11,
+  "bits": "00c0aa490c8b3f48"
+ },
+ {
+  "input": "-3627.62275186633297e-324",
+  "canonical": "-3.626e-321",
+  "stringifyBytes": 11,
+  "bits": "80000000000002de"
+ },
+ {
+  "input": "-0.82",
+  "canonical": "-0.82",
+  "stringifyBytes": 5,
+  "bits": "bfea3d70a3d70a3d"
+ },
+ {
+  "input": "76994442.806e79",
+  "canonical": "7.6994442806e+86",
+  "stringifyBytes": 16,
+  "bits": "51f8c555502c82dd"
+ },
+ {
+  "input": "43.6678e-258",
+  "canonical": "4.36678e-257",
+  "stringifyBytes": 12,
+  "bits": "0ab4fb46f6cec601"
+ },
+ {
+  "input": "6.58555036463023439",
+  "canonical": "6.585550364630234",
+  "stringifyBytes": 17,
+  "bits": "401a579a83c8fdad"
+ },
+ {
+  "input": "95928583.9e289",
+  "canonical": "9.59285839e+296",
+  "stringifyBytes": 15,
+  "bits": "7d97780842e9fb2d"
+ },
+ {
+  "input": "1601936.56600e170",
+  "canonical": "1.601936566e+176",
+  "stringifyBytes": 16,
+  "bits": "64843d8703e0289f"
+ },
+ {
+  "input": "7247221.97185",
+  "canonical": "7247221.97185",
+  "stringifyBytes": 13,
+  "bits": "415ba55d7e32ca58"
+ },
+ {
+  "input": "0.690141e-227",
+  "canonical": "6.90141e-228",
+  "stringifyBytes": 12,
+  "bits": "10c4ed482d763aad"
+ },
+ {
+  "input": "8.45438813697048e43",
+  "canonical": "8.45438813697048e+43",
+  "stringifyBytes": 20,
+  "bits": "490e54211953b595"
+ },
+ {
+  "input": "52062480.4",
+  "canonical": "52062480.4",
+  "stringifyBytes": 10,
+  "bits": "4188d34883333333"
+ },
+ {
+  "input": "26432339608332.52872e134",
+  "canonical": "2.643233960833253e+147",
+  "stringifyBytes": 22,
+  "bits": "5e8a75ba0cce06c5"
+ },
+ {
+  "input": "9.931571898e125",
+  "canonical": "9.931571898e+125",
+  "stringifyBytes": 16,
+  "bits": "5a1779850058f869"
+ },
+ {
+  "input": "97509796",
+  "canonical": "97509796",
+  "stringifyBytes": 8,
+  "bits": "41973f8690000000"
+ },
+ {
+  "input": "1531.7207489370785e-87",
+  "canonical": "1.5317207489370786e-84",
+  "stringifyBytes": 22,
+  "bits": "2e87ce1522b96556"
+ },
+ {
+  "input": "225008688e-42",
+  "canonical": "2.25008688e-34",
+  "stringifyBytes": 14,
+  "bits": "38f2b167d2a8b2e5"
+ },
+ {
+  "input": "-67.43307641",
+  "canonical": "-67.43307641",
+  "stringifyBytes": 12,
+  "bits": "c050dbb7861e679f"
+ },
+ {
+  "input": "-919.2447e33",
+  "canonical": "-9.192447e+35",
+  "stringifyBytes": 13,
+  "bits": "c7662148698e03f9"
+ },
+ {
+  "input": "-0.7476e-113",
+  "canonical": "-7.476e-114",
+  "stringifyBytes": 11,
+  "bits": "a872691c416ad07b"
+ },
+ {
+  "input": "187.223",
+  "canonical": "187.223",
+  "stringifyBytes": 7,
+  "bits": "40676722d0e56042"
+ },
+ {
+  "input": "8743.449885363321090e-277",
+  "canonical": "8.743449885363321e-274",
+  "stringifyBytes": 22,
+  "bits": "073e45978a83a249"
+ },
+ {
+  "input": "-0.7088e9",
+  "canonical": "-708800000",
+  "stringifyBytes": 10,
+  "bits": "c1c51fb700000000"
+ },
+ {
+  "input": "48888050471.39",
+  "canonical": "48888050471.39",
+  "stringifyBytes": 14,
+  "bits": "4226c3e8e64ec7ae"
+ },
+ {
+  "input": "885091172.8e-223",
+  "canonical": "8.850911728e-215",
+  "stringifyBytes": 16,
+  "bits": "137e82f7dc82f5f0"
+ },
+ {
+  "input": "569e-301",
+  "canonical": "5.69e-299",
+  "stringifyBytes": 9,
+  "bits": "02030d81d68aeec0"
+ },
+ {
+  "input": "-39.217828781229403556",
+  "canonical": "-39.2178287812294",
+  "stringifyBytes": 17,
+  "bits": "c0439be1d041c100"
+ },
+ {
+  "input": "1543.8643608e170",
+  "canonical": "1.5438643608e+173",
+  "stringifyBytes": 17,
+  "bits": "63e3f98a03ffa8e0"
+ },
+ {
+  "input": "0.62490224e-22",
+  "canonical": "6.2490224e-23",
+  "stringifyBytes": 13,
+  "bits": "3b52e2f267d9159d"
+ },
+ {
+  "input": "5610.604",
+  "canonical": "5610.604",
+  "stringifyBytes": 8,
+  "bits": "40b5ea9a9fbe76c9"
+ },
+ {
+  "input": "82437515866.790191009e73",
+  "canonical": "8.243751586679019e+83",
+  "stringifyBytes": 21,
+  "bits": "515b2894b4aa357c"
+ },
+ {
+  "input": "35311817406.922e5",
+  "canonical": "3531181740692200",
+  "stringifyBytes": 16,
+  "bits": "4329172ea29525d0"
+ },
+ {
+  "input": "8241158370.46156455",
+  "canonical": "8241158370.461565",
+  "stringifyBytes": 17,
+  "bits": "41feb3618e276292"
+ },
+ {
+  "input": "35.5450884577e-161",
+  "canonical": "3.55450884577e-160",
+  "stringifyBytes": 18,
+  "bits": "1ed3fd41da90d7e3"
+ },
+ {
+  "input": "66962739.84e-326",
+  "canonical": "6.69627e-319",
+  "stringifyBytes": 12,
+  "bits": "000000000002116e"
+ },
+ {
+  "input": "9",
+  "canonical": "9",
+  "stringifyBytes": 1,
+  "bits": "4022000000000000"
+ },
+ {
+  "input": "-567.9964e126",
+  "canonical": "-5.679964e+128",
+  "stringifyBytes": 14,
+  "bits": "daaa38b3c542bd7d"
+ },
+ {
+  "input": "0.86822e82",
+  "canonical": "8.6822e+81",
+  "stringifyBytes": 10,
+  "bits": "50f24e4f15023075"
+ },
+ {
+  "input": "1351791.32475",
+  "canonical": "1351791.32475",
+  "stringifyBytes": 13,
+  "bits": "4134a06f5322d0e5"
+ },
+ {
+  "input": "238374994545667618.41e-240",
+  "canonical": "2.383749945456676e-223",
+  "stringifyBytes": 22,
+  "bits": "11b60efed3c8c36a"
+ },
+ {
+  "input": "-643041.98e3",
+  "canonical": "-643041980",
+  "stringifyBytes": 10,
+  "bits": "c1c32a055e000000"
+ },
+ {
+  "input": "7027340687.4613084093",
+  "canonical": "7027340687.4613085",
+  "stringifyBytes": 18,
+  "bits": "41fa2dcb58f76185"
+ },
+ {
+  "input": "3.582e-165",
+  "canonical": "3.582e-165",
+  "stringifyBytes": 10,
+  "bits": "1dca672aad09d002"
+ },
+ {
+  "input": "-1905.243151569e-245",
+  "canonical": "-1.905243151569e-242",
+  "stringifyBytes": 20,
+  "bits": "8dc042e899cbab77"
+ },
+ {
+  "input": "6.87",
+  "canonical": "6.87",
+  "stringifyBytes": 4,
+  "bits": "401b7ae147ae147b"
+ },
+ {
+  "input": "3.62702850e-295",
+  "canonical": "3.6270285e-295",
+  "stringifyBytes": 14,
+  "bits": "02cda69c20cd1fd1"
+ },
+ {
+  "input": "66.982334363e-6",
+  "canonical": "0.000066982334363",
+  "stringifyBytes": 17,
+  "bits": "3f118f1bbdf36738"
+ },
+ {
+  "input": "95.414325",
+  "canonical": "95.414325",
+  "stringifyBytes": 9,
+  "bits": "4057da844d013a93"
+ },
+ {
+  "input": "8e-194",
+  "canonical": "8e-194",
+  "stringifyBytes": 6,
+  "bits": "17d75c1508da432b"
+ },
+ {
+  "input": "7.7e213",
+  "canonical": "7.7e+213",
+  "stringifyBytes": 8,
+  "bits": "6c56df5cad9e0483"
+ },
+ {
+  "input": "8631.852",
+  "canonical": "8631.852",
+  "stringifyBytes": 8,
+  "bits": "40c0dbed0e560419"
+ },
+ {
+  "input": "786547412532.767007e243",
+  "canonical": "7.86547412532767e+254",
+  "stringifyBytes": 21,
+  "bits": "74dad2131e66c714"
+ },
+ {
+  "input": "-0.384e-251",
+  "canonical": "-3.84e-252",
+  "stringifyBytes": 10,
+  "bits": "8bbc273755fa1263"
+ },
+ {
+  "input": "9616.2",
+  "canonical": "9616.2",
+  "stringifyBytes": 6,
+  "bits": "40c2c8199999999a"
+ },
+ {
+  "input": "1018138878472724.728e-219",
+  "canonical": "1.0181388784727247e-204",
+  "stringifyBytes": 23,
+  "bits": "15946e073783c0d0"
+ },
+ {
+  "input": "943.066e-46",
+  "canonical": "9.43066e-44",
+  "stringifyBytes": 11,
+  "bits": "3700d32a00a31c8c"
+ },
+ {
+  "input": "264226",
+  "canonical": "264226",
+  "stringifyBytes": 6,
+  "bits": "4110208800000000"
+ },
+ {
+  "input": "848.3e-95",
+  "canonical": "8.483e-93",
+  "stringifyBytes": 9,
+  "bits": "2cd1b1e4fe5f93c7"
+ },
+ {
+  "input": "0.96696903e-171",
+  "canonical": "9.6696903e-172",
+  "stringifyBytes": 14,
+  "bits": "1c6de52596938b48"
+ },
+ {
+  "input": "6096.80",
+  "canonical": "6096.8",
+  "stringifyBytes": 6,
+  "bits": "40b7d0cccccccccd"
+ },
+ {
+  "input": "437.020228236171e-147",
+  "canonical": "4.37020228236171e-145",
+  "stringifyBytes": 21,
+  "bits": "21f5d409e91b0b4b"
+ },
+ {
+  "input": "341799575436.0682118e242",
+  "canonical": "3.417995754360682e+253",
+  "stringifyBytes": 22,
+  "bits": "7492a5eb77580e09"
+ },
+ {
+  "input": "78430.827874",
+  "canonical": "78430.827874",
+  "stringifyBytes": 12,
+  "bits": "40f325ed3ef8ceb3"
+ },
+ {
+  "input": "-1e-3",
+  "canonical": "-0.001",
+  "stringifyBytes": 6,
+  "bits": "bf50624dd2f1a9fc"
+ },
+ {
+  "input": "181.5315163328e12",
+  "canonical": "181531516332800",
+  "stringifyBytes": 15,
+  "bits": "42e4a343317d6000"
+ },
+ {
+  "input": "8",
+  "canonical": "8",
+  "stringifyBytes": 1,
+  "bits": "4020000000000000"
+ },
+ {
+  "input": "56697109850443.15e-171",
+  "canonical": "5.669710985044315e-158",
+  "stringifyBytes": 22,
+  "bits": "1f48e8e29f1dc69f"
+ },
+ {
+  "input": "-5958736246277096.6988e-18",
+  "canonical": "-0.005958736246277097",
+  "stringifyBytes": 21,
+  "bits": "bf78683014da1c9a"
+ },
+ {
+  "input": "-3107467208709304028.0",
+  "canonical": "-3107467208709304000",
+  "stringifyBytes": 20,
+  "bits": "c3c58ff87b2b2577"
+ },
+ {
+  "input": "764.32e-187",
+  "canonical": "7.6432e-185",
+  "stringifyBytes": 11,
+  "bits": "19b4c8fdad493dd3"
+ },
+ {
+  "input": "25.956340658e72",
+  "canonical": "2.5956340658e+73",
+  "stringifyBytes": 16,
+  "bits": "4f2d61ac5e4cd477"
+ },
+ {
+  "input": "0.208414",
+  "canonical": "0.208414",
+  "stringifyBytes": 8,
+  "bits": "3fcaad4f5903a754"
+ },
+ {
+  "input": "99669.0169e-159",
+  "canonical": "9.96690169e-155",
+  "stringifyBytes": 15,
+  "bits": "1ff561a93c0416f3"
+ },
+ {
+  "input": "-5102.02e-74",
+  "canonical": "-5.10202e-71",
+  "stringifyBytes": 12,
+  "bits": "b1568945e34897c9"
+ },
+ {
+  "input": "-0.5245822",
+  "canonical": "-0.5245822",
+  "stringifyBytes": 10,
+  "bits": "bfe0c9609c220a16"
+ },
+ {
+  "input": "0.4580e143",
+  "canonical": "4.58e+142",
+  "stringifyBytes": 9,
+  "bits": "5d8e0bf7d83afc96"
+ },
+ {
+  "input": "78.7233048e-60",
+  "canonical": "7.87233048e-59",
+  "stringifyBytes": 14,
+  "bits": "33dfa038e8b7ab86"
+ },
+ {
+  "input": "-9.96",
+  "canonical": "-9.96",
+  "stringifyBytes": 5,
+  "bits": "c023eb851eb851ec"
+ },
+ {
+  "input": "0.8504642e305",
+  "canonical": "8.504642e+304",
+  "stringifyBytes": 13,
+  "bits": "7f3f0112adf706dc"
+ },
+ {
+  "input": "77.4e213",
+  "canonical": "7.74e+214",
+  "stringifyBytes": 9,
+  "bits": "6c8cbd396fc2646c"
+ },
+ {
+  "input": "93975952815.942",
+  "canonical": "93975952815.942",
+  "stringifyBytes": 15,
+  "bits": "4235e1673daff127"
+ },
+ {
+  "input": "10056.0815381e7",
+  "canonical": "100560815381",
+  "stringifyBytes": 12,
+  "bits": "423769e445150000"
+ },
+ {
+  "input": "7941.55115509543e27",
+  "canonical": "7.94155115509543e+30",
+  "stringifyBytes": 20,
+  "bits": "46590f22498abd8b"
+ },
+ {
+  "input": "545.84965355",
+  "canonical": "545.84965355",
+  "stringifyBytes": 12,
+  "bits": "40810ecc17291171"
+ },
+ {
+  "input": "0.64567691555278e68",
+  "canonical": "6.4567691555278e+67",
+  "stringifyBytes": 19,
+  "bits": "4e0328dae8cdc44f"
+ },
+ {
+  "input": "687501819.6e99",
+  "canonical": "6.875018196e+107",
+  "stringifyBytes": 16,
+  "bits": "5652bc2dbc83bac3"
+ },
+ {
+  "input": "7924186888516",
+  "canonical": "7924186888516",
+  "stringifyBytes": 13,
+  "bits": "429cd3f960e51000"
+ },
+ {
+  "input": "32.6e300",
+  "canonical": "3.26e+301",
+  "stringifyBytes": 9,
+  "bits": "7e8856ea775a116a"
+ },
+ {
+  "input": "8142.22e-123",
+  "canonical": "8.14222e-120",
+  "stringifyBytes": 12,
+  "bits": "273506768fb37520"
+ },
+ {
+  "input": "0.56129734838218",
+  "canonical": "0.56129734838218",
+  "stringifyBytes": 16,
+  "bits": "3fe1f625db544163"
+ },
+ {
+  "input": "945697640.84853752e58",
+  "canonical": "9.456976408485375e+66",
+  "stringifyBytes": 21,
+  "bits": "4dd67328b780d281"
+ },
+ {
+  "input": "35480.208967394e239",
+  "canonical": "3.5480208967394e+243",
+  "stringifyBytes": 20,
+  "bits": "7280a0c3b6c4ce53"
+ },
+ {
+  "input": "75642932521.72",
+  "canonical": "75642932521.72",
+  "stringifyBytes": 14,
+  "bits": "42319cab8d29b852"
+ },
+ {
+  "input": "9149177.9e225",
+  "canonical": "9.1491779e+231",
+  "stringifyBytes": 14,
+  "bits": "7017928e77cfb957"
+ },
+ {
+  "input": "0.51e-164",
+  "canonical": "5.1e-165",
+  "stringifyBytes": 8,
+  "bits": "1dd2cbcd55e0d242"
+ },
+ {
+  "input": "1264199.341597353",
+  "canonical": "1264199.341597353",
+  "stringifyBytes": 17,
+  "bits": "41334a475772ec94"
+ },
+ {
+  "input": "1819400.0538e147",
+  "canonical": "1.8194000538e+153",
+  "stringifyBytes": 17,
+  "bits": "5fc15e8567497c86"
+ },
+ {
+  "input": "11351.4210619e303",
+  "canonical": "1.13514210619e+307",
+  "stringifyBytes": 18,
+  "bits": "7fb02a3ad45c9e4f"
+ },
+ {
+  "input": "7919115666.4849",
+  "canonical": "7919115666.4849",
+  "stringifyBytes": 15,
+  "bits": "41fd8041d927c227"
+ },
+ {
+  "input": "275.567933280276748e95",
+  "canonical": "2.7556793328027675e+97",
+  "stringifyBytes": 22,
+  "bits": "5429cd69ecf6ba29"
+ },
+ {
+  "input": "0.661770279e185",
+  "canonical": "6.61770279e+184",
+  "stringifyBytes": 15,
+  "bits": "664f261113bdddb5"
+ },
+ {
+  "input": "401664638356959",
+  "canonical": "401664638356959",
+  "stringifyBytes": 15,
+  "bits": "42f6d4fd6168ddf0"
+ },
+ {
+  "input": "0.4374353937e-302",
+  "canonical": "4.374353937e-303",
+  "stringifyBytes": 16,
+  "bits": "0127ff8d3559bd5b"
+ },
+ {
+  "input": "6.20969531e-6",
+  "canonical": "0.00000620969531",
+  "stringifyBytes": 16,
+  "bits": "3eda0b9c0cb0cd20"
+ },
+ {
+  "input": "2",
+  "canonical": "2",
+  "stringifyBytes": 1,
+  "bits": "4000000000000000"
+ },
+ {
+  "input": "7305.94e77",
+  "canonical": "7.30594e+80",
+  "stringifyBytes": 11,
+  "bits": "50b8a5886e0ea942"
+ },
+ {
+  "input": "0.7618449e-232",
+  "canonical": "7.618449e-233",
+  "stringifyBytes": 13,
+  "bits": "0fbe47742ee1aff1"
+ },
+ {
+  "input": "148953.64",
+  "canonical": "148953.64",
+  "stringifyBytes": 9,
+  "bits": "41022ecd1eb851ec"
+ },
+ {
+  "input": "24e-142",
+  "canonical": "2.4e-141",
+  "stringifyBytes": 8,
+  "bits": "22bd44324f2f363c"
+ },
+ {
+  "input": "1.4e249",
+  "canonical": "1.4e+249",
+  "stringifyBytes": 8,
+  "bits": "73a9076563e409f1"
+ },
+ {
+  "input": "218.04638818376",
+  "canonical": "218.04638818376",
+  "stringifyBytes": 15,
+  "bits": "406b417c03128571"
+ },
+ {
+  "input": "-559114955.691011623e245",
+  "canonical": "-5.5911495569101164e+253",
+  "stringifyBytes": 24,
+  "bits": "f49e812abdf30048"
+ },
+ {
+  "input": "3.38847349e-160",
+  "canonical": "3.38847349e-160",
+  "stringifyBytes": 15,
+  "bits": "1ed30e395ab816cb"
+ },
+ {
+  "input": "0.6310",
+  "canonical": "0.631",
+  "stringifyBytes": 5,
+  "bits": "3fe43126e978d4fe"
+ },
+ {
+  "input": "-15.67e38",
+  "canonical": "-1.567e+39",
+  "stringifyBytes": 10,
+  "bits": "c8126b84e39ece09"
+ },
+ {
+  "input": "713590614144318.251e39",
+  "canonical": "7.135906141443182e+53",
+  "stringifyBytes": 21,
+  "bits": "4b1dcd0a0be0e690"
+ },
+ {
+  "input": "-1.0324",
+  "canonical": "-1.0324",
+  "stringifyBytes": 7,
+  "bits": "bff084b5dcc63f14"
+ },
+ {
+  "input": "5651037374108212e163",
+  "canonical": "5.651037374108212e+178",
+  "stringifyBytes": 22,
+  "bits": "650be40a77a5e316"
+ },
+ {
+  "input": "89.022714073794144375e-6",
+  "canonical": "0.00008902271407379414",
+  "stringifyBytes": 22,
+  "bits": "3f175636950a8ff8"
+ },
+ {
+  "input": "6929.2676973169845",
+  "canonical": "6929.267697316985",
+  "stringifyBytes": 17,
+  "bits": "40bb114487cfb5ad"
+ },
+ {
+  "input": "0.91334217493e-129",
+  "canonical": "9.1334217493e-130",
+  "stringifyBytes": 17,
+  "bits": "25244258ec2bc70e"
+ },
+ {
+  "input": "4.664121152746e-201",
+  "canonical": "4.664121152746e-201",
+  "stringifyBytes": 19,
+  "bits": "1656d9571952ebf3"
+ },
+ {
+  "input": "-6610.81683059879",
+  "canonical": "-6610.81683059879",
+  "stringifyBytes": 17,
+  "bits": "c0b9d2d11bcf642d"
+ },
+ {
+  "input": "92340722820696.5888e134",
+  "canonical": "9.23407228206966e+147",
+  "stringifyBytes": 21,
+  "bits": "5ea71bf62bbed23c"
+ },
+ {
+  "input": "197.21e-115",
+  "canonical": "1.9721e-113",
+  "stringifyBytes": 11,
+  "bits": "288848602ec41996"
+ },
+ {
+  "input": "-82.2",
+  "canonical": "-82.2",
+  "stringifyBytes": 5,
+  "bits": "c0548ccccccccccd"
+ },
+ {
+  "input": "-612831.415659055e-79",
+  "canonical": "-6.12831415659055e-74",
+  "stringifyBytes": 21,
+  "bits": "b0bbb81a5e01f33e"
+ },
+ {
+  "input": "58734359938.88e210",
+  "canonical": "5.873435993888e+220",
+  "stringifyBytes": 19,
+  "bits": "6dc4cc55bd893d40"
+ },
+ {
+  "input": "-955333238.60012",
+  "canonical": "-955333238.60012",
+  "stringifyBytes": 16,
+  "bits": "c1cc789d3b4cd0bb"
+ },
+ {
+  "input": "2768150.1673293518857e231",
+  "canonical": "2.7681501673293517e+237",
+  "stringifyBytes": 23,
+  "bits": "713b34deb455e01d"
+ },
+ {
+  "input": "0.51e68",
+  "canonical": "5.1e+67",
+  "stringifyBytes": 7,
+  "bits": "4dfe44621eac687a"
+ },
+ {
+  "input": "2150.24",
+  "canonical": "2150.24",
+  "stringifyBytes": 7,
+  "bits": "40a0cc7ae147ae14"
+ },
+ {
+  "input": "78.22630628e160",
+  "canonical": "7.822630628e+161",
+  "stringifyBytes": 16,
+  "bits": "618bd20d251a83c6"
+ },
+ {
+  "input": "52e-22",
+  "canonical": "5.2e-21",
+  "stringifyBytes": 7,
+  "bits": "3bb88e6a0d12fd1b"
+ },
+ {
+  "input": "6.4329",
+  "canonical": "6.4329",
+  "stringifyBytes": 6,
+  "bits": "4019bb4a2339c0ec"
+ },
+ {
+  "input": "-3e-313",
+  "canonical": "-3e-313",
+  "stringifyBytes": 7,
+  "bits": "8000000e233bfc98"
+ },
+ {
+  "input": "89212126287.09e-271",
+  "canonical": "8.921212628709e-261",
+  "stringifyBytes": 19,
+  "bits": "09f18eb1902d86bf"
+ },
+ {
+  "input": "9708.7",
+  "canonical": "9708.7",
+  "stringifyBytes": 6,
+  "bits": "40c2f6599999999a"
+ },
+ {
+  "input": "266.7e-157",
+  "canonical": "2.667e-155",
+  "stringifyBytes": 10,
+  "bits": "1fd6e2b162e1a9a1"
+ },
+ {
+  "input": "1953.7831616508e146",
+  "canonical": "1.9537831616508e+149",
+  "stringifyBytes": 20,
+  "bits": "5eee8f45c132353d"
+ },
+ {
+  "input": "321.1",
+  "canonical": "321.1",
+  "stringifyBytes": 5,
+  "bits": "407411999999999a"
+ },
+ {
+  "input": "28018145.70368e-179",
+  "canonical": "2.801814570368e-172",
+  "stringifyBytes": 19,
+  "bits": "1c51530879858069"
+ },
+ {
+  "input": "5636882.451e-85",
+  "canonical": "5.636882451e-79",
+  "stringifyBytes": 15,
+  "bits": "2fb0b5939e6118d3"
+ },
+ {
+  "input": "943076351.400592",
+  "canonical": "943076351.400592",
+  "stringifyBytes": 16,
+  "bits": "41cc1b19ffb34699"
+ },
+ {
+  "input": "6.37e256",
+  "canonical": "6.37e+256",
+  "stringifyBytes": 9,
+  "bits": "7540f83b9152e231"
+ },
+ {
+  "input": "7411.8245753e-137",
+  "canonical": "7.4118245753e-134",
+  "stringifyBytes": 17,
+  "bits": "244aef9e100bb234"
+ },
+ {
+  "input": "6799682.5228238329477",
+  "canonical": "6799682.522823833",
+  "stringifyBytes": 17,
+  "bits": "4159f050a175f218"
+ },
+ {
+  "input": "651.2e229",
+  "canonical": "6.512e+231",
+  "stringifyBytes": 10,
+  "bits": "7010c724bcb88ae0"
+ },
+ {
+  "input": "48284875.7208728e47",
+  "canonical": "4.82848757208728e+54",
+  "stringifyBytes": 20,
+  "bits": "4b4934b4a1bc701b"
+ },
+ {
+  "input": "-1.88349924248299",
+  "canonical": "-1.88349924248299",
+  "stringifyBytes": 17,
+  "bits": "bffe22d01a08155d"
+ },
+ {
+  "input": "-0.603975436e248",
+  "canonical": "-6.03975436e+247",
+  "stringifyBytes": 16,
+  "bits": "f36146c10bda5a01"
+ },
+ {
+  "input": "110553820972110592e244",
+  "canonical": "1.1055382097211058e+261",
+  "stringifyBytes": 23,
+  "bits": "7621f9cc0db8f109"
+ },
+ {
+  "input": "-85",
+  "canonical": "-85",
+  "stringifyBytes": 3,
+  "bits": "c055400000000000"
+ },
+ {
+  "input": "68400587051.413e284",
+  "canonical": "6.8400587051413e+294",
+  "stringifyBytes": 20,
+  "bits": "7d256b73a2483bab"
+ },
+ {
+  "input": "-12.276508e177",
+  "canonical": "-1.2276508e+178",
+  "stringifyBytes": 15,
+  "bits": "e4e83c82185280c7"
+ },
+ {
+  "input": "560895467508919",
+  "canonical": "560895467508919",
+  "stringifyBytes": 15,
+  "bits": "42ffe21a718d4b70"
+ },
+ {
+  "input": "-0.948e210",
+  "canonical": "-9.48e+209",
+  "stringifyBytes": 10,
+  "bits": "eb8711902153a392"
+ },
+ {
+  "input": "-0.1363696974622621137e-299",
+  "canonical": "-1.3636969746226211e-300",
+  "stringifyBytes": 24,
+  "bits": "81ad396929dcc0f3"
+ },
+ {
+  "input": "49619015429.7614620",
+  "canonical": "49619015429.76146",
+  "stringifyBytes": 17,
+  "bits": "42271b0c2e0b85de"
+ },
+ {
+  "input": "-7.62e-51",
+  "canonical": "-7.62e-51",
+  "stringifyBytes": 9,
+  "bits": "b586ceced9ca072e"
+ },
+ {
+  "input": "-81449065248.7e-97",
+  "canonical": "-8.14490652487e-87",
+  "stringifyBytes": 18,
+  "bits": "ae1033dded67a3ca"
+ },
+ {
+  "input": "0.2",
+  "canonical": "0.2",
+  "stringifyBytes": 3,
+  "bits": "3fc999999999999a"
+ },
+ {
+  "input": "3003356004457.98539e155",
+  "canonical": "3.0033560044579855e+167",
+  "stringifyBytes": 23,
+  "bits": "62b45f6b2ad727b4"
+ },
+ {
+  "input": "-915060.449e-109",
+  "canonical": "-9.15060449e-104",
+  "stringifyBytes": 16,
+  "bits": "aa8a3bcebe85ead0"
+ },
+ {
+  "input": "-8027422618454.9624",
+  "canonical": "-8027422618454.962",
+  "stringifyBytes": 18,
+  "bits": "c29d341eb1cd5bd9"
+ },
+ {
+  "input": "0.82e-3",
+  "canonical": "0.00082",
+  "stringifyBytes": 7,
+  "bits": "3f4adea897635e74"
+ },
+ {
+  "input": "0.7036e-90",
+  "canonical": "7.036e-91",
+  "stringifyBytes": 9,
+  "bits": "2d36eea07a7d44d9"
+ },
+ {
+  "input": "986.87390",
+  "canonical": "986.8739",
+  "stringifyBytes": 8,
+  "bits": "408ed6fdbf487fcc"
+ },
+ {
+  "input": "6343.909886981449153e250",
+  "canonical": "6.34390988698145e+253",
+  "stringifyBytes": 21,
+  "bits": "74a14e4633543625"
+ },
+ {
+  "input": "-0.16e-279",
+  "canonical": "-1.6e-280",
+  "stringifyBytes": 9,
+  "bits": "85d73c115074bc6a"
+ },
+ {
+  "input": "-44951608140764.1",
+  "canonical": "-44951608140764.1",
+  "stringifyBytes": 17,
+  "bits": "c2c4710e5151ee0d"
+ },
+ {
+  "input": "9580078445111e-203",
+  "canonical": "9.580078445111e-191",
+  "stringifyBytes": 19,
+  "bits": "187b515dc217db26"
+ },
+ {
+  "input": "-700.040219e13",
+  "canonical": "-7000402190000000",
+  "stringifyBytes": 17,
+  "bits": "c338ded425d1df80"
+ },
+ {
+  "input": "0.17609189",
+  "canonical": "0.17609189",
+  "stringifyBytes": 10,
+  "bits": "3fc68a2dd65206b3"
+ },
+ {
+  "input": "-4.187598082187e-52",
+  "canonical": "-4.187598082187e-52",
+  "stringifyBytes": 19,
+  "bits": "b5440dfaf59dda67"
+ },
+ {
+  "input": "107697565309677.72693e-107",
+  "canonical": "1.0769756530967772e-93",
+  "stringifyBytes": 22,
+  "bits": "2ca1f8cfe38f43b2"
+ },
+ {
+  "input": "956.3162",
+  "canonical": "956.3162",
+  "stringifyBytes": 8,
+  "bits": "408de28793dd97f6"
+ },
+ {
+  "input": "447771978.068920182e25",
+  "canonical": "4.477719780689202e+33",
+  "stringifyBytes": 21,
+  "bits": "46eb98989de1006f"
+ },
+ {
+  "input": "902423189971e-298",
+  "canonical": "9.02423189971e-287",
+  "stringifyBytes": 18,
+  "bits": "048b7b84942c6f74"
+ },
+ {
+  "input": "0.1699445",
+  "canonical": "0.1699445",
+  "stringifyBytes": 9,
+  "bits": "3fc5c0bdcad14a0a"
+ },
+ {
+  "input": "0.2436e-307",
+  "canonical": "2.436e-308",
+  "stringifyBytes": 10,
+  "bits": "00118447e307d1c7"
+ },
+ {
+  "input": "14.38597e-58",
+  "canonical": "1.438597e-57",
+  "stringifyBytes": 12,
+  "bits": "34220f78f5b70bbb"
+ },
+ {
+  "input": "592586143.2554",
+  "canonical": "592586143.2554",
+  "stringifyBytes": 14,
+  "bits": "41c1a912cfa0b0f2"
+ },
+ {
+  "input": "8164612917.98e168",
+  "canonical": "8.16461291798e+177",
+  "stringifyBytes": 18,
+  "bits": "64e01e5e94d1b056"
+ },
+ {
+  "input": "0.399745451076e-207",
+  "canonical": "3.99745451076e-208",
+  "stringifyBytes": 18,
+  "bits": "14e06d6e48bc8bca"
+ },
+ {
+  "input": "996.85705865677051021",
+  "canonical": "996.8570586567705",
+  "stringifyBytes": 17,
+  "bits": "408f26db4191acaa"
+ },
+ {
+  "input": "5.303104931e289",
+  "canonical": "5.303104931e+289",
+  "stringifyBytes": 16,
+  "bits": "7c15c44c4e8f0b9d"
+ },
+ {
+  "input": "9.0e161",
+  "canonical": "9e+161",
+  "stringifyBytes": 6,
+  "bits": "619000fd2a52bdb9"
+ },
+ {
+  "input": "-3808853.498023",
+  "canonical": "-3808853.498023",
+  "stringifyBytes": 15,
+  "bits": "c14d0f2abfbf37b9"
+ },
+ {
+  "input": "-664811952362.24729e194",
+  "canonical": "-6.648119523622473e+205",
+  "stringifyBytes": 23,
+  "bits": "eaaa81577f18220e"
+ },
+ {
+  "input": "3275685890.0496178e-250",
+  "canonical": "3.275685890049618e-241",
+  "stringifyBytes": 22,
+  "bits": "0e01794eab19c9c2"
+ },
+ {
+  "input": "0.3",
+  "canonical": "0.3",
+  "stringifyBytes": 3,
+  "bits": "3fd3333333333333"
+ },
+ {
+  "input": "38.09e-137",
+  "canonical": "3.809e-136",
+  "stringifyBytes": 10,
+  "bits": "23d1b7f519b42ee2"
+ },
+ {
+  "input": "676495.6796344230e-190",
+  "canonical": "6.76495679634423e-185",
+  "stringifyBytes": 21,
+  "bits": "19b26594e0a418bb"
+ },
+ {
+  "input": "-38.09571940746",
+  "canonical": "-38.09571940746",
+  "stringifyBytes": 15,
+  "bits": "c0430c408896510d"
+ },
+ {
+  "input": "64077.33946e-168",
+  "canonical": "6.407733946e-164",
+  "stringifyBytes": 16,
+  "bits": "1e0d850bc56fc2fa"
+ },
+ {
+  "input": "88.257590564619e-326",
+  "canonical": "0",
+  "stringifyBytes": 1,
+  "bits": "0000000000000000"
+ },
+ {
+  "input": "-1.732741750",
+  "canonical": "-1.73274175",
+  "stringifyBytes": 11,
+  "bits": "bffbb94f69ca9ef5"
+ },
+ {
+  "input": "978456.2748200533436e296",
+  "canonical": "9.784562748200533e+301",
+  "stringifyBytes": 22,
+  "bits": "7ea2435dfc91dd22"
+ },
+ {
+  "input": "93771733103.7799e208",
+  "canonical": "9.37717331037799e+218",
+  "stringifyBytes": 21,
+  "bits": "6d654053d5ebc397"
+ },
+ {
+  "input": "2.684252183257",
+  "canonical": "2.684252183257",
+  "stringifyBytes": 14,
+  "bits": "40057959356a717d"
+ },
+ {
+  "input": "0.939702918122828775e297",
+  "canonical": "9.397029181228288e+296",
+  "stringifyBytes": 22,
+  "bits": "7d96fd6248f8e633"
+ },
+ {
+  "input": "1.04e266",
+  "canonical": "1.04e+266",
+  "stringifyBytes": 9,
+  "bits": "7729cd8586836f68"
+ },
+ {
+  "input": "56077842.719",
+  "canonical": "56077842.719",
+  "stringifyBytes": 12,
+  "bits": "418abd7095c08312"
+ },
+ {
+  "input": "0.6049530642478484437e-166",
+  "canonical": "6.049530642478484e-167",
+  "stringifyBytes": 22,
+  "bits": "1d6c89d30d9be5e2"
+ },
+ {
+  "input": "7.30e-172",
+  "canonical": "7.3e-172",
+  "stringifyBytes": 8,
+  "bits": "1c6691a35fa90f5c"
+ },
+ {
+  "input": "8.885887",
+  "canonical": "8.885887",
+  "stringifyBytes": 8,
+  "bits": "4021c592fb19e732"
+ },
+ {
+  "input": "6047163.6648727517491e247",
+  "canonical": "6.047163664872752e+253",
+  "stringifyBytes": 22,
+  "bits": "74a07f0a90f34630"
+ },
+ {
+  "input": "-9847845901e-191",
+  "canonical": "-9.847845901e-182",
+  "stringifyBytes": 17,
+  "bits": "9a5a271f92e10440"
+ },
+ {
+  "input": "-94834782415642172393",
+  "canonical": "-94834782415642170000",
+  "stringifyBytes": 21,
+  "bits": "c4149063509a6f40"
+ },
+ {
+  "input": "97140972e31",
+  "canonical": "9.7140972e+38",
+  "stringifyBytes": 13,
+  "bits": "4806d675a787a3e9"
+ },
+ {
+  "input": "60438732718797.792185e-103",
+  "canonical": "6.043873271879779e-90",
+  "stringifyBytes": 21,
+  "bits": "2d689f885e935365"
+ },
+ {
+  "input": "533656528204002.927",
+  "canonical": "533656528204002.94",
+  "stringifyBytes": 18,
+  "bits": "42fe55b97cbb0e2f"
+ },
+ {
+  "input": "8.146e56",
+  "canonical": "8.146e+56",
+  "stringifyBytes": 9,
+  "bits": "4bc09c691100eff0"
+ },
+ {
+  "input": "-1628442121.5716371e-136",
+  "canonical": "-1.628442121571637e-127",
+  "stringifyBytes": 23,
+  "bits": "a59c38361db164c9"
+ },
+ {
+  "input": "458.236562",
+  "canonical": "458.236562",
+  "stringifyBytes": 10,
+  "bits": "407ca3c8f53c579f"
+ },
+ {
+  "input": "-97745117515511022.6e68",
+  "canonical": "-9.774511751551102e+84",
+  "stringifyBytes": 22,
+  "bits": "d194203dec1edeca"
+ },
+ {
+  "input": "-0.46425527438718e195",
+  "canonical": "-4.6425527438718e+194",
+  "stringifyBytes": 21,
+  "bits": "e8597060bfabab62"
+ },
+ {
+  "input": "675668585.9",
+  "canonical": "675668585.9",
+  "stringifyBytes": 11,
+  "bits": "41c422f134f33333"
+ },
+ {
+  "input": "748.584e-86",
+  "canonical": "7.48584e-84",
+  "stringifyBytes": 11,
+  "bits": "2ead15c3ac94245f"
+ },
+ {
+  "input": "54.9562e258",
+  "canonical": "5.49562e+259",
+  "stringifyBytes": 12,
+  "bits": "75dc982820dab3b5"
+ },
+ {
+  "input": "0.15339327406840",
+  "canonical": "0.1533932740684",
+  "stringifyBytes": 15,
+  "bits": "3fc3a2640bc66b15"
+ },
+ {
+  "input": "2.6579e267",
+  "canonical": "2.6579e+267",
+  "stringifyBytes": 11,
+  "bits": "77749b7c4b2ccd1b"
+ },
+ {
+  "input": "-9e274",
+  "canonical": "-9e+274",
+  "stringifyBytes": 7,
+  "bits": "f904cbbc1e53aa34"
+ },
+ {
+  "input": "4.21",
+  "canonical": "4.21",
+  "stringifyBytes": 4,
+  "bits": "4010d70a3d70a3d7"
+ },
+ {
+  "input": "-711199.152e-314",
+  "canonical": "-7.11199152e-309",
+  "stringifyBytes": 16,
+  "bits": "80051d33c7618f15"
+ },
+ {
+  "input": "24977.8650e-54",
+  "canonical": "2.4977865e-50",
+  "stringifyBytes": 13,
+  "bits": "35a2b0ceef79baec"
+ },
+ {
+  "input": "2657159722.4675",
+  "canonical": "2657159722.4675",
+  "stringifyBytes": 15,
+  "bits": "41e3cc21454ef5c3"
+ },
+ {
+  "input": "636e-156",
+  "canonical": "6.36e-154",
+  "stringifyBytes": 9,
+  "bits": "20210e02e5553c09"
+ },
+ {
+  "input": "17428.65753e269",
+  "canonical": "1.742865753e+273",
+  "stringifyBytes": 16,
+  "bits": "78a9c61569ce023a"
+ },
+ {
+  "input": "51",
+  "canonical": "51",
+  "stringifyBytes": 2,
+  "bits": "4049800000000000"
+ },
+ {
+  "input": "28617419255561.8977e85",
+  "canonical": "2.86174192555619e+98",
+  "stringifyBytes": 20,
+  "bits": "5460bf47a3b8ea85"
+ },
+ {
+  "input": "0.30e250",
+  "canonical": "3e+249",
+  "stringifyBytes": 6,
+  "bits": "73bad111342b2f39"
+ },
+ {
+  "input": "-15.217",
+  "canonical": "-15.217",
+  "stringifyBytes": 7,
+  "bits": "c02e6f1a9fbe76c9"
+ },
+ {
+  "input": "29.080593566058549839e-86",
+  "canonical": "2.908059356605855e-85",
+  "stringifyBytes": 21,
+  "bits": "2e6213fc4e5f7b8d"
+ },
+ {
+  "input": "0.6645e192",
+  "canonical": "6.645e+191",
+  "stringifyBytes": 10,
+  "bits": "67c2a484f23e0b17"
+ },
+ {
+  "input": "2.01250530542",
+  "canonical": "2.01250530542",
+  "stringifyBytes": 13,
+  "bits": "4000199c61ae7171"
+ },
+ {
+  "input": "0.2000207e226",
+  "canonical": "2.000207e+225",
+  "stringifyBytes": 13,
+  "bits": "6eb59d7a318abf64"
+ },
+ {
+  "input": "75976.2188e-67",
+  "canonical": "7.59762188e-63",
+  "stringifyBytes": 14,
+  "bits": "330900fbd86fcad0"
+ },
+ {
+  "input": "86644361140546893628",
+  "canonical": "86644361140546900000",
+  "stringifyBytes": 20,
+  "bits": "4412c9ba6d9553d4"
+ },
+ {
+  "input": "577.7773833e157",
+  "canonical": "5.777773833e+159",
+  "stringifyBytes": 16,
+  "bits": "611a4d383c900d6c"
+ },
+ {
+  "input": "0.54e138",
+  "canonical": "5.4e+137",
+  "stringifyBytes": 8,
+  "bits": "5c87378bfd701601"
+ },
+ {
+  "input": "-539820149.42149883417",
+  "canonical": "-539820149.4214988",
+  "stringifyBytes": 18,
+  "bits": "c1c016803ab5f3ac"
+ },
+ {
+  "input": "87.223978e-286",
+  "canonical": "8.7223978e-285",
+  "stringifyBytes": 14,
+  "bits": "04f4c0a816803071"
+ },
+ {
+  "input": "3780097391.38e-76",
+  "canonical": "3.78009739138e-67",
+  "stringifyBytes": 17,
+  "bits": "322461dacbcdaf0f"
+ },
+ {
+  "input": "93267543.42000",
+  "canonical": "93267543.42",
+  "stringifyBytes": 11,
+  "bits": "41963c995dae147b"
+ },
+ {
+  "input": "339.0e-147",
+  "canonical": "3.39e-145",
+  "stringifyBytes": 9,
+  "bits": "21f0eeaf6a840237"
+ },
+ {
+  "input": "6178.9287804459e113",
+  "canonical": "6.1789287804459e+116",
+  "stringifyBytes": 20,
+  "bits": "582f5d0fe407370b"
+ },
+ {
+  "input": "-1979.9",
+  "canonical": "-1979.9",
+  "stringifyBytes": 7,
+  "bits": "c09eef999999999a"
+ },
+ {
+  "input": "53.4e264",
+  "canonical": "5.34e+265",
+  "stringifyBytes": 9,
+  "bits": "771a7f5cd00ae98b"
+ },
+ {
+  "input": "-6469443.00893378346",
+  "canonical": "-6469443.0089337835",
+  "stringifyBytes": 19,
+  "bits": "c158add0c0925f01"
+ },
+ {
+  "input": "79575.7e-318",
+  "canonical": "7.95757e-314",
+  "stringifyBytes": 12,
+  "bits": "00000003c002a63d"
+ },
+ {
+  "input": "70864e194",
+  "canonical": "7.0864e+198",
+  "stringifyBytes": 11,
+  "bits": "6937b333c6eecd11"
+ },
+ {
+  "input": "28.43",
+  "canonical": "28.43",
+  "stringifyBytes": 5,
+  "bits": "403c6e147ae147ae"
+ },
+ {
+  "input": "6580.5e132",
+  "canonical": "6.5805e+135",
+  "stringifyBytes": 11,
+  "bits": "5c221b702ef8c104"
+ },
+ {
+  "input": "0.2",
+  "canonical": "0.2",
+  "stringifyBytes": 3,
+  "bits": "3fc999999999999a"
+ },
+ {
+  "input": "7.84e-48",
+  "canonical": "7.84e-48",
+  "stringifyBytes": 8,
+  "bits": "3626ea95a14adcf8"
+ },
+ {
+  "input": "286.283216375677e-161",
+  "canonical": "2.86283216375677e-159",
+  "stringifyBytes": 21,
+  "bits": "1f041fdaa2b4b574"
+ },
+ {
+  "input": "1768.1888945230913631",
+  "canonical": "1768.1888945230914",
+  "stringifyBytes": 18,
+  "bits": "409ba0c16d90dc49"
+ },
+ {
+  "input": "-19677286639472.669997e86",
+  "canonical": "-1.967728663947267e+99",
+  "stringifyBytes": 22,
+  "bits": "d48cc9d0a4487b0f"
+ },
+ {
+  "input": "5046608.093553403e-197",
+  "canonical": "5.046608093553403e-191",
+  "stringifyBytes": 22,
+  "bits": "186cc7f3b0f8af67"
+ },
+ {
+  "input": "-383715995272285.35",
+  "canonical": "-383715995272285.4",
+  "stringifyBytes": 18,
+  "bits": "c2f5cfcd797c45d6"
+ },
+ {
+  "input": "815.112997e-14",
+  "canonical": "8.15112997e-12",
+  "stringifyBytes": 14,
+  "bits": "3da1ecada0efaf3c"
+ },
+ {
+  "input": "26.27e-34",
+  "canonical": "2.627e-33",
+  "stringifyBytes": 9,
+  "bits": "392b47c38e491474"
+ },
+ {
+  "input": "9018736228735.139104",
+  "canonical": "9018736228735.139",
+  "stringifyBytes": 17,
+  "bits": "42a067ad2372fe47"
+ },
+ {
+  "input": "-3291889464.17995e279",
+  "canonical": "-3.29188946417995e+288",
+  "stringifyBytes": 22,
+  "bits": "fbd59e627d2d4955"
+ },
+ {
+  "input": "330261410773.92664e132",
+  "canonical": "3.3026141077392665e+143",
+  "stringifyBytes": 23,
+  "bits": "5dbb154c314b109d"
+ },
+ {
+  "input": "92962432",
+  "canonical": "92962432",
+  "stringifyBytes": 8,
+  "bits": "419629fa00000000"
+ },
+ {
+  "input": "8457.76e-172",
+  "canonical": "8.45776e-169",
+  "stringifyBytes": 12,
+  "bits": "1d098910f0eb4f20"
+ },
+ {
+  "input": "48131104.5247e-113",
+  "canonical": "4.81311045247e-106",
+  "stringifyBytes": 18,
+  "bits": "2a11a98497ccdc91"
+ },
+ {
+  "input": "125.75237",
+  "canonical": "125.75237",
+  "stringifyBytes": 9,
+  "bits": "405f7026d4801f75"
+ },
+ {
+  "input": "40538.343567760816891e268",
+  "canonical": "4.0538343567760816e+272",
+  "stringifyBytes": 23,
+  "bits": "7887fabfb996ec2e"
+ },
+ {
+  "input": "77.170e-199",
+  "canonical": "7.717e-198",
+  "stringifyBytes": 10,
+  "bits": "17027595d71bbc66"
+ },
+ {
+  "input": "2908232.24",
+  "canonical": "2908232.24",
+  "stringifyBytes": 10,
+  "bits": "414630241eb851ec"
+ },
+ {
+  "input": "529778036364e106",
+  "canonical": "5.29778036364e+117",
+  "stringifyBytes": 18,
+  "bits": "5860ce8bf45e99ed"
+ },
+ {
+  "input": "713e-224",
+  "canonical": "7.13e-222",
+  "stringifyBytes": 9,
+  "bits": "12049e53b570d51b"
+ },
+ {
+  "input": "88",
+  "canonical": "88",
+  "stringifyBytes": 2,
+  "bits": "4056000000000000"
+ },
+ {
+  "input": "8e267",
+  "canonical": "8e+267",
+  "stringifyBytes": 6,
+  "bits": "778f03542dfb8370"
+ },
+ {
+  "input": "470925629345.7e255",
+  "canonical": "4.709256293457e+266",
+  "stringifyBytes": 19,
+  "bits": "774d35aab695e003"
+ },
+ {
+  "input": "7.8",
+  "canonical": "7.8",
+  "stringifyBytes": 3,
+  "bits": "401f333333333333"
+ },
+ {
+  "input": "-1566881e-217",
+  "canonical": "-1.566881e-211",
+  "stringifyBytes": 14,
+  "bits": "942a5fda25903f82"
+ },
+ {
+  "input": "13225943328.097517e-148",
+  "canonical": "1.3225943328097518e-138",
+  "stringifyBytes": 23,
+  "bits": "234f8013787620d8"
+ },
+ {
+  "input": "9347",
+  "canonical": "9347",
+  "stringifyBytes": 4,
+  "bits": "40c2418000000000"
+ },
+ {
+  "input": "25.6513301128665337e-298",
+  "canonical": "2.5651330112866535e-297",
+  "stringifyBytes": 23,
+  "bits": "025ad767be7df7c9"
+ },
+ {
+  "input": "-0.2085e139",
+  "canonical": "-2.085e+138",
+  "stringifyBytes": 11,
+  "bits": "dca6692c766a6a92"
+ },
+ {
+  "input": "2406827.6441756915",
+  "canonical": "2406827.6441756915",
+  "stringifyBytes": 18,
+  "bits": "41425cd5d274595c"
+ },
+ {
+  "input": "158880734905231.28e25",
+  "canonical": "1.588807349052313e+39",
+  "stringifyBytes": 21,
+  "bits": "4812ad24a8e617d1"
+ },
+ {
+  "input": "8.265629840759e-297",
+  "canonical": "8.265629840759e-297",
+  "stringifyBytes": 19,
+  "bits": "02759f6ef68148e2"
+ },
+ {
+  "input": "826699976617504660.80",
+  "canonical": "826699976617504600",
+  "stringifyBytes": 18,
+  "bits": "43a6f20e7f54385f"
+ },
+ {
+  "input": "4.40342483837e52",
+  "canonical": "4.40342483837e+52",
+  "stringifyBytes": 17,
+  "bits": "4add6c5d251a2a7f"
+ },
+ {
+  "input": "5811.6274",
+  "canonical": "5811.6274",
+  "stringifyBytes": 9,
+  "bits": "40b6b3a09d495183"
+ },
+ {
+  "input": "118736228735.139104e-119",
+  "canonical": "1.187362287351391e-108",
+  "stringifyBytes": 22,
+  "bits": "29864efe41a0f0fb"
+ },
+ {
+  "input": "-3291889464.17995e279",
+  "canonical": "-3.29188946417995e+288",
+  "stringifyBytes": 22,
+  "bits": "fbd59e627d2d4955"
+ },
+ {
+  "input": "330261410773.92664",
+  "canonical": "330261410773.92664",
+  "stringifyBytes": 18,
+  "bits": "425339474cf57b4e"
+ },
+ {
+  "input": "92962432e-194",
+  "canonical": "9.2962432e-187",
+  "stringifyBytes": 14,
+  "bits": "19502df2f06dbafd"
+ },
+ {
+  "input": "8457.76e-172",
+  "canonical": "8.45776e-169",
+  "stringifyBytes": 12,
+  "bits": "1d098910f0eb4f20"
+ },
+ {
+  "input": "48131104.5247",
+  "canonical": "48131104.5247",
+  "stringifyBytes": 13,
+  "bits": "4186f361043295ea"
+ },
+ {
+  "input": "125.75237e251",
+  "canonical": "1.2575237e+253",
+  "stringifyBytes": 14,
+  "bits": "747b718a7b2503ed"
+ },
+ {
+  "input": "40538.343567760816891e268",
+  "canonical": "4.0538343567760816e+272",
+  "stringifyBytes": 23,
+  "bits": "7887fabfb996ec2e"
+ },
+ {
+  "input": "77.170",
+  "canonical": "77.17",
+  "stringifyBytes": 5,
+  "bits": "40534ae147ae147b"
+ },
+ {
+  "input": "2908232.24e-144",
+  "canonical": "2.90823224e-138",
+  "stringifyBytes": 15,
+  "bits": "236150fe38ef3984"
+ },
+ {
+  "input": "529778036364e106",
+  "canonical": "5.29778036364e+117",
+  "stringifyBytes": 18,
+  "bits": "5860ce8bf45e99ed"
+ },
+ {
+  "input": "713",
+  "canonical": "713",
+  "stringifyBytes": 3,
+  "bits": "4086480000000000"
+ },
+ {
+  "input": "88e-284",
+  "canonical": "8.8e-283",
+  "stringifyBytes": 8,
+  "bits": "05605b708a8f9f44"
+ },
+ {
+  "input": "8e267",
+  "canonical": "8e+267",
+  "stringifyBytes": 6,
+  "bits": "778f03542dfb8370"
+ },
+ {
+  "input": "470925629345.7",
+  "canonical": "470925629345.7",
+  "stringifyBytes": 14,
+  "bits": "425b6956b5e86ccd"
+ },
+ {
+  "input": "7.8e307",
+  "canonical": "7.8e+307",
+  "stringifyBytes": 8,
+  "bits": "7fdbc4d80e5b57b2"
+ },
+ {
+  "input": "-1566881e-217",
+  "canonical": "-1.566881e-211",
+  "stringifyBytes": 14,
+  "bits": "942a5fda25903f82"
+ },
+ {
+  "input": "13225943328.097517",
+  "canonical": "13225943328.097517",
+  "stringifyBytes": 18,
+  "bits": "4208a29f0900c7b7"
+ },
+ {
+  "input": "9347e229",
+  "canonical": "9.347e+232",
+  "stringifyBytes": 10,
+  "bits": "704e1a4b1f4c66b1"
+ },
+ {
+  "input": "25.6513301128665337e-298",
+  "canonical": "2.5651330112866535e-297",
+  "stringifyBytes": 23,
+  "bits": "025ad767be7df7c9"
+ },
+ {
+  "input": "-0.2085",
+  "canonical": "-0.2085",
+  "stringifyBytes": 7,
+  "bits": "bfcab020c49ba5e3"
+ },
+ {
+  "input": "2406827.6441756915e67",
+  "canonical": "2.4068276441756914e+73",
+  "stringifyBytes": 22,
+  "bits": "4f2b3e8bfaf3e7bc"
+ },
+ {
+  "input": "158880734905231.28e25",
+  "canonical": "1.588807349052313e+39",
+  "stringifyBytes": 21,
+  "bits": "4812ad24a8e617d1"
+ },
+ {
+  "input": "8.265629840759",
+  "canonical": "8.265629840759",
+  "stringifyBytes": 14,
+  "bits": "40208800a26dcd9e"
+ },
+ {
+  "input": "826699976617504660.80e-136",
+  "canonical": "8.266999766175046e-119",
+  "stringifyBytes": 22,
+  "bits": "276aaf2fda44e317"
+ },
+ {
+  "input": "4.40342483837e52",
+  "canonical": "4.40342483837e+52",
+  "stringifyBytes": 17,
+  "bits": "4add6c5d251a2a7f"
+ },
+ {
+  "input": "527228535880481511.2",
+  "canonical": "527228535880481540",
+  "stringifyBytes": 18,
+  "bits": "439d445e3d726bec"
+ },
+ {
+  "input": "5811.6274e-25",
+  "canonical": "5.8116274e-22",
+  "stringifyBytes": 13,
+  "bits": "3b85f4a940187bf1"
+ },
+ {
+  "input": "118736228735.139104e-119",
+  "canonical": "1.187362287351391e-108",
+  "stringifyBytes": 22,
+  "bits": "29864efe41a0f0fb"
+ },
+ {
+  "input": "-3291889464.17995",
+  "canonical": "-3291889464.17995",
+  "stringifyBytes": 17,
+  "bits": "c1e886c7e705c227"
+ },
+ {
+  "input": "330261410773.92664e132",
+  "canonical": "3.3026141077392665e+143",
+  "stringifyBytes": 23,
+  "bits": "5dbb154c314b109d"
+ },
+ {
+  "input": "92962432e-194",
+  "canonical": "9.2962432e-187",
+  "stringifyBytes": 14,
+  "bits": "19502df2f06dbafd"
+ },
+ {
+  "input": "8457.76",
+  "canonical": "8457.76",
+  "stringifyBytes": 7,
+  "bits": "40c084e147ae147b"
+ },
+ {
+  "input": "48131104.5247e-113",
+  "canonical": "4.81311045247e-106",
+  "stringifyBytes": 18,
+  "bits": "2a11a98497ccdc91"
+ },
+ {
+  "input": "125.75237e251",
+  "canonical": "1.2575237e+253",
+  "stringifyBytes": 14,
+  "bits": "747b718a7b2503ed"
+ },
+ {
+  "input": "40538.343567760816891",
+  "canonical": "40538.343567760814",
+  "stringifyBytes": 18,
+  "bits": "40e3cb4afe81d115"
+ },
+ {
+  "input": "77.170e-199",
+  "canonical": "7.717e-198",
+  "stringifyBytes": 10,
+  "bits": "17027595d71bbc66"
+ },
+ {
+  "input": "2908232.24e-144",
+  "canonical": "2.90823224e-138",
+  "stringifyBytes": 15,
+  "bits": "236150fe38ef3984"
+ },
+ {
+  "input": "529778036364",
+  "canonical": "529778036364",
+  "stringifyBytes": 12,
+  "bits": "425ed64ed3a30000"
+ },
+ {
+  "input": "713e-224",
+  "canonical": "7.13e-222",
+  "stringifyBytes": 9,
+  "bits": "12049e53b570d51b"
+ },
+ {
+  "input": "88e-284",
+  "canonical": "8.8e-283",
+  "stringifyBytes": 8,
+  "bits": "05605b708a8f9f44"
+ },
+ {
+  "input": "8",
+  "canonical": "8",
+  "stringifyBytes": 1,
+  "bits": "4020000000000000"
+ },
+ {
+  "input": "470925629345.7e255",
+  "canonical": "4.709256293457e+266",
+  "stringifyBytes": 19,
+  "bits": "774d35aab695e003"
+ },
+ {
+  "input": "7.8e307",
+  "canonical": "7.8e+307",
+  "stringifyBytes": 8,
+  "bits": "7fdbc4d80e5b57b2"
+ },
+ {
+  "input": "-1566881",
+  "canonical": "-1566881",
+  "stringifyBytes": 8,
+  "bits": "c137e8a100000000"
+ },
+ {
+  "input": "13225943328.097517e-148",
+  "canonical": "1.3225943328097518e-138",
+  "stringifyBytes": 23,
+  "bits": "234f8013787620d8"
+ },
+ {
+  "input": "9347e229",
+  "canonical": "9.347e+232",
+  "stringifyBytes": 10,
+  "bits": "704e1a4b1f4c66b1"
+ },
+ {
+  "input": "25.6513301128665337",
+  "canonical": "25.651330112866535",
+  "stringifyBytes": 18,
+  "bits": "4039a6bd91fda969"
+ },
+ {
+  "input": "-0.2085e139",
+  "canonical": "-2.085e+138",
+  "stringifyBytes": 11,
+  "bits": "dca6692c766a6a92"
+ },
+ {
+  "input": "2406827.6441756915e67",
+  "canonical": "2.4068276441756914e+73",
+  "stringifyBytes": 22,
+  "bits": "4f2b3e8bfaf3e7bc"
+ },
+ {
+  "input": "158880734905231.28",
+  "canonical": "158880734905231.28",
+  "stringifyBytes": 18,
+  "bits": "42e21009b88071e9"
+ },
+ {
+  "input": "8.265629840759e-297",
+  "canonical": "8.265629840759e-297",
+  "stringifyBytes": 19,
+  "bits": "02759f6ef68148e2"
+ },
+ {
+  "input": "826699976617504660.80e-136",
+  "canonical": "8.266999766175046e-119",
+  "stringifyBytes": 22,
+  "bits": "276aaf2fda44e317"
+ },
+ {
+  "input": "4.40342483837",
+  "canonical": "4.40342483837",
+  "stringifyBytes": 13,
+  "bits": "40119d1b669cc5e0"
+ },
+ {
+  "input": "5811.6274e-25",
+  "canonical": "5.8116274e-22",
+  "stringifyBytes": 13,
+  "bits": "3b85f4a940187bf1"
+ },
+ {
+  "input": "118736228735.139104",
+  "canonical": "118736228735.1391",
+  "stringifyBytes": 17,
+  "bits": "423ba53b117f239c"
+ },
+ {
+  "input": "-3291889464.17995e279",
+  "canonical": "-3.29188946417995e+288",
+  "stringifyBytes": 22,
+  "bits": "fbd59e627d2d4955"
+ },
+ {
+  "input": "330261410773.92664e132",
+  "canonical": "3.3026141077392665e+143",
+  "stringifyBytes": 23,
+  "bits": "5dbb154c314b109d"
+ },
+ {
+  "input": "92962432",
+  "canonical": "92962432",
+  "stringifyBytes": 8,
+  "bits": "419629fa00000000"
+ },
+ {
+  "input": "8457.76e-172",
+  "canonical": "8.45776e-169",
+  "stringifyBytes": 12,
+  "bits": "1d098910f0eb4f20"
+ },
+ {
+  "input": "48131104.5247e-113",
+  "canonical": "4.81311045247e-106",
+  "stringifyBytes": 18,
+  "bits": "2a11a98497ccdc91"
+ },
+ {
+  "input": "125.75237",
+  "canonical": "125.75237",
+  "stringifyBytes": 9,
+  "bits": "405f7026d4801f75"
+ },
+ {
+  "input": "40538.343567760816891e268",
+  "canonical": "4.0538343567760816e+272",
+  "stringifyBytes": 23,
+  "bits": "7887fabfb996ec2e"
+ },
+ {
+  "input": "77.170e-199",
+  "canonical": "7.717e-198",
+  "stringifyBytes": 10,
+  "bits": "17027595d71bbc66"
+ },
+ {
+  "input": "2908232.24",
+  "canonical": "2908232.24",
+  "stringifyBytes": 10,
+  "bits": "414630241eb851ec"
+ },
+ {
+  "input": "529778036364e106",
+  "canonical": "5.29778036364e+117",
+  "stringifyBytes": 18,
+  "bits": "5860ce8bf45e99ed"
+ },
+ {
+  "input": "713e-224",
+  "canonical": "7.13e-222",
+  "stringifyBytes": 9,
+  "bits": "12049e53b570d51b"
+ },
+ {
+  "input": "88",
+  "canonical": "88",
+  "stringifyBytes": 2,
+  "bits": "4056000000000000"
+ },
+ {
+  "input": "8e267",
+  "canonical": "8e+267",
+  "stringifyBytes": 6,
+  "bits": "778f03542dfb8370"
+ },
+ {
+  "input": "470925629345.7e255",
+  "canonical": "4.709256293457e+266",
+  "stringifyBytes": 19,
+  "bits": "774d35aab695e003"
+ },
+ {
+  "input": "7.8",
+  "canonical": "7.8",
+  "stringifyBytes": 3,
+  "bits": "401f333333333333"
+ },
+ {
+  "input": "-1566881e-217",
+  "canonical": "-1.566881e-211",
+  "stringifyBytes": 14,
+  "bits": "942a5fda25903f82"
+ },
+ {
+  "input": "13225943328.097517e-148",
+  "canonical": "1.3225943328097518e-138",
+  "stringifyBytes": 23,
+  "bits": "234f8013787620d8"
+ },
+ {
+  "input": "9347",
+  "canonical": "9347",
+  "stringifyBytes": 4,
+  "bits": "40c2418000000000"
+ },
+ {
+  "input": "25.6513301128665337e-298",
+  "canonical": "2.5651330112866535e-297",
+  "stringifyBytes": 23,
+  "bits": "025ad767be7df7c9"
+ },
+ {
+  "input": "-0.2085e139",
+  "canonical": "-2.085e+138",
+  "stringifyBytes": 11,
+  "bits": "dca6692c766a6a92"
+ },
+ {
+  "input": "2406827.6441756915",
+  "canonical": "2406827.6441756915",
+  "stringifyBytes": 18,
+  "bits": "41425cd5d274595c"
+ },
+ {
+  "input": "158880734905231.28e25",
+  "canonical": "1.588807349052313e+39",
+  "stringifyBytes": 21,
+  "bits": "4812ad24a8e617d1"
+ },
+ {
+  "input": "8.265629840759e-297",
+  "canonical": "8.265629840759e-297",
+  "stringifyBytes": 19,
+  "bits": "02759f6ef68148e2"
+ },
+ {
+  "input": "826699976617504660.80",
+  "canonical": "826699976617504600",
+  "stringifyBytes": 18,
+  "bits": "43a6f20e7f54385f"
+ },
+ {
+  "input": "4.40342483837e52",
+  "canonical": "4.40342483837e+52",
+  "stringifyBytes": 17,
+  "bits": "4add6c5d251a2a7f"
+ },
+ {
+  "input": "5811.6274",
+  "canonical": "5811.6274",
+  "stringifyBytes": 9,
+  "bits": "40b6b3a09d495183"
+ },
+ {
+  "input": "118736228735.139104e-119",
+  "canonical": "1.187362287351391e-108",
+  "stringifyBytes": 22,
+  "bits": "29864efe41a0f0fb"
+ },
+ {
+  "input": "-3291889464.17995e279",
+  "canonical": "-3.29188946417995e+288",
+  "stringifyBytes": 22,
+  "bits": "fbd59e627d2d4955"
+ },
+ {
+  "input": "330261410773.92664",
+  "canonical": "330261410773.92664",
+  "stringifyBytes": 18,
+  "bits": "425339474cf57b4e"
+ },
+ {
+  "input": "92962432e-194",
+  "canonical": "9.2962432e-187",
+  "stringifyBytes": 14,
+  "bits": "19502df2f06dbafd"
+ },
+ {
+  "input": "8457.76e-172",
+  "canonical": "8.45776e-169",
+  "stringifyBytes": 12,
+  "bits": "1d098910f0eb4f20"
+ },
+ {
+  "input": "48131104.5247",
+  "canonical": "48131104.5247",
+  "stringifyBytes": 13,
+  "bits": "4186f361043295ea"
+ },
+ {
+  "input": "125.75237e251",
+  "canonical": "1.2575237e+253",
+  "stringifyBytes": 14,
+  "bits": "747b718a7b2503ed"
+ },
+ {
+  "input": "40538.343567760816891e268",
+  "canonical": "4.0538343567760816e+272",
+  "stringifyBytes": 23,
+  "bits": "7887fabfb996ec2e"
+ },
+ {
+  "input": "77.170",
+  "canonical": "77.17",
+  "stringifyBytes": 5,
+  "bits": "40534ae147ae147b"
+ },
+ {
+  "input": "2908232.24e-144",
+  "canonical": "2.90823224e-138",
+  "stringifyBytes": 15,
+  "bits": "236150fe38ef3984"
+ },
+ {
+  "input": "529778036364e106",
+  "canonical": "5.29778036364e+117",
+  "stringifyBytes": 18,
+  "bits": "5860ce8bf45e99ed"
+ },
+ {
+  "input": "713",
+  "canonical": "713",
+  "stringifyBytes": 3,
+  "bits": "4086480000000000"
+ },
+ {
+  "input": "88e-284",
+  "canonical": "8.8e-283",
+  "stringifyBytes": 8,
+  "bits": "05605b708a8f9f44"
+ },
+ {
+  "input": "8e267",
+  "canonical": "8e+267",
+  "stringifyBytes": 6,
+  "bits": "778f03542dfb8370"
+ },
+ {
+  "input": "470925629345.7",
+  "canonical": "470925629345.7",
+  "stringifyBytes": 14,
+  "bits": "425b6956b5e86ccd"
+ }
+]
