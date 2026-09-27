@@ -440,7 +440,7 @@ function flip(operator: string, now: number, value: Json | undefined): number | 
 }
 
 function same(left: Json | undefined, right: Json | undefined): boolean | undefined {
-  return present(left) && present(right) ? canonicalJson(left) === canonicalJson(right) : undefined;
+  return present(left) && present(right) ? sameJson(left, right) : undefined;
 }
 
 const isNow = (operand: OperandJson) => "ref" in operand && operand.ref[0] === "now";
@@ -455,7 +455,8 @@ function holds(rule: RuleJson, caller: Json, subject: Subject, clock: Clock, row
     case "exists": return isNow(body) || present(resolve(body, caller, subject, clock));
     case "readable": {
       const key = resolve(body[1], caller, subject, clock);
-      const text = typeof key === "string" ? key : key !== null && typeof key === "object" ? canonicalJson(key) : undefined;
+      // The application's objects come from its own context: copied into this one first, for canonicalJson.
+      const text = typeof key === "string" ? key : key !== null && typeof key === "object" ? canonicalJson(structuredClone(key)) : undefined;
       return text !== undefined && rows(body[0], text);
     }
   }
@@ -478,6 +479,25 @@ function holds(rule: RuleJson, caller: Json, subject: Subject, clock: Clock, row
 }
 
 const skip = Symbol("flower.skip");
+
+/**
+ * A shallow copy of a row with the row's own prototype. Rows come from the application's context, whose objects have
+ * that context's Object.prototype; a copy made here with `{ ...row }` would have this realm's, which the application's
+ * JSON encoding refuses as not a plain object.
+ */
+function sameRealmCopy(row: { readonly [key: string]: Json }): Record<string, Json> {
+  return Object.assign(Object.create(Object.getPrototypeOf(row) as object | null) as Record<string, Json>, row);
+}
+
+/** Whether two JSON values are equal, whichever context made their objects (canonicalJson here refuses the application's). */
+function sameJson(a: Json | undefined, b: Json | undefined): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === (b as Json[]).length && a.every((item, index) => sameJson(item, (b as Json[])[index]));
+  const keys = Object.keys(a);
+  const other = b as { readonly [key: string]: Json };
+  return keys.length === Object.keys(other).length && keys.every((key) => Object.hasOwn(other, key) && sameJson((a as { readonly [key: string]: Json })[key], other[key]));
+}
 
 class Guard {
   readonly collection: string;
@@ -506,7 +526,7 @@ class Guard {
     if (row === null || typeof row !== "object" || Array.isArray(row) || !this.policy.fields) return row;
     const hidden = Object.keys(this.policy.fields).filter((field) => Object.hasOwn(row, field) && !this.fieldReadable(field, key, row));
     if (!hidden.length) return row;
-    const shown: Record<string, Json> = { ...row };
+    const shown = sameRealmCopy(row);
     for (const field of hidden) delete shown[field];
     return shown;
   }
@@ -527,11 +547,13 @@ class Guard {
     let written = next;
     if (previous !== null && typeof previous === "object" && !Array.isArray(previous) &&
         written !== null && typeof written === "object" && !Array.isArray(written)) {
-      const carried: Record<string, Json> = { ...written };
-      for (const field of Object.keys(fields)) {
-        if (!Object.hasOwn(carried, field) && !clear.includes(field) && Object.hasOwn(previous, field) && !this.fieldReadable(field, key, previous)) carried[field] = previous[field];
+      const carry = Object.keys(fields).filter((field) =>
+        !Object.hasOwn(written as object, field) && !clear.includes(field) && Object.hasOwn(previous, field) && !this.fieldReadable(field, key, previous));
+      if (carry.length) {
+        const carried = sameRealmCopy(written);
+        for (const field of carry) carried[field] = previous[field];
+        written = carried;
       }
-      written = carried;
     }
     const stored = previous === null ? undefined : previous;
     const subject: Subject = { key, row: stored, next: written };
@@ -539,7 +561,7 @@ class Guard {
     const allowed = this.check(row, subject) && Object.entries(fields).every(([field, access]) => {
       const before = lookup(stored, [field]);
       const after = lookup(written, [field]);
-      const changed = before === undefined || after === undefined ? before !== after : canonicalJson(before) !== canonicalJson(after);
+      const changed = before === undefined || after === undefined ? before !== after : !sameJson(before, after);
       if (!changed) return true;
       if (access.write !== undefined) return this.check(access.write, subject);
       if (access.read !== undefined) return this.check(access.read, { key, row: stored ?? written });
@@ -554,7 +576,7 @@ function matches(value: Json, fields: readonly string[], expected: Json): boolea
   const wanted = fields.length === 1 ? [expected] : expected as Json[];
   return fields.every((field, index) => {
     const actual = lookup(value, [field]);
-    return actual !== undefined && canonicalJson(actual) === canonicalJson(wanted[index]);
+    return actual !== undefined && sameJson(actual, wanted[index]);
   });
 }
 

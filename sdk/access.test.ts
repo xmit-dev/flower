@@ -472,3 +472,54 @@ test("readable must name a collection declared with access whose read rule doesn
   assert.deepEqual(define({ collections: [self], http: {} }).collections![0].access!.insert, { readable: ["self", { ref: ["next", "parent"] }] });
   assert.throws(() => collection("bad").access(({ key, readable }) => ({ read: readable("" as never, key) })), /readable\(\) needs a collection or its name/);
 });
+
+test("the test database compares and keeps rows made in the application's own context", async () => {
+  // Bundles run in a context of their own (testDatabase(path)), whose objects have another Object.prototype.
+  const { runInNewContext } = await import("node:vm");
+  const foreign = <T>(value: T): T => runInNewContext(`(${JSON.stringify(value)})`) as T;
+  type Org = { owner: string; name: string; settings: { theme: string }; billing?: { plan: string } };
+  const orgs = collection<Org>("orgs").access(({ principal, row, next, readable, any }) => {
+    const admin = principal.claim("role").eq("admin");
+    return {
+      read: any(admin, row("owner").eq(principal.subject)),
+      insert: any(admin, next("owner").eq(principal.subject)),
+      update: any(admin, row("owner").eq(principal.subject)),
+      fields: { billing: { read: admin }, settings: { write: any(admin, next("settings").eq(row("settings"))) } },
+    };
+  });
+  const links = collection<{ to: string[] }>("links").access(({ principal, row, readable, any }) => ({
+    read: any(principal.claim("role").eq("admin"), readable(orgs, row("to"))),
+    write: principal.claim("role").eq("admin"),
+  }));
+  const app = define({
+    collections: [orgs, links],
+    auth: { authenticate: (_ctx, credentials) => typeof credentials === "string" ? { subject: credentials, claims: { role: credentials === "root" ? "admin" : "user" } } : null },
+    http: {
+      get: query("get", { access: "public", args: v.string() }, (ctx, id) => ctx.get(orgs, id)),
+      link: query("link", { access: "public", args: v.string() }, (ctx, id) => ctx.get(links, id)),
+      put: mutation("put", { args: v.object({ id: v.string(), org: v.json() }) }, (ctx, { id, org }) => {
+        ctx.set(orgs, id, foreign(org) as Org);
+        // Read back and written again, as a read-modify-write in the application would.
+        const again = ctx.get(orgs, id)!;
+        ctx.set(orgs, id, { ...again, name: `${again.name}!` });
+        return null;
+      }),
+      putLink: mutation("putLink", { args: v.object({ id: v.string(), to: v.array(v.string()) }) }, (ctx, { id, to }) => {
+        ctx.set(links, id, foreign({ to }));
+        return null;
+      }),
+    },
+  });
+  const db = await testDatabase(app);
+  const as = (credentials: string) => ({ credentials });
+  db.mutate("put", { id: "a", org: { owner: "alice", name: "A", settings: { theme: "dark" }, billing: { plan: "pro" } } }, as("root"));
+  // Alice's write carries the billing she can't see, and leaves settings as they were: equal objects from either context.
+  db.mutate("put", { id: "a", org: { owner: "alice", name: "B", settings: { theme: "dark" } } }, as("alice"));
+  assert.deepEqual(db.query("get", "a", as("root")), { owner: "alice", name: "B!", settings: { theme: "dark" }, billing: { plan: "pro" } });
+  assert.throws(() => db.mutate("put", { id: "a", org: { owner: "alice", name: "C", settings: { theme: "light" } } }, as("alice")), (error: any) => error.failure?.code === "ACCESS_DENIED");
+  // readable with a key from a row, an array made in the application's context.
+  db.mutate("put", { id: JSON.stringify(["x", "y"]), org: { owner: "alice", name: "X", settings: { theme: "dark" } } }, as("root"));
+  db.mutate("putLink", { id: "l", to: ["x", "y"] }, as("root"));
+  assert.deepEqual(db.query("link", "l", as("alice")), { to: ["x", "y"] });
+  assert.equal(db.query("link", "l", as("bob")), null);
+});
