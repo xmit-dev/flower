@@ -1151,7 +1151,9 @@ impl FlowerClient {
         args: &A,
         options: SubscribeOptions,
     ) -> Result<Subscriber, FlowerError> {
-        if options.stall.is_zero() || options.stall.as_millis() as u64 > MAX_SAFE {
+        // Like `stallMs`: a positive safe integer of milliseconds.
+        let whole = options.stall.as_nanos() % 1_000_000 == 0;
+        if options.stall.is_zero() || !whole || options.stall.as_millis() as u64 > MAX_SAFE {
             return Err(FlowerError::invalid(
                 "stallMs must be a positive safe integer",
             ));
