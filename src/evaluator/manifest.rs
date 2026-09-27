@@ -3,7 +3,7 @@
 //! Flower stores. Every guest kind goes through these same checks.
 use super::{
     AuthorizationMethod, HttpMethod, MaintenanceMethod, Manifest, MethodKind, QueryConsistency,
-    rust_engine::{IndexSpec, Policy, Rule, Schema, validate_targets},
+    rust_engine::{IndexSpec, Policy, Rule, Schema, validate_derived_targets, validate_targets},
 };
 use anyhow::{Result, anyhow, bail, ensure};
 use serde_json::{Map, Value};
@@ -214,6 +214,8 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
             .map_err(|error| anyhow!("Invalid access rule for derived {name}: {error}"))?;
         derived_access.insert((*name).to_owned(), rule);
     }
+    validate_derived_targets(&derived_access, &policies)
+        .map_err(|error| anyhow!("Invalid access rule for derived {error}"))?;
     Ok(Schema {
         indexes,
         aggregates,
@@ -601,7 +603,20 @@ mod tests {
             ),
             (
                 json!({"definitions": {"d": {"kind": "derived", "access": {"readable": ["a", {"ref": ["args"]}]}}}, "http": {}}),
-                "Invalid access rule for derived d: access: readable cannot be used here",
+                "Invalid access rule for derived d: readable(\"a\") needs a collection with an access policy",
+            ),
+            (
+                json!({"definitions": {"d": {"kind": "derived", "access": {"readable": ["a", {"ref": ["args"]}]}}}, "http": {}, "collections": [
+                    {"name": "a", "indexes": {}, "access": {"read": {"readable": ["b", {"ref": ["key"]}]}}},
+                    {"name": "b", "indexes": {}, "access": {"read": {"const": true}}},
+                ]}),
+                "Invalid access rule for derived d: readable(\"a\") names a collection whose read rule uses readable itself",
+            ),
+            (
+                json!({"definitions": {"d": {"kind": "derived", "access": {"readable": ["a", {"ref": ["key"]}]}}}, "http": {}, "collections": [
+                    {"name": "a", "indexes": {}, "access": {"read": {"const": true}}},
+                ]}),
+                "Invalid access rule for derived d: access: key cannot be used here",
             ),
             (
                 json!({"definitions": {"q": {"kind": "query", "access": {"const": true}}}, "http": {}}),

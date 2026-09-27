@@ -142,6 +142,9 @@ impl Schema {
                 EngineError::new("INPUT_INVALID", format!("Malformed access rule: {error}"))
             })?;
         }
+        super::validate_derived_targets(&self.derived_access, &self.policies).map_err(|error| {
+            EngineError::new("INPUT_INVALID", format!("Malformed access rule: {error}"))
+        })?;
         Ok(self)
     }
     pub(super) fn load(value: Option<&Value>) -> EngineResult<Self> {

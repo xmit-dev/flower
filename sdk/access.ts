@@ -71,6 +71,14 @@ export interface DerivedScope<A> {
   all(...rules: RuleLike[]): Rule;
   any(...rules: RuleLike[]): Rule;
   not(rule: RuleLike): Rule;
+  /**
+   * The caller may read the row of `collection` at `key`, as in collections' rules: a
+   * project's totals for whoever may read the project (`readable(projects, args.at(0))`),
+   * or every value for whoever a collection lists (`readable(admins, principal.subject)`).
+   * A method's result that read the value changes when that row does. The collection
+   * needs an access policy whose read rule doesn't use readable itself.
+   */
+  readable(collection: CollectionName, key: OperandLike<Json>): Rule;
 }
 
 /**
@@ -269,6 +277,7 @@ const derivedScope: DerivedScope<any> = Object.freeze({
   args: new PartsNode({ ref: ["args"] }),
   now: new OperandNode({ ref: ["now"] }),
   ...combinators,
+  readable: (collection: CollectionName, key: unknown) => new RuleNode({ readable: [collectionName(collection), operand(key)] }),
 });
 
 /** Roots each rule may use, matching the server's checks. */
@@ -644,7 +653,7 @@ export function enforceAccess(
     ...host,
     get(reference: any, key: any) {
       const rule = reference?.kind === "derived" && definer === 0 ? derived.get(reference.name) : undefined;
-      if (rule && !holds(rule, caller, { key: "", row: key ?? null }, clock, noRows)) {
+      if (rule && !holds(rule, caller, { key: "", row: key ?? null }, clock, readable)) {
         throw Object.assign(new Error(`Access policy denies reading ${reference.name}`), { code: "ACCESS_DENIED" });
       }
       const value = host.get(reference, key);

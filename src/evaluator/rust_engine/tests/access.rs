@@ -1109,6 +1109,55 @@ fn derived_values_answer_only_the_callers_their_rule_allows() {
 }
 
 #[test]
+fn derived_rules_look_rows_up_with_readable_and_results_follow_them() {
+    // countFor(key) is readable by whoever may read the note at that key:
+    // its owner, or an admin.
+    let rule = json!({"readable":["notes",{"ref":["args"]}]});
+    let fixture = fixture();
+    let mut data = Records::default();
+    install_with(
+        &mut data,
+        &fixture,
+        policy(),
+        None,
+        Some(json!({"countFor": rule})),
+    );
+    let read = |data: &Records, args: Value, principal: Value| {
+        call(data, &fixture, "query", "readCount", args, Some(principal))
+    };
+    assert_eq!(read(&data, json!("a1"), alice()).unwrap().value, 0);
+    assert_eq!(read(&data, json!("b1"), admin()).unwrap().value, 0);
+    for (args, principal) in [
+        (json!("b1"), alice()),
+        (json!("x"), alice()),
+        (json!("missing"), admin()),
+    ] {
+        let error = read(&data, args, principal).err().expect("denied");
+        assert_eq!(error.code, "ACCESS_DENIED");
+    }
+    // Giving the note away invalidates alice's answer, and she is denied.
+    // (countFor scans every note anyway; tests/e2e-access.mjs checks a value
+    // that doesn't read the row its rule looks up.)
+    let certificate = read(&data, json!("a1"), alice())
+        .unwrap()
+        .query_certificate
+        .expect("certificate");
+    deploy(
+        &mut data,
+        json!({"writes":[{"collection":"notes","key":"a1","value":{"owner":"bob","rank":1,"text":"one"}}]}),
+        &fixture,
+    );
+    assert!(!certificate.valid(&data));
+    assert_eq!(
+        read(&data, json!("a1"), alice())
+            .err()
+            .expect("denied")
+            .code,
+        "ACCESS_DENIED"
+    );
+}
+
+#[test]
 fn owner_scans_read_their_bucket_and_ignore_other_owners_writes() {
     let (mut data, fixture) = setup();
     let scan = |data: &Records, principal: Value| {

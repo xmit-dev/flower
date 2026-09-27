@@ -100,6 +100,11 @@ const events = collection("events", v.object({ session: v.string(), text: v.stri
     return { read: entries, write: entries };
   });
 const timeline = query("timeline", open, (ctx) => ctx.scan(events).map((row) => row.value.text));
+// A derived value follows a row's rule too: a session's length, for whoever sees the session.
+const sessionLength = derive("sessionLength", (ctx, session) => ctx.scan(events).filter((row) => row.value.session === session).length, {
+  access: ({ args, readable }) => readable(sessions, args),
+});
+const length = query("length", { ...open, args: id }, (ctx, session) => ctx.get(sessionLength, session));
 const start = mutation("start", { args: v.object({ id, private: v.boolean() }) }, (ctx, { id, private: hidden }) => {
   ctx.set(sessions, id, { owner: ctx.principal().subject, private: hidden });
   ctx.set(events, [id, 1], { session: id, text: id + "/1" });
@@ -145,14 +150,14 @@ const probe = mutation("probe", open, (ctx) => [typeof ctx.definer, typeof globa
 export default define({
   collections: [notes, audit, sessions, events],
   uses: [summary, jobs],
-  definitions: [total, countFor, perOwner],
+  definitions: [total, countFor, perOwner, sessionLength],
   triggers: [log],
   auth: {
     authenticate: (_ctx, credentials) => typeof credentials === "string"
       ? { subject: credentials, claims: credentials === "root" ? { role: "admin" } : {} }
       : null,
   },
-  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share, probe, owned, summarized, ask, asked, work, again, drop },
+  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share, probe, owned, summarized, length, ask, asked, work, again, drop },
 });`;
 }
 
@@ -257,6 +262,13 @@ try {
   assert.deepEqual(await next(), ["s1/1", "s3/1", "s3/2"]);
   watching.abort();
   await watch.return?.().catch(() => {});
+  // A derived value's rule looks the session up the same way, and a cached answer follows it.
+  assert.equal(await value(alice.query("length", "s3")), 2);
+  await denied(alice.query("length", "s2"));
+  await mutate(bob, "share", { id: "s2", private: false });
+  assert.equal(await value(alice.query("length", "s2")), 1);
+  await mutate(bob, "share", { id: "s2", private: true });
+  await denied(alice.query("length", "s2"));
 
   // Queues: callers enqueue, read, retry and cancel the jobs of sessions they see; a worker
   // with no role claims and reports every job, and still reads only what the rule allows.
@@ -288,7 +300,7 @@ try {
   assert.deepEqual(await value(alice.query("list")), ["a1", "a3", "b1", "b2"]);
   assert.deepEqual(await value(alice.query("get", "b1")), { owner: "bob", rank: 2, text: "two" });
   assert.deepEqual(await value(anonymous.query("list")), []);
-  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, guard aggregates and external values like derived ones, guard queue jobs while workers claim them all, let rows follow another row's rule (live watches included), and follow policy redeploys");
+  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, guard aggregates and external values like derived ones, let derived values follow a row's rule, guard queue jobs while workers claim them all, let rows follow another row's rule (live watches included), and follow policy redeploys");
 } catch (error) {
   console.error(error);
   console.error(cluster.logTails());

@@ -356,6 +356,45 @@ test("derived values say who may read them, by the caller and the arguments", as
   derive("typed", count, { access: ({ args }) => args.eq(1) });
 });
 
+test("derived values' rules look rows up with readable", async () => {
+  // A team's note count for its members, as the members collection says; `admins` lists who reads every team's.
+  // Only root writes either.
+  const root = (principal: any) => principal.subject.eq("root");
+  const members = collection<{ team: string; subject: string }>("members").access(({ principal, row }) => ({ read: row("subject").eq(principal.subject), write: root(principal) }));
+  const admins = collection<{ since: number }>("admins").access(({ principal, key }) => ({ read: key.eq(principal.subject), write: root(principal) }));
+  const teamNotes = derive("teamNotes", (ctx, team: string) => ctx.scan(notes).filter((row: any) => row.value.text.startsWith(team)).length, {
+    access: ({ principal, args, readable, any }) => any(readable(members, args), readable(admins, principal.subject)),
+  });
+  const app = define({
+    collections: [notes, members, admins],
+    definitions: [teamNotes],
+    auth: { authenticate: (_ctx, credentials) => typeof credentials === "string" ? { subject: credentials } : null },
+    http: {
+      put: mutation("put", { args: v.object({ id: v.string(), note: noteSchema }) }, (ctx, { id, note }) => { ctx.set(notes, id, note); return null; }),
+      member: mutation("member", { args: v.object({ team: v.string(), subject: v.string() }) }, (ctx, row) => { ctx.set(members, row.team, row); return null; }),
+      admin: mutation("admin", { args: v.string() }, (ctx, subject) => { ctx.set(admins, subject, { since: 1 }); return null; }),
+      count: query("count", { access: "public", args: v.string() }, (ctx, team) => ctx.get(teamNotes, team)),
+    },
+  });
+  assert.deepEqual((app.definitions as any).teamNotes.access, {
+    any: [{ readable: ["members", { ref: ["args"] }] }, { readable: ["admins", { ref: ["principal", "subject"] }] }],
+  });
+  const db = await testDatabase(app);
+  db.mutate("member", { team: "red", subject: "alice" }, { credentials: "root" });
+  for (const [id, text] of [["r1", "red one"], ["r2", "red two"], ["b1", "blue"]]) db.mutate("put", { id, note: { owner: "alice", rank: 1, text } }, { credentials: "alice" });
+  const denied = (run: () => unknown) => assert.throws(run, (error: any) => error.failure?.code === "ACCESS_DENIED");
+  assert.equal(db.query("count", "red", { credentials: "alice" }), 2);
+  denied(() => db.query("count", "blue", { credentials: "alice" }));
+  denied(() => db.query("count", "red", { credentials: "bob" }));
+  db.mutate("admin", "bob", { credentials: "root" });
+  assert.equal(db.query("count", "blue", { credentials: "bob" }), 1);
+  // The rows must be declared with access whose read rule doesn't look further.
+  const loose = collection<{ team: string }>("loose");
+  assert.throws(() => define({ collections: [notes, loose], definitions: [derive("bad", () => 0, { access: ({ args, readable }) => readable(loose, args) })] }), /readable\("loose"\)/);
+  const chained = collection<{ team: string }>("chained").access(({ key, readable }) => ({ read: readable(members, key), write: false }));
+  assert.throws(() => define({ collections: [notes, members, chained], definitions: [derive("worse", () => 0, { access: ({ args, readable }) => readable(chained, args) })] }), /whose read rule uses readable itself/);
+});
+
 test("a collection with access must be declared, and callers' views never reach the auth hook", async () => {
   const sessions = collection<{ subject: string }>("sessions").access({ read: false, insert: true });
   const orphan = collection<{ owner: string }>("orphan").access({ read: true });

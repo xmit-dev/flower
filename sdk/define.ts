@@ -644,7 +644,8 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
   const authenticator = auth?.authenticate;
   const keys = keyManifest([...flat.keys, ...(authenticator && typeof authenticator === "object" ? authenticator.keys : [])]);
   const manifest = collectionManifest(collections);
-  checkReadable(manifest);
+  checkReadable(manifest, Object.fromEntries(Object.entries(definitions).flatMap(([name, definition]) =>
+    Object.hasOwn(definition, "access") ? [[name, (definition as { access?: unknown }).access]] : [])));
   runtime.guarded = new Set(manifest.filter((entry) => entry.access).map((entry) => entry.name));
   // Triggers and SDK bookkeeping must also read derived values whose rule the caller fails.
   runtime.enforced = runtime.guarded.size > 0 || Object.values(definitions).some((definition) => Object.hasOwn(definition, "access"));

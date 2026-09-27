@@ -105,7 +105,7 @@ const entries = collection("entries", v.object({ text: v.string() }))
     read: readable(sessions, key.at(0)),
     write: readable(sessions, key.at(0)),
   }));</code></pre></div>
-<p>Derived values compute over every row too, so give one built from a guarded collection an <code>access</code> rule over the caller and its arguments. Without one, any method may read it. <code>aggregate()</code> and <code>external()</code> take the same <code>access</code> option: an aggregate's arguments are the group it's read with.</p>
+<p>Derived values compute over every row too, so give one built from a guarded collection an <code>access</code> rule over the caller and its arguments. Without one, any method may read it. <code>aggregate()</code> and <code>external()</code> take the same <code>access</code> option: an aggregate's arguments are the group it's read with. Their rules may use <code>readable</code> as well, to let whoever may read a row (a project, or an entry in a list of administrators) read the value; a result that read it then follows that row.</p>
 <div class="code-block"><div class="code-head"><span>notes.ts, continued</span><button class="copy-button" type="button" aria-label="Copy notes.ts, continued">Copy</button></div><pre tabindex="0"><code class="language-ts">const noteCount = derive("noteCount", (ctx, owner: string) =&gt;
   ctx.scan(notes).filter((row) =&gt; row.value.owner === owner).length, {
   access: ({ principal, args }) =&gt; args.eq(principal.subject), // ACCESS_DENIED for anyone else's count.

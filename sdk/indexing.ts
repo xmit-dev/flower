@@ -73,22 +73,25 @@ export function collectionManifest(references: Iterable<Collection<any, any, any
 }
 
 /**
- * Check a whole application's collections: each readable(collection, key) names a
- * collection declared with access whose read rule doesn't use readable itself.
+ * Check a whole application's collections, and its derived values' rules (`derived`, by
+ * name): each readable(collection, key) names a collection declared with access whose
+ * read rule doesn't use readable itself.
  */
-export function checkReadable(manifest: readonly CollectionManifest[]): void {
+export function checkReadable(manifest: readonly CollectionManifest[], derived: Readonly<Record<string, unknown>> = {}): void {
   const byName = new Map(manifest.map((entry) => [entry.name, entry]));
-  for (const entry of byName.values()) {
-    for (const target of readableTargets(entry.access)) {
+  const check = (label: string, rules: unknown) => {
+    for (const target of readableTargets(rules)) {
       const policy = byName.get(target)?.access;
       if (!policy) {
-        throw new TypeError(`Access rules of ${JSON.stringify(entry.name)} use readable(${JSON.stringify(target)}); declare that collection with access in define({ collections })`);
+        throw new TypeError(`Access rules of ${label} use readable(${JSON.stringify(target)}); declare that collection with access in define({ collections })`);
       }
       if (readableTargets(policy.read).length) {
-        throw new TypeError(`Access rules of ${JSON.stringify(entry.name)} use readable(${JSON.stringify(target)}), whose read rule uses readable itself`);
+        throw new TypeError(`Access rules of ${label} use readable(${JSON.stringify(target)}), whose read rule uses readable itself`);
       }
     }
-  }
+  };
+  for (const entry of byName.values()) check(JSON.stringify(entry.name), entry.access);
+  for (const [name, rule] of Object.entries(derived)) check(`derived ${JSON.stringify(name)}`, rule);
 }
 
 /** The collections a compiled rule (or policy) names in readable(). */

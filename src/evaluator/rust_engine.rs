@@ -15,7 +15,7 @@ mod indexes;
 mod ranges;
 mod reducers;
 mod windows;
-pub use access::{Policy, Rule, validate_targets};
+pub use access::{Policy, Rule, validate_derived_targets, validate_targets};
 pub use indexes::{IndexSpec, Schema};
 pub(crate) use indexes::{staged_entries, staged_prefixes, staged_schema, staged_schema_bytes};
 mod json;

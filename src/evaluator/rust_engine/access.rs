@@ -200,20 +200,42 @@ pub fn validate_targets(policies: &BTreeMap<String, Policy>) -> Result<(), Strin
         for rule in policy.rules() {
             rule.targets(&mut targets);
         }
-        for target in targets {
-            match policies.get(target) {
-                None => {
-                    return Err(format!(
-                        "{name}: readable({target:?}) needs a collection with an access policy"
-                    ));
-                }
-                Some(policy) if policy.read.reads_rows() => {
-                    return Err(format!(
-                        "{name}: readable({target:?}) names a collection whose read rule uses readable itself"
-                    ));
-                }
-                Some(_) => {}
+        check_targets(name, targets, policies)?;
+    }
+    Ok(())
+}
+
+/// The same for derived values' rules, which look rows up like policies do.
+pub fn validate_derived_targets(
+    rules: &BTreeMap<String, Rule>,
+    policies: &BTreeMap<String, Policy>,
+) -> Result<(), String> {
+    for (name, rule) in rules {
+        let mut targets = Vec::new();
+        rule.targets(&mut targets);
+        check_targets(name, targets, policies)?;
+    }
+    Ok(())
+}
+
+fn check_targets(
+    name: &str,
+    targets: Vec<&str>,
+    policies: &BTreeMap<String, Policy>,
+) -> Result<(), String> {
+    for target in targets {
+        match policies.get(target) {
+            None => {
+                return Err(format!(
+                    "{name}: readable({target:?}) needs a collection with an access policy"
+                ));
             }
+            Some(policy) if policy.read.reads_rows() => {
+                return Err(format!(
+                    "{name}: readable({target:?}) names a collection whose read rule uses readable itself"
+                ));
+            }
+            Some(_) => {}
         }
     }
     Ok(())
@@ -261,9 +283,6 @@ impl Rule {
                 right.validate(scope)
             }
             Rule::Exists(operand) => operand.validate(scope),
-            Rule::Readable(_, _) if scope == Scope::Derived => {
-                Err("readable cannot be used here".into())
-            }
             Rule::Readable(collection, _) if collection.is_empty() => {
                 Err("readable needs a collection name".into())
             }
@@ -1184,12 +1203,14 @@ impl Engine<'_> {
 
     /// A caller's method may read this derived value only where its access
     /// rule allows. Values without a rule, and reads by code without a
-    /// caller or with definer rights, are open.
+    /// caller or with definer rights, are open. Rows the rule looks up with
+    /// `readable` count as the method's reads.
     pub(super) fn admit_derived_read(&mut self, name: &str, args: &Value) -> EngineResult<()> {
         if self.system || self.definer > 0 {
             return Ok(());
         }
-        let Some(rule) = self.schema.derived_access.get(name) else {
+        let schema = Arc::clone(&self.schema);
+        let Some(rule) = schema.derived_access.get(name) else {
             return Ok(());
         };
         let clock = Clock::default();
@@ -1198,17 +1219,19 @@ impl Engine<'_> {
             &caller(&self.principal),
             self.now,
             &clock,
-            &NO_POLICIES,
+            &schema.policies,
         );
         let parts = OnceCell::new();
-        let allowed = check.holds(Subject {
-            key: "",
-            parts: &parts,
-            row: Some(args),
-            next: None,
-            clock: &clock,
-            rows: &NoRows,
-        });
+        let allowed = self.looking_up(|rows| {
+            check.holds(Subject {
+                key: "",
+                parts: &parts,
+                row: Some(args),
+                next: None,
+                clock: &clock,
+                rows,
+            })
+        })?;
         self.settle_clock(&clock)?;
         if allowed {
             Ok(())
