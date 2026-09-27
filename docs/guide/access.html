@@ -110,6 +110,21 @@ const entries = collection("entries", v.object({ text: v.string() }))
   ctx.scan(notes).filter((row) =&gt; row.value.owner === owner).length, {
   access: ({ principal, args }) =&gt; args.eq(principal.subject), // ACCESS_DENIED for anyone else's count.
 });</code></pre></div>
+<p>A queue's jobs are rows too. Give <code>queue()</code> an <code>access</code> rule over its <code>Job</code> fields: callers then read, enqueue, retry and cancel only the jobs it allows, while claims and lease reports still reach every job, because the lease is what entitles a worker. List the queue in <code>define({ uses })</code>.</p>
+<div class="code-block"><div class="code-head"><span>notes.ts, continued</span><button class="copy-button" type="button" aria-label="Copy notes.ts, continued">Copy</button></div><pre tabindex="0"><code class="language-ts">import { queue } from "@flower-js/sdk/temporal";
+
+// Jobs carry the session they work for; whoever sees the session sees its jobs.
+const exportJobs = queue&lt;{ session: string }&gt;("exports", {
+  access: ({ principal, row, next, any, readable }) =&gt; {
+    const admin = principal.claim("role").eq("admin");
+    return {
+      read: any(admin, readable(sessions, row("payload", "session"))),
+      insert: any(admin, readable(sessions, next("payload", "session"))), // enqueue
+      update: any(admin, readable(sessions, next("payload", "session"))), // retry, replace
+      delete: any(admin, readable(sessions, row("payload", "session"))), // cancel
+    };
+  },
+});</code></pre></div>
 <p>Every rule is in the <a href="../reference/access.html#collection-access">collection access reference</a>.</p>
 </section>
 <section id="authenticate">

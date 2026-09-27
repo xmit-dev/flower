@@ -23,6 +23,7 @@ async function denied(promise) {
 // `read` is the knob the redeploy turns: owners and admins first, then any signed-in caller.
 function source(read) {
   return `import { aggregate, collection, define, derive, external, fail, mutation, query, trigger, v } from ${JSON.stringify(join(root, "sdk/index.ts"))};
+import { queue } from ${JSON.stringify(join(root, "sdk/temporal.ts"))};
 const notes = collection("notes", v.object({ owner: v.string(), rank: v.int(), text: v.string(), secret: v.optional(v.string()), token: v.optional(v.string()) }))
   .index("owner", ["owner"])
   .index("rank", ["rank"])
@@ -114,11 +115,36 @@ const share = mutation("share", { args: v.object({ id, private: v.boolean() }) }
   ctx.set(sessions, id, { ...row, private: hidden });
   return null;
 });
+// A job follows its session: whoever reads the session reads, enqueues, retries and cancels
+// its jobs (admins any). Workers claim and report whatever the rule: the lease entitles them.
+const jobs = queue("jobs", {
+  retry: false,
+  access: ({ principal, row, next, any, readable }) => {
+    const admin = principal.claim("role").eq("admin");
+    return {
+      read: any(admin, readable(sessions, row("payload", "session"))),
+      insert: any(admin, readable(sessions, next("payload", "session"))),
+      update: any(admin, readable(sessions, next("payload", "session"))),
+      delete: any(admin, readable(sessions, row("payload", "session"))),
+    };
+  },
+});
+const ask = mutation("ask", { args: v.object({ id, session: id }) }, (ctx, { id, session }) => { jobs.enqueue(ctx, id, { session }); return null; });
+const asked = query("asked", open, (ctx) => jobs.scan(ctx).map((job) => job.id + ":" + job.state));
+const work = mutation("work", { args: v.object({ failing: v.boolean() }) }, (ctx, { failing }) => {
+  const claim = jobs.claim(ctx, ctx.principal().subject);
+  if (claim === null) return null;
+  if (failing) jobs.fail(ctx, claim, "no");
+  else jobs.complete(ctx, claim, "done");
+  return claim.id;
+});
+const again = mutation("again", { args: id }, (ctx, key) => jobs.retry(ctx, key).state);
+const drop = mutation("drop", { args: id }, (ctx, key) => jobs.cancel(ctx, key));
 // What a mutation can find of definer rights: nothing, on servers that hand them to the SDK alone.
 const probe = mutation("probe", open, (ctx) => [typeof ctx.definer, typeof globalThis.__flowerContexts?.[0]?.definer, typeof globalThis.__flowerContexts?.[1]?.definer]);
 export default define({
   collections: [notes, audit, sessions, events],
-  uses: [summary],
+  uses: [summary, jobs],
   definitions: [total, countFor, perOwner],
   triggers: [log],
   auth: {
@@ -126,7 +152,7 @@ export default define({
       ? { subject: credentials, claims: credentials === "root" ? { role: "admin" } : {} }
       : null,
   },
-  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share, probe, owned, summarized },
+  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share, probe, owned, summarized, ask, asked, work, again, drop },
 });`;
 }
 
@@ -232,13 +258,37 @@ try {
   watching.abort();
   await watch.return?.().catch(() => {});
 
+  // Queues: callers enqueue, read, retry and cancel the jobs of sessions they see; a worker
+  // with no role claims and reports every job, and still reads only what the rule allows.
+  const code = (expected) => (error) => error instanceof FlowerError && error.failure?.code === expected;
+  await mutate(alice, "ask", { id: "j1", session: "s1" });
+  await mutate(alice, "ask", { id: "j3", session: "s3" });
+  await denied(mutate(alice, "ask", { id: "j2", session: "s2" }));
+  await mutate(bob, "ask", { id: "j2", session: "s2" });
+  await assert.rejects(mutate(alice, "ask", { id: "j2", session: "s1" }), code("JOB_EXISTS"));
+  assert.deepEqual(await value(alice.query("asked")), ["j1:pending", "j3:pending"]);
+  assert.deepEqual(await value(bob.query("asked")), ["j2:pending", "j3:pending"]);
+  const worker = as("worker");
+  assert.equal(await value(mutate(worker, "work", { failing: true })), "j1");
+  assert.equal(await value(mutate(worker, "work", { failing: false })), "j3");
+  assert.equal(await value(mutate(worker, "work", { failing: false })), "j2");
+  assert.equal(await value(mutate(worker, "work", { failing: false })), null);
+  assert.deepEqual(await value(worker.query("asked")), ["j3:completed"]);
+  assert.deepEqual(await value(alice.query("asked")), ["j1:failed", "j3:completed"]);
+  // For bob, alice's failed job isn't there to retry or cancel.
+  await assert.rejects(mutate(bob, "again", "j1"), code("JOB_NOT_FAILED"));
+  assert.equal(await value(mutate(bob, "drop", "j1")), false);
+  assert.equal(await value(mutate(alice, "again", "j1")), "pending");
+  assert.equal(await value(mutate(alice, "drop", "j1")), true);
+  assert.deepEqual(await value(rootUser.query("asked")), ["j2:completed", "j3:completed"]);
+
   // A policy-only redeploy takes effect at once, cached results included.
   await writeFile(fixture, source(`principal.authenticated`));
   await admin().deploy(await buildBundle(fixture, { initialization: "static" }), { requestId: "access-redeploy" });
   assert.deepEqual(await value(alice.query("list")), ["a1", "a3", "b1", "b2"]);
   assert.deepEqual(await value(alice.query("get", "b1")), { owner: "bob", rank: 2, text: "two" });
   assert.deepEqual(await value(anonymous.query("list")), []);
-  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, guard aggregates and external values like derived ones, let rows follow another row's rule (live watches included), and follow policy redeploys");
+  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, guard aggregates and external values like derived ones, guard queue jobs while workers claim them all, let rows follow another row's rule (live watches included), and follow policy redeploys");
 } catch (error) {
   console.error(error);
   console.error(cluster.logTails());

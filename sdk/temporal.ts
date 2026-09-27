@@ -3,6 +3,8 @@ import { collection, component, fail, mutation, plainObject, query, requireName,
 import type {
   Access, Collection, Component, Context, HistoryIdentity, MutationContext, MutationMethod, QueryContext, QueryMethod, RangeOptions, RangeQuery, Row,
 } from "./core.ts";
+import type { CollectionAccess } from "./access.ts";
+import { asDefiner } from "./define.ts";
 import { schema as adopt, v, ValidationError, type Optional, type Schema, type SchemaLike } from "./schema.ts";
 
 function* pages<T, K>(ctx: Context, index: { range(options: RangeOptions): RangeQuery<T, K> }, bounds: Omit<RangeOptions, "limit" | "after">): Generator<Row<T, K>> {
@@ -167,6 +169,14 @@ export interface QueueOptions<P, R> {
   readonly result?: SchemaLike<R>;
   /** How long the process first in line has new work to itself before any process may claim it. Default 1,000. */
   readonly turnMs?: number;
+  /**
+   * Who may read and write job records, as collection(...).access declares it for the
+   * `records` collection: callers' reads (get, scan, ready, stats) show what the read rule
+   * allows, and enqueue, retry and cancel write a job as the caller, `next` being the job
+   * enqueued. The queue's own bookkeeping acts with the application's rights. List the
+   * queue in define({ uses }) (or its `collections`) so the server enforces it.
+   */
+  readonly access?: CollectionAccess<Job<P, R>>;
 }
 export interface QueueStats {
   /** A claim would succeed now. */
@@ -278,9 +288,17 @@ export interface QueueHttpOptions<M extends QueueMethodName> {
   readonly access?: Access;
 }
 
+/**
+ * A queue is a component: list it in define({ uses: [queue] }), or its collections in
+ * define({ collections: [...queue.collections] }), so the server stores its indexes and
+ * enforces its access rules.
+ */
 export interface Queue<P = Json, R = Json> extends QueueView<P, R>, Component {
   readonly name: string;
+  /** Job records, keyed [scope, id]; guarded by the queue's `access` when it has one. */
   readonly records: Collection<Job<P, R>, [scope: string, id: string], QueueIndexes>;
+  /** The collections to list in define({ collections }): records, line, and the shared turns and fencing. */
+  readonly collections: readonly Collection<any, any, any>[];
   /** Owners waiting for work, by scope. */
   readonly line: Collection<QueueWaiter, [scope: string, owner: string], { readonly order: readonly ["scope", "since", "owner"]; readonly expiry: readonly ["expiresAt"] }>;
   /** The same queue restricted to one namespace of the shared collection. */
@@ -291,6 +309,9 @@ export interface Queue<P = Json, R = Json> extends QueueView<P, R>, Component {
   http<const Prefix extends string, const M extends QueueMethodName = typeof workerMethods[number]>(
     prefix: Prefix, options?: QueueHttpOptions<M> & { readonly scope?: (ctx: QueryContext) => string }): QueueHttp<Prefix, P, R, M>;
 }
+
+/** A caller's lease identity, read before the queue looks its job up. */
+interface Wanted { readonly key: [string, string]; readonly owner: unknown; readonly token: number; readonly history: string }
 
 function leaseError(): never {
   return fail("LEASE_LOST", "Job lease is missing, expired, or held by another claim");
@@ -315,7 +336,7 @@ const MAX_COUNT_UP_TO = 10_000;
 /** Leased durable work with fencing tokens, retries, delays and renewal, in ordinary records. */
 export function queue<P = Json, R = Json>(name: string, options: QueueOptions<P, R> = {}): Queue<P, R> {
   reserved(name, "Queue name");
-  const settings = plainObject(options, "Queue options", ["lease", "retry", "payload", "result", "turnMs"]);
+  const settings = plainObject(options, "Queue options", ["lease", "retry", "payload", "result", "turnMs", "access"]);
   const leaseSettings = plainObject(settings.lease ?? {}, "Lease options", ["defaultMs", "maxMs"]);
   const maxLeaseMs = (leaseSettings.maxMs ?? 300_000) as number;
   integer(maxLeaseMs, "lease.maxMs", 1);
@@ -334,13 +355,19 @@ export function queue<P = Json, R = Json>(name: string, options: QueueOptions<P,
   }
   const payloadSchema = settings.payload === undefined ? null : adopt(settings.payload as SchemaLike<P>);
   const resultSchema = settings.result === undefined ? null : adopt(settings.result as SchemaLike<R>);
-  const records = collection<Job<P, R>>(name)
+  const indexed = collection<Job<P, R>>(name)
     .key(v.tuple([v.string(), v.string({ min: 1 })]))
     .index("ready", ["scope", "state", "availableAt"])
     .index("turns", ["scope", "queued", "priority", "turn", "availableAt"])
     .index("later", ["scope", "queued", "availableAt"])
     .index("leases", ["scope", "state", "leaseExpiresAt"])
     .index("expiry", ["state", "leaseExpiresAt"]);
+  const records = settings.access === undefined ? indexed : indexed.access(settings.access as CollectionAccess<Job<P, R>>);
+  // With access, the queue acts for the application wherever it needs every job regardless
+  // of the caller: finding jobs, leasing, promoting delayed ones, turns, fencing, the line,
+  // lease reports. Callers' own reads, and the jobs they enqueue, retry or cancel, stay theirs.
+  // Keep app-supplied values and callbacks out of these: whatever runs inside acts for the app.
+  const definer = <T>(ctx: Context, run: () => T): T => asDefiner(ctx, run);
   const line = collection<QueueWaiter>(`${name}.line`)
     .key(v.tuple([v.string(), v.string({ min: 1 })]))
     .index("order", ["scope", "since", "owner"])
@@ -367,17 +394,30 @@ export function queue<P = Json, R = Json>(name: string, options: QueueOptions<P,
     const key = (id: string): [string, string] => { requireName(id, "Job ID"); return [scope, id]; };
     const clockKey = (priority: number) => canonicalJson([name, scope, priority]);
     const groupKey = (priority: number, group: string) => canonicalJson([name, scope, priority, group]);
-    function holds(ctx: MutationContext, identity: LeaseIdentity, now: number): Job<P, R> | null {
+    /** A lease identity read once, as the caller, before anything runs as the definer. */
+    function wanted(identity: LeaseIdentity): Wanted {
       plainObject(identity, "Lease identity");
       integer(identity.token, "Lease token", 1);
-      const job = ctx.get(records, key(identity.id));
-      const history = ctx.history();
-      if (!job || job.state !== "leased" || job.lease!.owner !== identity.owner || job.lease!.token !== identity.token ||
-          now >= job.lease!.expiresAt || canonicalJson(identity.history ?? null) !== canonicalJson(history) ||
-          canonicalJson(job.lease!.history ?? null) !== canonicalJson(history)) return null;
+      return { key: key(identity.id), owner: identity.owner, token: identity.token, history: canonicalJson(identity.history ?? null) };
+    }
+    /** As the definer: the job a lease still holds, or null. */
+    function holding(ctx: MutationContext, lease: Wanted, now: number, history: string): Job<P, R> | null {
+      const job = ctx.get(records, lease.key);
+      if (!job || job.state !== "leased" || job.lease!.owner !== lease.owner || job.lease!.token !== lease.token ||
+          now >= job.lease!.expiresAt || lease.history !== history || canonicalJson(job.lease!.history ?? null) !== history) return null;
       return job;
     }
-    const held = (ctx: MutationContext, identity: LeaseIdentity, now: number): Job<P, R> => holds(ctx, identity, now) ?? leaseError();
+    /** Update the job a lease holds, as the definer: the lease, not the caller's rules, entitles its holder. */
+    function report(ctx: MutationContext, identity: LeaseIdentity, now: number, change: (job: Job<P, R>) => Job<P, R>): Job<P, R> {
+      const lease = wanted(identity);
+      const history = canonicalJson(ctx.history());
+      return definer(ctx, () => {
+        const job = holding(ctx, lease, now, history) ?? leaseError();
+        const updated = change(job);
+        ctx.set(records, lease.key, updated);
+        return updated;
+      });
+    }
     // A running lease changes the job at its expiry, whether or not anyone claims it again.
     function current(ctx: Context, job: Job<P, R>, now: number): Job<P, R> {
       if (job.state === "leased" && now < job.lease!.expiresAt) ctx.changesAt(job.lease!.expiresAt);
@@ -479,29 +519,45 @@ export function queue<P = Json, R = Json>(name: string, options: QueueOptions<P,
       const leaseMs = leaseLength(choice.leaseMs);
       const admit = choice.admit as ClaimOptions<P>["admit"];
       if (admit !== undefined && typeof admit !== "function") throw new TypeError("admit must be a function");
+      const waitMs = choice.waitMs as number | undefined;
+      if (waitMs !== undefined) integer(waitMs, "waitMs");
       const now = clock(ctx);
-      // First in line, yet it let work wait a whole turn: it is gone or stuck, and loses its place to whoever claims instead.
-      const first = max > 0 ? head(ctx, now) : null;
-      if (first !== null && first.owner !== owner) {
-        const since = oldestReadyAt(ctx, now);
-        if (since !== null && now >= since + turnMs) ctx.delete(line, [scope, first.owner]);
-      }
       const claims: Claim<P>[] = [];
-      while (claims.length < max) {
-        const claim = lease(ctx, owner, leaseMs, now);
-        if (claim === null) break;
-        if (admit === undefined || admit(claim)) claims.push(claim);
-        else ctx.delete(records, key(claim.id));
+      // Leasing, the line, turns and fencing act for the application: a claim takes jobs
+      // whoever claims. Only admit, the application's check of each claim, runs as the caller.
+      function overtake() {
+        // First in line, yet it let work wait a whole turn: it is gone or stuck, and loses its place to whoever claims instead.
+        const first = max > 0 ? head(ctx, now) : null;
+        if (first !== null && first.owner !== owner) {
+          const since = oldestReadyAt(ctx, now);
+          if (since !== null && now >= since + turnMs) ctx.delete(line, [scope, first.owner]);
+        }
       }
-      if (choice.waitMs !== undefined) {
-        integer(choice.waitMs, "waitMs");
+      function take() {
+        for (let claim; claims.length < max && (claim = lease(ctx, owner, leaseMs, now)) !== null;) claims.push(claim);
+      }
+      function wait() {
+        if (waitMs === undefined) return;
         const spot = [scope, owner] as [string, string];
         const waiting = ctx.get(line, spot);
-        if (claims.length < max && choice.waitMs > 0) {
+        if (claims.length < max && waitMs > 0) {
           const since = waiting !== null && waiting.expiresAt > now ? waiting.since : now;
-          ctx.set(line, spot, { scope, owner, room: max - claims.length, since, expiresAt: now + choice.waitMs });
+          ctx.set(line, spot, { scope, owner, room: max - claims.length, since, expiresAt: now + waitMs });
         } else if (waiting !== null) ctx.delete(line, spot);
       }
+      if (admit === undefined) {
+        definer(ctx, () => { overtake(); take(); wait(); });
+        return claims;
+      }
+      definer(ctx, overtake);
+      while (claims.length < max) {
+        const claim = definer(ctx, () => lease(ctx, owner, leaseMs, now));
+        if (claim === null) break;
+        const id = claim.id;
+        if (admit(claim)) claims.push(claim);
+        else definer(ctx, () => ctx.delete(records, key(id)));
+      }
+      definer(ctx, wait);
       return claims;
     }
     return Object.freeze({
@@ -517,17 +573,24 @@ export function queue<P = Json, R = Json>(name: string, options: QueueOptions<P,
         const group = (choice.group ?? null) as string | null;
         if (group !== null) requireName(group, "Group");
         const availableAt = choice.at !== undefined ? choice.at as number : now + ((choice.delayMs as number | undefined) ?? 0);
-        const stored = ctx.get(records, key(id));
-        const previous = stored && effective(stored, now);
-        if (previous !== null && (choice.replace !== true || previous.state === "pending" || previous.state === "leased")) {
-          fail("JOB_EXISTS", `Job ${id} already exists`);
-        }
+        const replace = choice.replace === true;
+        const at = key(id);
+        // Whether the job exists, and its turn, whoever enqueues; the job itself is written as
+        // the caller, so access rules check it (`next` is the job).
+        const turn = definer(ctx, () => {
+          const stored = ctx.get(records, at);
+          const previous = stored && effective(stored, now);
+          if (previous !== null && (!replace || previous.state === "pending" || previous.state === "leased")) {
+            fail("JOB_EXISTS", `Job ${id} already exists`);
+          }
+          return place(ctx, priority, group);
+        });
         const job: Job<P, R> = {
           scope, id, payload, state: "pending", availableAt, leaseExpiresAt: null, lease: null,
           attempts: 0, createdAt: now, updatedAt: now, result: null, error: null,
-          priority, group, turn: place(ctx, priority, group), queued: queuedAt(availableAt, now),
+          priority, group, turn, queued: queuedAt(availableAt, now),
         };
-        ctx.set(records, key(id), job);
+        ctx.set(records, at, job);
         return job;
       },
       claim(ctx: MutationContext, owner: string, claimOptions: { readonly leaseMs?: number } = {}): Claim<P> | null {
@@ -538,81 +601,85 @@ export function queue<P = Json, R = Json>(name: string, options: QueueOptions<P,
       renew(ctx: MutationContext, identity: LeaseIdentity, renewOptions: { readonly leaseMs?: number } = {}): Claim<P> {
         const leaseMs = leaseLength(plainObject(renewOptions, "Renew options", ["leaseMs"]).leaseMs);
         const now = clock(ctx);
-        const job = held(ctx, identity, now);
-        const extended = { ...job.lease!, expiresAt: now + leaseMs };
-        const renewed: Job<P, R> = { ...job, lease: extended, leaseExpiresAt: extended.expiresAt, updatedAt: now };
-        ctx.set(records, key(job.id), renewed);
+        const renewed = report(ctx, identity, now, (job) => {
+          const extended = { ...job.lease!, expiresAt: now + leaseMs };
+          return { ...job, lease: extended, leaseExpiresAt: extended.expiresAt, updatedAt: now };
+        });
         return claimOf(renewed);
       },
       renewMany(ctx: MutationContext, leases: readonly LeaseIdentity[], renewOptions: { readonly leaseMs?: number } = {}): (number | null)[] {
         if (!Array.isArray(leases)) throw new TypeError("renewMany takes an array of leases");
         const leaseMs = leaseLength(plainObject(renewOptions, "Renew options", ["leaseMs"]).leaseMs);
         const now = clock(ctx);
-        return leases.map((identity) => {
-          const job = holds(ctx, identity, now);
+        const wants = Array.from(leases, wanted);
+        const history = canonicalJson(ctx.history());
+        return definer(ctx, () => wants.map((lease) => {
+          const job = holding(ctx, lease, now, history);
           if (job === null) return null;
           const extended = { ...job.lease!, expiresAt: now + leaseMs };
-          ctx.set(records, key(job.id), { ...job, lease: extended, leaseExpiresAt: extended.expiresAt, updatedAt: now });
+          ctx.set(records, lease.key, { ...job, lease: extended, leaseExpiresAt: extended.expiresAt, updatedAt: now });
           return extended.expiresAt;
-        });
+        }));
       },
       complete(ctx: MutationContext, identity: LeaseIdentity, result: R): Job<P, R> {
         validated(resultSchema, result, "Result");
         const now = clock(ctx);
-        const job = held(ctx, identity, now);
-        const completed: Job<P, R> = { ...job, state: "completed", availableAt: null, lease: null, leaseExpiresAt: null, updatedAt: now, result, error: null, queued: null };
-        ctx.set(records, key(job.id), completed);
-        return completed;
+        return report(ctx, identity, now, (job) =>
+          ({ ...job, state: "completed", availableAt: null, lease: null, leaseExpiresAt: null, updatedAt: now, result, error: null, queued: null }));
       },
       fail(ctx: MutationContext, identity: LeaseIdentity, error: Json, failOptions: { readonly retry?: boolean; readonly delayMs?: number } = {}): Job<P, R> {
         const choice = plainObject(failOptions, "Fail options", ["retry", "delayMs"]);
         canonicalJson(error);
-        if (choice.delayMs !== undefined) integer(choice.delayMs, "delayMs");
+        const delayMs = choice.delayMs as number | undefined;
+        if (delayMs !== undefined) integer(delayMs, "delayMs");
+        const retry = choice.retry !== false;
         const now = clock(ctx);
-        const job = held(ctx, identity, now);
-        const final = policy === null || choice.retry === false || job.attempts >= policy.maxAttempts;
-        const availableAt = final ? null : now + ((choice.delayMs as number | undefined) ?? backoff(job.attempts));
-        // A retried job keeps its turn: it goes before work that came after it.
-        const failed: Job<P, R> = {
-          ...job, state: final ? "failed" : "pending", lease: null, leaseExpiresAt: null, updatedAt: now, error,
-          availableAt, queued: availableAt === null ? null : queuedAt(availableAt, now),
-        };
-        ctx.set(records, key(job.id), failed);
-        return failed;
+        return report(ctx, identity, now, (job) => {
+          const final = policy === null || !retry || job.attempts >= policy.maxAttempts;
+          const availableAt = final ? null : now + (delayMs ?? backoff(job.attempts));
+          // A retried job keeps its turn: it goes before work that came after it.
+          return {
+            ...job, state: final ? "failed" : "pending", lease: null, leaseExpiresAt: null, updatedAt: now, error,
+            availableAt, queued: availableAt === null ? null : queuedAt(availableAt, now),
+          };
+        });
       },
       release(ctx: MutationContext, identity: LeaseIdentity, releaseOptions: { readonly delayMs?: number } = {}): Job<P, R> {
         const delayMs = plainObject(releaseOptions, "Release options", ["delayMs"]).delayMs ?? 0;
         integer(delayMs, "delayMs");
         const now = clock(ctx);
-        const job = held(ctx, identity, now);
         // Like a failure that retries, it keeps its turn and attempt count, but records no error.
-        const released: Job<P, R> = {
+        return report(ctx, identity, now, (job) => ({
           ...job, state: "pending", lease: null, leaseExpiresAt: null, updatedAt: now,
-          availableAt: now + (delayMs as number), queued: queuedAt(now + (delayMs as number), now),
-        };
-        ctx.set(records, key(job.id), released);
-        return released;
+          availableAt: now + delayMs, queued: queuedAt(now + delayMs, now),
+        }));
       },
       retry(ctx: MutationContext, id: string, retryOptions: { readonly delayMs?: number } = {}): Job<P, R> {
         const delayMs = plainObject(retryOptions, "Retry options", ["delayMs"]).delayMs ?? 0;
         integer(delayMs, "delayMs");
         const now = clock(ctx);
-        const stored = ctx.get(records, key(id));
+        const at = key(id);
+        // The caller requeues a job it can read, written as the caller; its turn is the queue's.
+        const stored = ctx.get(records, at);
         const job = stored && effective(stored, now);
         if (!job || job.state !== "failed") fail("JOB_NOT_FAILED", "Only failed jobs can be retried");
         const priority = priorityOf(job);
         const group = job.group ?? null;
+        const turn = definer(ctx, () => place(ctx, priority, group));
         const pending: Job<P, R> = {
           ...job, state: "pending", availableAt: now + delayMs, attempts: 0, updatedAt: now, result: null,
-          priority, group, turn: place(ctx, priority, group), queued: queuedAt(now + delayMs, now),
+          priority, group, turn, queued: queuedAt(now + delayMs, now),
         };
-        ctx.set(records, key(id), pending);
+        ctx.set(records, at, pending);
         return pending;
       },
       cancel(ctx: MutationContext, id: string): boolean {
-        if (ctx.get(records, key(id)) === null) return false;
-        ctx.delete(records, key(id));
-        return true;
+        const at = key(id);
+        // Found whoever asks, deleted as the caller: a delete the rules deny of a job the
+        // caller can't see does nothing, so the job still being there means it wasn't cancelled.
+        if (definer(ctx, () => ctx.get(records, at)) === null) return false;
+        ctx.delete(records, at);
+        return definer(ctx, () => ctx.get(records, at)) === null;
       },
       get(ctx: Context, id: string): Job<P, R> | null {
         const job = ctx.get(records, key(id));
