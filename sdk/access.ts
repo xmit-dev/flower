@@ -434,7 +434,7 @@ class Guard {
   rows(rows: Row[], fields: readonly string[] = []): Row[] {
     return rows.filter((row) => this.visible(row.key, row.value, fields)).map((row) => ({ key: row.key, value: this.redact(row.key, row.value) }));
   }
-  admit(key: string, previous: Json, next: Json | undefined): Json | undefined {
+  admit(key: string, previous: Json, next: Json | undefined, clear: readonly string[] = []): Json | undefined {
     const denied = () => Object.assign(new Error(`Access policy denies this write to ${this.collection}`), { code: "ACCESS_DENIED" });
     if (previous === null && next === undefined) return undefined;
     if (next === undefined) {
@@ -447,7 +447,7 @@ class Guard {
         written !== null && typeof written === "object" && !Array.isArray(written)) {
       const carried: Record<string, Json> = { ...written };
       for (const field of Object.keys(fields)) {
-        if (!Object.hasOwn(carried, field) && Object.hasOwn(previous, field) && !this.fieldReadable(field, key, previous)) carried[field] = previous[field];
+        if (!Object.hasOwn(carried, field) && !clear.includes(field) && Object.hasOwn(previous, field) && !this.fieldReadable(field, key, previous)) carried[field] = previous[field];
       }
       written = carried;
     }
@@ -538,9 +538,9 @@ export function enforceAccess(host: Host, collections: readonly { name: string; 
         : null;
       return { rows: page.map(({ row }) => ({ key: row.key, value: access.redact(row.key, row.value) })), cursor };
     },
-    set(reference: any, key: any, value: Json) {
+    set(reference: any, key: any, value: Json, options?: { clear?: readonly string[] }) {
       const access = guard(reference?.name);
-      return host.set(reference, key, access ? access.admit(key, host.get(reference, key), value) : value);
+      return host.set(reference, key, access ? access.admit(key, host.get(reference, key), value, options?.clear) : value);
     },
     delete(reference: any, key: any) {
       const access = guard(reference?.name);

@@ -769,13 +769,16 @@ impl Access {
 
     /// Admit a write of `next` (`None` deletes) over `previous`, returning the
     /// value to store. Fields the caller can't read and didn't write keep
-    /// their stored values, so a read-modify-write of a redacted row
-    /// preserves them. Denied inserts and updates fail identically.
+    /// their stored values, so a read-modify-write of a redacted row preserves
+    /// them, except those in `clear` (`ctx.set(…, {clear: ["token"]})`): the
+    /// write removes them, which their write rules must allow. Denied inserts
+    /// and updates fail identically.
     pub(super) fn admit(
         &self,
         key: &str,
         previous: Option<&Value>,
         next: Option<Value>,
+        clear: &[String],
     ) -> EngineResult<Option<Value>> {
         let denied = || {
             EngineError::new(
@@ -801,6 +804,7 @@ impl Access {
         {
             for field in &self.fields {
                 if !written.contains_key(&field.name)
+                    && !clear.contains(&field.name)
                     && let Some(value) = entries.get(&field.name)
                     && !self.field_readable(field, self.subject(key, &parts, Some(stored), None))
                 {
@@ -886,6 +890,36 @@ impl Engine<'_> {
             Some(flip) => self.declare_change(&json!(flip)),
             None => Ok(()),
         }
+    }
+}
+
+/// The fields `ctx.set(…, {clear})` removes instead of carrying over.
+pub(super) fn set_clear(options: Option<&Value>) -> EngineResult<Vec<String>> {
+    let invalid = || {
+        EngineError::new(
+            "INVALID_VALUE",
+            "set options must be {clear: [field, …]}: at most 256 nonempty field names",
+        )
+    };
+    match options {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Object(options)) if options.keys().all(|option| option == "clear") => {
+            match options.get("clear") {
+                None => Ok(Vec::new()),
+                Some(Value::Array(fields)) if fields.len() <= 256 => fields
+                    .iter()
+                    .map(|field| {
+                        field
+                            .as_str()
+                            .filter(|field| !field.is_empty())
+                            .map(str::to_owned)
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(invalid),
+                Some(_) => Err(invalid()),
+            }
+        }
+        Some(_) => Err(invalid()),
     }
 }
 

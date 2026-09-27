@@ -65,12 +65,13 @@ const notes = collection("notes", v.object({ owner: v.string(), text: v.string()
 <tr><th><code data-api-symbol="OperandLike">OperandLike&lt;T&gt;</code></th><td>An <code>Operand</code> or a JSON value of type <code>T</code>.</td></tr>
 <tr><th><code data-api-symbol="Rule">Rule</code></th><td>A condition, combined with <code>and</code>, <code>or</code> and <code>not</code>.</td></tr>
 <tr><th><code data-api-symbol="RuleLike">RuleLike</code></th><td>A <code>Rule</code>, or <code>true</code> or <code>false</code> for everyone or no one.</td></tr>
+<tr><th><code data-api-symbol="SetOptions">SetOptions&lt;T&gt;</code></th><td><code>{clear?}</code> for <code>ctx.set</code>: fields to remove when the value leaves them out. Hidden fields otherwise keep their stored values; clearing one needs the field's <code>write</code> rule.</td></tr>
 <tr><th><code data-api-symbol="AccessManifest">AccessManifest</code></th><td>The compiled policy in the collection's manifest entry: <code>read</code>, <code>insert</code>, <code>update</code>, <code>delete</code> and <code>fields</code> rules as JSON.</td></tr>
 </tbody></table></div>
 <ul>
 <li>Reads: a hidden row reads as absent and drops out of scans, queries and range pages. Pages skip hidden rows before limit, offset and cursor, so they stay full and a cursor never points at a hidden row. A row found through an index on a field the caller can't read stays hidden too.</li>
 <li>Writes: a denied insert, update or delete fails with <code>ACCESS_DENIED</code>. Denied inserts and updates fail alike, though whether a write succeeds can still reveal that a key exists.</li>
-<li>A write that leaves out a field the caller can't read keeps its stored value, so a read-modify-write of a redacted row is safe. Make such fields optional in the record schema.</li>
+<li>A write that leaves out a field the caller can't read keeps its stored value, so a read-modify-write of a redacted row is safe. Make such fields optional in the record schema. To remove such a field, list it: <code>ctx.set(collection, key, value, { clear: ["token"] })</code>. Its <code>write</code> rule decides, so its owner can clear a write-only field (<code>{ read: admin, write: owner }</code>) while other hidden fields stay as they are.</li>
 <li>Only callers are checked. Derived values, maintenance tasks and the authorization hook run without one and see every row: expose them deliberately.</li>
 <li>Policies deploy with the code, atomically, and cached results follow them.</li>
 <li>A rule that compares <code>now</code> makes the result time dependent, like <code>ctx.now()</code>: it isn't cached, and it changes by itself when the comparison flips, so <code>row("expiresAt").gt(now)</code> hides a row the moment it expires.</li>

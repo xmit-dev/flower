@@ -1163,13 +1163,16 @@ impl Engine<'_> {
                     "source key",
                     "INVALID_REFERENCE",
                 )?;
-                let value = if operation == "set" {
+                let (value, clear) = if operation == "set" {
+                    // `{clear: [field…]}` removes those fields when the value
+                    // leaves them out, even where the caller can't read them.
+                    let clear = access::set_clear(values.get(1))?;
                     let value = values.first_mut().ok_or_else(|| {
                         EngineError::new("INVALID_VALUE", "Value is not valid JSON")
                     })?;
-                    Some(normalize(value.take(), "INVALID_VALUE")?)
+                    (Some(normalize(value.take(), "INVALID_VALUE")?), clear)
                 } else {
-                    None
+                    (None, Vec::new())
                 };
                 let value = match self.write_access(collection) {
                     None => value,
@@ -1179,7 +1182,7 @@ impl Engine<'_> {
                         let id = source_id(collection, key);
                         self.record_read(&id);
                         let previous = self.source(&id).cloned();
-                        let admitted = access.admit(key, previous.as_deref(), value);
+                        let admitted = access.admit(key, previous.as_deref(), value, &clear);
                         self.settle_access(&access)?;
                         admitted?
                     }

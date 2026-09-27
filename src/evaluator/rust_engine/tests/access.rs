@@ -62,6 +62,15 @@ fn fixture() -> Fixture {
             "delete",
             (|args, host| host("delete", json!([notes(), args]))) as Callback,
         ),
+        (
+            "setWith",
+            (|args, host| {
+                host(
+                    "set",
+                    json!([notes(), args["key"], args["value"], args["options"]]),
+                )
+            }) as Callback,
+        ),
     ])
 }
 
@@ -654,4 +663,77 @@ fn rules_about_now_are_time_dependent_and_say_when_they_flip() {
     .unwrap();
     assert_eq!(point.value["text"], "soon");
     assert_eq!(point.query_changes_at, Some(2500));
+}
+
+#[test]
+fn clear_removes_hidden_fields_when_their_write_rule_allows() {
+    let write = |data: &Records, fixture: &Fixture, value: Value, options: Value| {
+        call(
+            data,
+            fixture,
+            "mutation",
+            "setWith",
+            json!({"key":"a1","value":value,"options":options}),
+            Some(alice()),
+        )
+    };
+    let edited = json!({"owner":"alice","rank":1,"text":"edited"});
+    // `secret` is admin-only with no write rule: its owner can't clear it.
+    let (data, fixture) = setup();
+    let error = write(&data, &fixture, edited.clone(), json!({"clear":["secret"]}))
+        .err()
+        .expect("denied");
+    assert_eq!(error.code, "ACCESS_DENIED");
+    // A write-only field: admins read it, owners may set or clear it.
+    let mut policy = policy();
+    policy["fields"]["secret"]["write"] =
+        json!({"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]});
+    let (data, fixture) = with_policy(policy, None);
+    let stored =
+        |result: EngineResult<Evaluation>| result.unwrap().puts[&source_id("notes", "a1")].clone();
+    assert_eq!(
+        stored(write(&data, &fixture, edited.clone(), Value::Null))["secret"],
+        "s1"
+    );
+    assert_eq!(
+        stored(write(&data, &fixture, edited.clone(), json!({"clear":[]})))["secret"],
+        "s1"
+    );
+    assert_eq!(
+        stored(write(
+            &data,
+            &fixture,
+            edited.clone(),
+            json!({"clear":["secret"]})
+        )),
+        edited
+    );
+    // Clearing a field the value writes, or one that isn't there, changes nothing.
+    assert_eq!(
+        stored(write(
+            &data,
+            &fixture,
+            edited.clone(),
+            json!({"clear":["text","gone"]})
+        ))["secret"],
+        "s1"
+    );
+    let mut rotated = edited.clone();
+    rotated["secret"] = json!("s9");
+    assert_eq!(
+        stored(write(&data, &fixture, rotated.clone(), Value::Null))["secret"],
+        "s9"
+    );
+    for options in [
+        json!({"clear":"secret"}),
+        json!({"clear":[""]}),
+        json!({"clear":[1]}),
+        json!({"merge":true}),
+        json!(true),
+    ] {
+        let error = write(&data, &fixture, edited.clone(), options)
+            .err()
+            .expect("invalid");
+        assert_eq!(error.code, "INVALID_VALUE");
+    }
 }

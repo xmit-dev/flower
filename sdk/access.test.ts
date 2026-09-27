@@ -200,6 +200,54 @@ test("rules order numbers and strings by code point, match prefixes, read key pa
   assert.throws(() => collection<Item>("bad").access(({ key }) => ({ read: key.at("").exists() })), /nonempty/);
 });
 
+test("clear removes hidden fields where their write rules allow, and keeps the rest", async () => {
+  type Account = { owner: string; name: string; token?: string; plan?: string };
+  const accounts = collection<Account>("accounts").access(({ principal, row, next }) => {
+    const admin = principal.claim("role").eq("admin");
+    const mine = row("owner").eq(principal.subject);
+    return {
+      read: mine.or(admin),
+      insert: next("owner").eq(principal.subject).or(admin),
+      update: mine.or(admin),
+      fields: {
+        // Write-only for its owner: admins read it, owners set or clear it.
+        token: { read: admin, write: mine.or(next("owner").eq(principal.subject)).or(admin) },
+        // Admin-only both ways.
+        plan: { read: admin },
+      },
+    };
+  });
+  const app = define({
+    collections: [accounts],
+    auth: { authenticate: (_ctx, credentials) => typeof credentials === "string" ? { subject: credentials, claims: { role: credentials === "root" ? "admin" : "user" } } : null },
+    http: {
+      get: query("get", { access: "public", args: v.string() }, (ctx, id) => ctx.get(accounts, id)),
+      put: mutation("put", { args: v.object({ id: v.string(), account: v.json(), clear: v.optional(v.json()) }) }, (ctx, { id, account, clear }) => {
+        ctx.set(accounts, id, account as Account, clear === undefined ? undefined : { clear } as never);
+        return null;
+      }),
+    },
+  });
+  const db = await testDatabase(app);
+  const as = (credentials: string) => ({ credentials });
+  db.mutate("put", { id: "a", account: { owner: "alice", name: "A", token: "t1", plan: "pro" } }, as("root"));
+  assert.deepEqual(db.query("get", "a", as("alice")), { owner: "alice", name: "A" });
+  // Without clear, hidden fields survive a read-modify-write.
+  db.mutate("put", { id: "a", account: { owner: "alice", name: "B" } }, as("alice"));
+  assert.deepEqual(db.query("get", "a", as("root")), { owner: "alice", name: "B", token: "t1", plan: "pro" });
+  // The owner clears the token; the plan it can't write stays.
+  db.mutate("put", { id: "a", account: { owner: "alice", name: "B" }, clear: ["token"] }, as("alice"));
+  assert.deepEqual(db.query("get", "a", as("root")), { owner: "alice", name: "B", plan: "pro" });
+  assert.throws(() => db.mutate("put", { id: "a", account: { owner: "alice", name: "B" }, clear: ["plan"] }, as("alice")), (error: any) => error.failure?.code === "ACCESS_DENIED");
+  assert.throws(() => db.mutate("put", { id: "a", account: { owner: "alice", name: "B" }, clear: "plan" }, as("alice")), /clear must list/);
+  // clear is typed by the collection's fields.
+  mutation("typed", (ctx) => {
+    // @ts-expect-error: not a field of Account.
+    ctx.set(accounts, "a", { owner: "alice", name: "A" }, { clear: ["tokn"] });
+    return null;
+  });
+});
+
 test("a collection with access must be declared, and callers' views never reach the auth hook", async () => {
   const sessions = collection<{ subject: string }>("sessions").access({ read: false, insert: true });
   const orphan = collection<{ owner: string }>("orphan").access({ read: true });

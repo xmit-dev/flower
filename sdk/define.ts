@@ -4,7 +4,7 @@ import {
 } from "./core.ts";
 import type {
   Access, AuthorizationRequest, Collection, Component, ComponentParts, Definition, Derived, Failure, FlowerModule, HttpMap,
-  ManifestMethod, MutationContext, Principal, QueryContext, Task, TaskFailure, Trigger,
+  ManifestMethod, MutationContext, Principal, QueryContext, SetOptions, Task, TaskFailure, Trigger,
 } from "./core.ts";
 import { aggregateSource, collectionManifest, normalizeAggregateMetadata } from "./indexing.ts";
 import { keyManifest, type ManagedKey } from "./keys.ts";
@@ -121,6 +121,16 @@ function sameValue(a: Json, b: Json): boolean {
   return true;
 }
 
+function setClear(options: unknown): string[] {
+  if (options === undefined) return [];
+  const { clear } = plainObject(options, "set options", ["clear"]);
+  if (clear === undefined) return [];
+  if (!Array.isArray(clear) || clear.length > 256 || clear.some((field) => typeof field !== "string" || !field)) {
+    throw new TypeError("set option clear must list at most 256 nonempty field names");
+  }
+  return [...clear] as string[];
+}
+
 function bind(host: Host, runtime: Runtime): Session {
   const touched = new Map<string, Touch>();
   // Row existence this mutation has observed or written, for existence-only collections.
@@ -180,8 +190,9 @@ function bind(host: Host, runtime: Runtime): Session {
       if (!owner || !collectionInfo(owner)?.key) return page;
       return { rows: page.rows.map((row: { key: string; value: Json }) => ({ key: JSON.parse(row.key), value: row.value })), cursor: page.cursor };
     },
-    set(reference: any, key: unknown, value: unknown) {
+    set(reference: any, key: unknown, value: unknown, options?: SetOptions) {
       guard(reference);
+      const clear = setClear(options);
       const raw = encodeKey(reference, key);
       const schema = collectionInfo(reference)?.value;
       if (schema) {
@@ -194,7 +205,9 @@ function bind(host: Host, runtime: Runtime): Session {
         }
       }
       track(reference, raw);
-      host.set(reference, raw, value);
+      // Older servers read three arguments; send the options only when they matter.
+      if (clear.length) host.set(reference, raw, value, { clear });
+      else host.set(reference, raw, value);
       observe(reference, raw, true);
     },
     delete(reference: any, key: unknown) {

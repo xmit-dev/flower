@@ -271,8 +271,17 @@ export interface QueryContext extends Context {
   /** The authenticated caller, or null for anonymous and unauthenticated calls. */
   principal(): Principal | null;
 }
+/** How ctx.set stores a row. */
+export interface SetOptions<T = Json> {
+  /**
+   * Fields to remove when the value leaves them out. Fields an access policy hides
+   * from the caller otherwise keep their stored values, so a read-modify-write of a
+   * redacted row is safe; clearing one needs the field's write rule.
+   */
+  readonly clear?: readonly FieldOf<T>[];
+}
 export interface MutationContext extends QueryContext {
-  set<T, K extends Json>(collection: Collection<T, K, any>, key: K, value: T): void;
+  set<T, K extends Json>(collection: Collection<T, K, any>, key: K, value: T, options?: SetOptions<NoInfer<T>>): void;
   delete<T, K extends Json>(collection: Collection<T, K, any>, key: K): void;
   materialize<V>(derived: Derived<null, V>): void;
   materialize<A, V>(derived: Derived<A, V>, args: A): void;

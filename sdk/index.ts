@@ -7,7 +7,7 @@ export {
 } from "./core.ts";
 export type {
   Failure, IndexScalar, IndexMap, FieldOf, IndexValues, EqualityValue, RangeOptions, ScanOptions, Row, RangePage, Query, RangeQuery, Index, Collection,
-  Principal, AuthorizationRequest, HistoryIdentity, Context, QueryContext, MutationContext,
+  Principal, AuthorizationRequest, HistoryIdentity, Context, QueryContext, MutationContext, SetOptions,
   AggregateMetadata, Derived, Materialization, DeriveOptions, QueryConsistency, Access, MethodSpec, MutationSpec, QuerySpec,
   QueryMethod, MutationMethod, TransactionTarget, TransactionCall, TransactionPlan, TransactionMethod, TransactionResult,
   Definition, HttpMethod, HttpMap, ManifestMethod, CollectionManifest, FlowerModule,

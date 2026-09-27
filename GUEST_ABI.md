@@ -155,7 +155,10 @@ and `delete` rules plus per-field `read`/`write` rules, each a JSON rule tree
 `gte`, `startsWith` over `{"ref": path}` and `{"value": json}` operands; paths
 start with `principal`, `row`, `next` or `key`, or are exactly `["now"]`). The
 host enforces it on the collection operations of queries and mutations that
-have a caller; see `src/evaluator/rust_engine/access.rs`.
+have a caller; see `src/evaluator/rust_engine/access.rs`. The host `set`
+operation takes an optional fourth argument `{"clear": [field, …]}`: hidden
+fields the value leaves out are removed instead of kept (the SDK sends it only
+when `ctx.set(…, {clear})` lists fields).
 
 ## Resource limits
 
