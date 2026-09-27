@@ -392,12 +392,11 @@ fn classify(error: &reqwest::Error) -> (String, Option<String>) {
             if let Some(code) = io_code(io) {
                 io_fallback.get_or_insert(code);
             }
-            // An io::Error may wrap an h2 error; keep walking.
-            if let Some(inner) = io.get_ref()
-                && let Some(h2) = inner.downcast_ref::<h2::Error>()
-            {
-                let (code, detail) = h2_code(h2);
-                return (code.to_owned(), detail);
+            // `io::Error::source` skips the wrapped error itself (an h2 or rustls error, or
+            // another io::Error), so descend into it explicitly.
+            if let Some(inner) = io.get_ref() {
+                source = Some(inner as &(dyn StdError + 'static));
+                continue;
             }
         }
         if let Some(hyper) = cause.downcast_ref::<hyper::Error>() {

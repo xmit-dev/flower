@@ -11,7 +11,10 @@ pub fn sse(event: &str, value: &Value) -> String {
 }
 
 pub fn snapshot(value: Value, revision: u64, sequence: u64) -> String {
-    sse("snapshot", &json!({ "sequence": sequence, "revision": revision, "value": value }))
+    sse(
+        "snapshot",
+        &json!({ "sequence": sequence, "revision": revision, "value": value }),
+    )
 }
 
 pub fn patch(value: Value, revision: u64, sequence: u64, path: &str) -> String {

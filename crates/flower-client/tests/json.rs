@@ -2,8 +2,8 @@
 //! `sdk/json.test.ts`.
 
 use flower_client::json::{
-    canonical_json, canonical_json_checked, canonical_json_of, compare_utf16, format_number, from_slice_deep, nesting,
-    stringify_len, to_js_string, truthy,
+    canonical_json, canonical_json_checked, canonical_json_of, compare_utf16, format_number,
+    from_slice_deep, nesting, stringify_len, to_js_string, truthy,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,7 +24,8 @@ fn canonical_json_matches_the_typescript_goldens() {
     assert!(cases.len() > 400);
     let (mut failures, mut misparsed) = (Vec::new(), 0);
     for case in &cases {
-        let parsed: Value = from_slice_deep(case.input.as_bytes()).unwrap_or_else(|error| panic!("{}: {error}", case.input));
+        let parsed: Value = from_slice_deep(case.input.as_bytes())
+            .unwrap_or_else(|error| panic!("{}: {error}", case.input));
         // For numbers, format the double JSON.parse chose: serde_json parses decimals exactly only
         // with float_roundtrip, which this crate must not unify into the Flower server.
         let value = match &case.bits {
@@ -36,15 +37,31 @@ fn canonical_json_matches_the_typescript_goldens() {
         }
         let canonical = canonical_json(&value);
         if canonical != case.canonical {
-            failures.push(format!("{} => {canonical}, TS {}", case.input, case.canonical));
+            failures.push(format!(
+                "{} => {canonical}, TS {}",
+                case.input, case.canonical
+            ));
         }
         if stringify_len(&value) != case.stringify_bytes {
-            failures.push(format!("{}: stringify length {} vs TS {}", case.input, stringify_len(&value), case.stringify_bytes));
+            failures.push(format!(
+                "{}: stringify length {} vs TS {}",
+                case.input,
+                stringify_len(&value),
+                case.stringify_bytes
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} mismatches:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} mismatches:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
     // Informational: without float_roundtrip, serde_json misrounds many long decimals by an ulp.
-    eprintln!("{misparsed} of {} inputs parse differently from JSON.parse in this build", cases.len());
+    eprintln!(
+        "{misparsed} of {} inputs parse differently from JSON.parse in this build",
+        cases.len()
+    );
 }
 
 #[test]
@@ -55,7 +72,10 @@ fn canonical_primitive_keys_retain_json_escaping_number_spelling_and_depth() {
         (json!(-0.0), "0"),
         (json!("a\0b🌸"), r#""a\u0000b🌸""#),
         (json!(["tenant-a", "store-1"]), r#"["tenant-a","store-1"]"#),
-        (json!([null, true, false, -0.0, 1e-7, 1e21, "\"\\"]), r#"[null,true,false,0,1e-7,1e+21,"\"\\"]"#),
+        (
+            json!([null, true, false, -0.0, 1e-7, 1e21, "\"\\"]),
+            r#"[null,true,false,0,1e-7,1e+21,"\"\\"]"#,
+        ),
     ] {
         assert_eq!(canonical_json(&value), expected);
     }
@@ -77,7 +97,11 @@ fn canonical_primitive_keys_retain_json_escaping_number_spelling_and_depth() {
 #[test]
 fn keys_sort_by_utf16_code_units_not_utf8() {
     assert_eq!(compare_utf16("😀", "\u{ffff}"), Ordering::Less);
-    assert_eq!("😀".cmp("\u{ffff}"), Ordering::Greater, "UTF-8 order differs");
+    assert_eq!(
+        "😀".cmp("\u{ffff}"),
+        Ordering::Greater,
+        "UTF-8 order differs"
+    );
     assert_eq!(compare_utf16("10", "2"), Ordering::Less);
     assert_eq!(compare_utf16("", "a"), Ordering::Less);
     assert_eq!(
@@ -99,9 +123,15 @@ fn canonical_json_of_structs_sorts_fields() {
         alpha: None,
         big: u64::MAX,
     };
-    assert_eq!(canonical_json_of(&args).unwrap(), r#"{"alpha":null,"big":18446744073709552000,"zeta":1}"#);
+    assert_eq!(
+        canonical_json_of(&args).unwrap(),
+        r#"{"alpha":null,"big":18446744073709552000,"zeta":1}"#
+    );
     // JSON.stringify spelling keeps the field order.
-    assert_eq!(to_js_string(&args).unwrap(), r#"{"zeta":1,"alpha":null,"big":18446744073709552000}"#);
+    assert_eq!(
+        to_js_string(&args).unwrap(),
+        r#"{"zeta":1,"alpha":null,"big":18446744073709552000}"#
+    );
 }
 
 #[test]
@@ -123,17 +153,41 @@ fn js_number_spelling() {
         assert_eq!(to_js_string(&value).unwrap(), expected);
     }
     assert_eq!(to_js_string(&i64::MIN).unwrap(), "-9223372036854776000");
-    assert_eq!(to_js_string(&9_007_199_254_740_993u64).unwrap(), "9007199254740992");
-    assert_eq!(to_js_string(&9_007_199_254_740_991u64).unwrap(), "9007199254740991");
-    assert_eq!(to_js_string(&f64::NAN).unwrap(), "null", "serde_json hides non-finite floats as null");
+    assert_eq!(
+        to_js_string(&9_007_199_254_740_993u64).unwrap(),
+        "9007199254740992"
+    );
+    assert_eq!(
+        to_js_string(&9_007_199_254_740_991u64).unwrap(),
+        "9007199254740991"
+    );
+    assert_eq!(
+        to_js_string(&f64::NAN).unwrap(),
+        "null",
+        "serde_json hides non-finite floats as null"
+    );
 }
 
 #[test]
 fn truthiness_is_javascripts() {
-    for value in [json!(null), json!(false), json!(0), json!(-0.0), json!(0.0), json!("")] {
+    for value in [
+        json!(null),
+        json!(false),
+        json!(0),
+        json!(-0.0),
+        json!(0.0),
+        json!(""),
+    ] {
         assert!(!truthy(&value), "{value}");
     }
-    for value in [json!(true), json!(1), json!(-1), json!("0"), json!([]), json!({})] {
+    for value in [
+        json!(true),
+        json!(1),
+        json!(-1),
+        json!("0"),
+        json!([]),
+        json!({}),
+    ] {
         assert!(truthy(&value), "{value}");
     }
 }
@@ -141,7 +195,10 @@ fn truthiness_is_javascripts() {
 #[test]
 fn deep_parsing_goes_beyond_serde_defaults_but_stays_bounded() {
     let deep = format!("{}1{}", "[".repeat(200), "]".repeat(200));
-    assert!(serde_json::from_str::<Value>(&deep).is_err(), "serde_json's default limit is 128");
+    assert!(
+        serde_json::from_str::<Value>(&deep).is_err(),
+        "serde_json's default limit is 128"
+    );
     assert!(from_slice_deep::<Value>(deep.as_bytes()).is_ok());
     let hostile = "[".repeat(100_000);
     assert!(from_slice_deep::<Value>(hostile.as_bytes()).is_err());
