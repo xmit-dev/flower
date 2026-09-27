@@ -1,0 +1,10 @@
+[package]
+name = "flower-sdk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "Write Flower applications as WebAssembly guest modules in Rust"
+license = "MIT"
+publish = false
+
+[dependencies]

@@ -1,0 +1,49 @@
+<p>This app marks an invoice ready five seconds after its last update. Save it as <code>examples/invoices.ts</code> and deploy it.</p><div class="code-block"><div class="code-head"><span>examples/invoices.ts</span><button type="button" class="copy-button" aria-label="Copy examples/invoices.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, mutation, query, v } from "@flower-js/sdk";
+import { scheduler } from "@flower-js/sdk/scheduler";
+
+const invoiceId = v.string({ min: 1 });
+const invoices = collection("invoices", v.object({
+  total: v.int({ min: 0 }), status: v.enum(["draft", "ready"]),
+}));
+
+const finalize = mutation("internal.invoice.finalize", { args: invoiceId }, (ctx, id) =&gt; {
+  const invoice = ctx.get(invoices, id);
+  if (invoice) ctx.set(invoices, id, { ...invoice, status: "ready" });
+  return null;
+});
+const timers = scheduler("invoiceTimers", { finalize });
+
+const update = mutation("internal.invoice.update", {
+  args: v.object({ id: invoiceId, total: v.int({ min: 0 }) }),
+}, (ctx, { id, total }) =&gt; {
+  ctx.set(invoices, id, { total, status: "draft" });
+  return timers.after(ctx, `finalize:${id}`, 5_000, "finalize", id);
+});
+const get = query("internal.invoice.get", { args: invoiceId }, (ctx, id) =&gt; ctx.get(invoices, id));
+
+const app = define({
+  uses: [timers],
+  http: { "invoice.update": update, "invoice.get": get },
+});
+export default app;</code></pre></div><div class="code-block"><div class="code-head"><span>Try the delayed update</span><button type="button" class="copy-button" aria-label="Copy Try the delayed update">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts deploy examples/invoices.ts
+node sdk/cli.ts call invoice.update '{"id":"inv-1","total":2400}' \
+  --request-id invoice-edit-1
+node sdk/cli.ts watch invoice.get '"inv-1"'</code></pre></div>
+<ul>
+<li><code>uses: [timers]</code> adds the timer collection and the task that runs due timers.</li>
+<li>Handler names and arguments are type-checked against the handlers you passed. The handler's schema checks the arguments when you schedule (<code>INVALID_ARGUMENT</code>) and again when the timer runs.</li>
+<li>Reusing a timer ID replaces its deadline and restarts its retries, which debounces bursts of edits. Use a new ID per callback you want.</li>
+<li><code>timers.at</code> takes an epoch-millisecond deadline. <code>cancel</code>, <code>get</code>, <code>scan</code> and <code>retry</code> manage timers; <code>get</code> and <code>scan</code> return each timer with its <code>id</code>.</li>
+</ul>
+<section id="timers-survive-closures-do-not">
+<h2>How timers run</h2>
+<ul>
+<li>A timer stores a handler name and JSON arguments, not a closure. When renaming a handler, keep the old name or migrate pending timers.</li>
+<li>Handlers don't need to be public. To repeat, have a handler reschedule itself under the same ID.</li>
+<li>A failed handler's changes are discarded, then it is retried: three attempts, 1,000 ms first backoff, doubling up to 60,000 ms. Change these with <code>scheduler(name, handlers, { maxAttempts, retryDelayMs, maxRetryDelayMs })</code>.</li>
+<li>After the last attempt, the timer stays <code>failed</code> with its error, until <code>timers.retry(ctx, id)</code> requeues it.</li>
+<li>Timers run as a <a href="components.html#tasks">maintenance task</a>. The leader wakes when the next timer is due, but starts at most one run every 250 ms (<code>FLOWER_MAINTENANCE_INTERVAL_MS</code>), so a crowd of timers runs in batches.</li>
+</ul>
+<div class="note"><span class="note-mark" aria-hidden="true">◷</span><p><strong>A deadline means “not before.”</strong> Load, elections or lost quorum can delay it. Its changes commit once, but it may be evaluated more than once, so send external side effects through a <a href="leases.html">queue</a>.</p></div>
+<p>In tests, <code>db.advance(5_000)</code> moves the clock and runs due timers; see <a href="testing.html#time">Testing</a>. For background work that isn't tied to one deadline, write a <a href="components.html#tasks">task</a>. <a href="https://github.com/xmit-dev/flower/blob/main/examples/scheduling.ts"><code>examples/scheduling.ts</code></a> is a fuller timer app.</p>
+</section>

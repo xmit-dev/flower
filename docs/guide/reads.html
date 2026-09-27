@@ -1,0 +1,134 @@
+<section id="replica-reads">
+<h2>Spread reads across replicas</h2>
+<p>Give the client a list of <code>queryUrls</code> to run queries and watches on every node. Reads stay fresh by default: each one is confirmed with a quorum, so it needs a working majority.</p>
+<div class="code-block"><div class="code-head"><span>client-replicas.ts</span><button type="button" class="copy-button" aria-label="Copy client-replicas.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { FlowerClient } from "@flower-js/sdk";
+import type counter from "./counter.ts";
+
+const client = new FlowerClient&lt;typeof counter&gt;("http://127.0.0.1:7101", {
+  queryUrls: [
+    "http://127.0.0.1:7101",
+    "http://127.0.0.1:7102",
+    "http://127.0.0.1:7103",
+  ],
+});
+const [visits, clicks] = await Promise.all([
+  client.query("counter.get", "visits"),
+  client.query("counter.get", "clicks"),
+]);
+console.log(visits.value.count, clicks.value.count);</code></pre></div>
+<ul>
+<li>Queries and new watches rotate through <code>queryUrls</code>. A watch stays on the node it started on; <code>subscribe</code> moves to the next one when it reconnects.</li>
+<li>Mutations, deploys and <code>call()</code> use the main URL. Any node works; it forwards writes to the leader.</li>
+<li>The client retries only when you pass <code>retry</code>. It doesn't discover nodes or change consistency.</li>
+</ul>
+<details><summary>Query result caching</summary><div class="details-body">
+<p>Flower reuses a query's result while the records, indexes and code it read are unchanged. This never makes a read staler: fresh queries still confirm with a quorum first, and access checks still run on every request. Queries that read <code>ctx.now()</code> are never cached.</p>
+<ul>
+<li><code>FLOWER_QUERY_CACHE_BYTES</code>: cache size per logical database. Default 16 MiB; 0 disables it.</li>
+<li><code>FLOWER_QUERY_FLIGHT_BYTES</code>: memory for sharing identical concurrent reads. Default 512 KiB; 0 disables it.</li>
+<li><code>FLOWER_QUERY_WORKERS</code>: bounds fast cache lookups and access checks. Heavy query work shares <code>FLOWER_PREPARATION_WORKERS</code> with writes and watches.</li>
+</ul>
+</div></details>
+</section>
+<section id="choose-replica-local-reads-in" data-toc="Replica-local reads">
+<h2>Allow stale reads (opt in)</h2>
+<p>If a query can tolerate lag, declare it <code>replica-local</code>. It then reads the node's own data without asking a quorum, and keeps working during a network partition.</p>
+<div class="code-block"><div class="code-head"><span>Application · optional local read</span><button type="button" class="copy-button" aria-label="Copy optional local read">Copy</button></div><pre tabindex="0"><code class="language-ts">const getLocal = query("internal.counter.local", {
+  args: v.string({ min: 1 }), consistency: "replica-local",
+}, (ctx, id) =&gt; ctx.get(counters, id) ?? 0);
+// Expose it: define({ http: { "counter.local": getLocal } }).</code></pre></div>
+<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p><strong>Replica-local reads can be stale, with no bound.</strong> Data, code and the list of public methods may all lag. Two calls on different nodes can return revisions that go backwards.</p></div>
+<ul>
+<li>The policy lives in the application. HTTP callers can't change it.</li>
+<li>Only queries can declare it. Leave it out, or use <code>linearizable</code>, for fresh reads.</li>
+<li>Apps with <a href="access.html">access checks</a> or managed keys read fresh anyway.</li>
+<li>A restarted node may need a quorum once before it serves these reads.</li>
+</ul>
+</section>
+<section id="use-http-2-from-node">
+<h2>Use HTTP/2 from Node.js</h2>
+<p>Use the HTTP/2 transport to send many requests over one connection per node.</p>
+<div class="code-block"><div class="code-head"><span>client-h2.ts</span><button type="button" class="copy-button" aria-label="Copy client-h2.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { FlowerClient } from "@flower-js/sdk";
+import { createHttp2Transport } from "@flower-js/sdk/http2";
+import type counter from "./counter.ts";
+
+const transport = createHttp2Transport({ requestTimeoutMs: 10_000 });
+const client = new FlowerClient&lt;typeof counter&gt;("http://127.0.0.1:7101", {
+  fetch: transport.fetch,
+});
+try {
+  console.log(await client.mutate("counter.increment", { id: "visits", by: 1 }, {
+    requestId: "visit-over-h2-001",
+    signal: AbortSignal.timeout(5_000),
+  }));
+} finally {
+  await transport.close();
+}</code></pre></div>
+<ul>
+<li>Import it from <code>@flower-js/sdk/http2</code>. It works in Node.js only.</li>
+<li>Options and defaults: <code>requestTimeoutMs</code> (30 s), <code>idleTimeoutMs</code> (30 s), <code>maxRequestBytes</code> (8 MiB), <code>maxResponseBytes</code> (64 MiB), <code>maxSessions</code> (16).</li>
+<li>For watches, the timeout covers only the response headers. Your signal or <code>transport.close()</code> ends the stream.</li>
+<li>Close the transport when done; that cancels open streams. It never redirects or downgrades.</li>
+<li><strong>Cancelling doesn't undo a mutation that already committed.</strong> After an uncertain result, retry with the same request ID.</li>
+</ul>
+<p>The server port speaks HTTP/1.1 and cleartext HTTP/2 (<code>h2c</code>). To check it with curl:</p>
+<div class="code-block"><div class="code-head"><span>With an HTTP/2-enabled curl</span><button type="button" class="copy-button" aria-label="Copy With an HTTP/2-enabled curl">Copy</button></div><pre tabindex="0"><code class="language-sh">curl --http2-prior-knowledge -i http://127.0.0.1:7101/health</code></pre></div>
+<p>For TLS, set <code>FLOWER_TLS_CERT_FILE</code>, <code>FLOWER_TLS_KEY_FILE</code> and <code>FLOWER_TLS_CA_FILE</code>. The transport's optional <code>ca</code> option adds trusted roots; certificate checks can't be turned off.</p>
+</section>
+<section id="live-queries">
+<h2>Watch live queries</h2>
+<p><code>client.subscribe</code> gives you a query's value now and again every time it changes, and keeps going through disconnects.</p>
+<div class="code-block"><div class="code-head"><span>One query, kept current</span><button type="button" class="copy-button" aria-label="Copy One query, kept current">Copy</button></div><pre tabindex="0"><code class="language-ts">const stop = new AbortController();
+for await (const { value, revision, reset } of client.subscribe("counter.get", "visits", {
+  signal: stop.signal,
+})) {
+  if (reset) console.log("fresh snapshot");
+  console.log(revision, value.count);
+  // Break the loop or call stop.abort() to disconnect.
+}
+
+const { value } = await client.waitUntil("counter.get", "visits", (counter) =&gt; counter.count &gt;= 10);</code></pre></div>
+<ul>
+<li>The first update is the full value. After that the server sends only changes, and the SDK rebuilds the value for you.</li>
+<li>Updates may skip intermediate values when changes come fast. Use them for current state, not as an event log. Nothing is sent if the value doesn't change.</li>
+<li>After a disconnect, a stall (no bytes for 45 s; the server sends a keepalive every 15 s) or a transient error, <code>subscribe</code> reconnects with backoff and marks the next value <code>reset: true</code>. Other errors end the loop.</li>
+<li>Pass <code>monotonic: true</code> to skip values older than one already delivered, such as from a lagging replica.</li>
+<li><code>waitUntil</code> resolves with the first value that passes your test, reconnecting as needed.</li>
+<li>Each subscriber is authorized on its own, and the stream closes if its credentials expire or are revoked.</li>
+<li>A deploy or principal change ends a stream with <code>WATCH_SCOPE_CHANGED</code>. <code>subscribe</code> reconnects and delivers a fresh snapshot.</li>
+<li>An idle watch has no timer. Commits wake it, and so do leadership changes, which make fresh watches prove a new read fence. For queries that read the clock, see <a href="#time">Watch the clock</a>.</li>
+<li>A client that can't accept an update within the send timeout (5 s by default) is disconnected.</li>
+</ul>
+<p><code>client.watch</code> is the single-connection version: it yields <code>{ revision, value }</code> and ends at the first disconnect. <code>watchPoll(alias, args, { intervalMs, signal })</code> polls instead.</p>
+<p>Client-side size limits apply to <code>subscribe</code>, <code>watch</code> and <code>watchDeltas</code>. Raise them if your server allows larger results:</p>
+<ul>
+<li><code>maxValueBytes</code>: 16 MiB</li>
+<li><code>maxEventBytes</code>: 17 MiB</li>
+<li><code>maxPatchOperations</code>: 256</li>
+</ul>
+<p>The CLI takes the same limits: <code>watch --max-value-bytes 33554432 --max-event-bytes 34603008 --max-patch-operations 512</code>.</p>
+<details><summary>Raw deltas with <code>watchDeltas</code></summary><div class="details-body">
+<p><code>POST /v1/watch</code> takes <code>{name, args?, credentials?}</code> and returns server-sent events. The first is a snapshot; later ones are RFC 6902 JSON Patch deltas, or a new snapshot when that is cheaper.</p>
+<p><code>watchDeltas</code> gives you those events with a <code>type</code> field. Snapshots carry <code>sequence, revision, value</code>. Patches carry <code>sequence, baseSequence, revision, patch</code>. A patch applies only to the event whose sequence matches its <code>baseSequence</code>. Sequences can start above zero and skip after a reset. A value that depends on time can change without a new revision. Error events carry the method's <code>failure</code>, like HTTP errors.</p>
+</div></details>
+<p>For error codes, see <a href="methods.html#failures">Handle failures</a>.</p>
+</section>
+<section id="time" data-toc="Watch the clock">
+<h2>Watch the clock without polling</h2>
+<p class="section-intro">Flower can't see a comparison against the clock, so it can't tell when time changes a result. Tell it, and watches sleep until exactly then.</p>
+<div class="code-block"><div class="code-head"><span>reminders.ts</span><button class="copy-button" type="button" aria-label="Copy reminders.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">const due = query("reminder.due", { args: v.string() }, (ctx, id) =&gt; {
+  const reminder = ctx.get(reminders, id);
+  if (!reminder) return false;
+  const now = ctx.clock();
+  ctx.changesAt(reminder.at); // Until then, only a write can change the answer.
+  return now &gt;= reminder.at;
+});</code></pre></div>
+<ul>
+<li><code>ctx.clock()</code> reads the same time as <code>ctx.now()</code>. Use it when you call <code>ctx.changesAt(time)</code> for every later instant at which a comparison flips. Watches wake at the earliest one; past times and <code>null</code> declare nothing.</li>
+<li>A query that reads <code>ctx.now()</code> could change at any moment as far as Flower knows. Its watches re-evaluate every <code>FLOWER_WATCH_REFRESH_MS</code> (250 ms).</li>
+<li><strong>A forgotten time is a missed update.</strong> The watch then sees the change only at the next write. When in doubt, use <code>ctx.now()</code>.</li>
+<li>Queues, external values and expiring collections declare their times already. A worker's <code>ready</code> watch wakes the moment a lease or delay ends.</li>
+<li><code>authenticate</code> can declare too, and <code>jwt.verify</code> and <code>jwt.decrypt</code> declare a token's expiry themselves. An idle stream then closes when its credentials expire, not on a timer.</li>
+<li>Materialized values can't declare yet. While any of them reads the clock, watches of queries that read derived values re-evaluate every 250 ms too.</li>
+</ul>
+</section>

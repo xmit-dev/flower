@@ -1,0 +1,11 @@
+*.log
+.DS_Store
+/.direnv/
+/.env.local
+/.flower/
+/bench/results/
+/dist/
+/node_modules/
+/_site/
+/result
+/target/

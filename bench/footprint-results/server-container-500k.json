@@ -1,0 +1,251 @@
+{
+  "binary": "flower-linux, a release build in rust:1-bookworm",
+  "nodes": 1,
+  "orders": 500000,
+  "batch": 500,
+  "lines": 3,
+  "env": {},
+  "samples": [
+    {
+      "label": "deployed",
+      "orders": 0,
+      "seconds": 0.33685479199999996,
+      "mutationMs": null,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 150532096,
+          "redbBytes": 671744
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 50000,
+      "seconds": 13.224366083,
+      "mutationMs": {
+        "count": 100,
+        "mean": 128.1677803899999,
+        "max": 1552.344083
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 254918656,
+          "redbBytes": 622333952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 100000,
+      "seconds": 25.546281333000003,
+      "mutationMs": {
+        "count": 100,
+        "mean": 121.14519213999992,
+        "max": 168.3469580000019
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 241643520,
+          "redbBytes": 1244663808
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 150000,
+      "seconds": 38.029580875,
+      "mutationMs": {
+        "count": 100,
+        "mean": 123.26559169000033,
+        "max": 151.5948339999959
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 257703936,
+          "redbBytes": 1244663808
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 200000,
+      "seconds": 50.36041491699999,
+      "mutationMs": {
+        "count": 100,
+        "mean": 122.6192720600003,
+        "max": 154.26645799999824
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 242335744,
+          "redbBytes": 2489323520
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 250000,
+      "seconds": 63.693347083,
+      "mutationMs": {
+        "count": 100,
+        "mean": 132.6914220599998,
+        "max": 284.34395799999766
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 253607936,
+          "redbBytes": 2489323520
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 300000,
+      "seconds": 76.70668216700001,
+      "mutationMs": {
+        "count": 100,
+        "mean": 128.43020082999968,
+        "max": 168.9831669999985
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 236400640,
+          "redbBytes": 2489323520
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 350000,
+      "seconds": 88.9937135,
+      "mutationMs": {
+        "count": 100,
+        "mean": 122.1766916299997,
+        "max": 145.90287499999977
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 246689792,
+          "redbBytes": 2489323520
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 400000,
+      "seconds": 101.538606042,
+      "mutationMs": {
+        "count": 100,
+        "mean": 124.60641292000074,
+        "max": 160.8453329999902
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 258879488,
+          "redbBytes": 4294971392
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 450000,
+      "seconds": 114.068693667,
+      "mutationMs": {
+        "count": 100,
+        "mean": 124.50698952000006,
+        "max": 169.81254099999205
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 256151552,
+          "redbBytes": 4294971392
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 500000,
+      "seconds": 127.348478583,
+      "mutationMs": {
+        "count": 100,
+        "mean": 131.26833540999985,
+        "max": 182.93549999999232
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 255090688,
+          "redbBytes": 4294971392
+        }
+      ]
+    },
+    {
+      "label": "touched",
+      "orders": 500000,
+      "seconds": 127.935469375,
+      "mutationMs": {
+        "count": 200,
+        "mean": 2.5653062449998107,
+        "max": 18.134709000005387
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 211566592,
+          "redbBytes": 4294971392
+        }
+      ]
+    },
+    {
+      "label": "restarted",
+      "orders": 500000,
+      "seconds": 129.21553925,
+      "mutationMs": null,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 152408064,
+          "redbBytes": 3051884544
+        }
+      ]
+    },
+    {
+      "label": "retouched",
+      "orders": 500000,
+      "seconds": 130.039465583,
+      "mutationMs": {
+        "count": 200,
+        "mean": 3.775659764999655,
+        "max": 240.54812500000116
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 168161280,
+          "redbBytes": 3051884544
+        }
+      ]
+    }
+  ],
+  "restartSeconds": 1.198769708000007,
+  "container": {
+    "image": "rust:1-bookworm",
+    "memory": "512m",
+    "memorySwap": "512m",
+    "env": {
+      "FLOWER_VALUE_CACHE_BYTES": "67108864",
+      "FLOWER_REDB_CACHE_BYTES": "67108864"
+    },
+    "oomEvents": 0
+  }
+}

@@ -1,0 +1,117 @@
+<section id="call">
+<h2>Call a method</h2>
+<p>Point the client at any node; nodes forward writes to the leader. Give it your module's type and every alias, argument and result is checked.</p>
+<div class="code-block"><div class="code-head"><span>client.ts</span><button type="button" class="copy-button" aria-label="Copy client.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { FlowerClient } from "@flower-js/sdk";
+import type counter from "./counter.ts";
+
+const client = new FlowerClient&lt;typeof counter&gt;("http://127.0.0.1:7101");
+const { value, revision, duplicate } = await client.mutate("counter.increment",
+  { id: "visits", by: 1 }, { requestId: "visit-002" });
+
+const { value: now } = await client.query("counter.get", "visits");
+console.log(value, revision, duplicate, now.count, now.doubled);</code></pre></div>
+<div class="code-block"><div class="code-head"><span>The same mutation over HTTP</span><button type="button" class="copy-button" aria-label="Copy The same mutation over HTTP">Copy</button></div><pre tabindex="0"><code class="language-sh">curl -fsS http://127.0.0.1:7101/v1/call \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"counter.increment","args":{"id":"visits","by":1},"requestId":"visit-003"}'</code></pre></div>
+<div class="table-wrap"><table><caption class="sr-only">HTTP method routes</caption><thead><tr><th>Endpoint</th><th>Body</th></tr></thead><tbody><tr><td><code>POST /v1/call</code></td><td><code>{name, args?, requestId?, expectedRevision?, credentials?}</code>. Works for any exposed method.</td></tr><tr><td><code>POST /v1/query</code></td><td><code>{name, args?, credentials?}</code>. Queries only.</td></tr><tr><td><code>POST /v1/mutate</code></td><td><code>{name, args?, requestId, expectedRevision?, credentials?}</code>. Mutations and transactions only.</td></tr></tbody></table></div>
+<ul>
+<li><code>import type</code> adds nothing to your bundle. Leave out the type parameter and calls are untyped.</li>
+<li>All three routes return <code>{revision, value, duplicate}</code>.</li>
+<li>Over HTTP, mutations need a <code>requestId</code>. The SDK makes one up if you omit it.</li>
+</ul>
+</section>
+<section id="retry-one-operation-with-one">
+<h2>Retry safely</h2>
+<p>After a timeout, a dropped connection, an election or <code>503 UNAVAILABLE</code>, send the <strong>same request ID with the same arguments</strong>, to any node. The client can do it for you:</p>
+<div class="code-block"><div class="code-head"><span>Automatic retries</span><button type="button" class="copy-button" aria-label="Copy Automatic retries">Copy</button></div><pre tabindex="0"><code class="language-ts">const client = new FlowerClient&lt;typeof counter&gt;("http://127.0.0.1:7101", { retry: true });
+await client.mutate("counter.increment", { id: "visits", by: 1 }, {
+  requestId: "visit-004", // Save it first if the process itself might restart.
+  retry: { attempts: 5, until: Date.now() + 30_000 },
+});</code></pre></div>
+<ul>
+<li>If the first attempt committed, you get its original result with <code>duplicate: true</code>.</li>
+<li><code>retry: true</code> retries network errors, timeouts, 408, 425, 429 and 5xx: eight attempts, 250 ms doubling with jitter up to 30 s, 20 s per attempt. A method's own failure is never retried.</li>
+<li>Every attempt reuses one request ID, so a lost reply can't apply twice. Use a new ID only for a new operation.</li>
+<li>A timed-out mutation may still have committed. Never retry it under a new ID.</li>
+<li>For compare-and-set, pass <code>expectedRevision</code>. For your own loops, <code>isTransient(error)</code> and <code>backoff(attempt)</code> make the same decisions.</li>
+</ul>
+</section>
+<section id="failures">
+<h2>Handle failures</h2>
+<p>Every HTTP failure becomes a <code>FlowerError</code> with <code>status</code> and <code>code</code>. When your code, the access check or a transaction participant rejected the call, <code>failure</code> holds its <code>{ code, message, details? }</code>.</p>
+<div class="table-wrap"><table><caption class="sr-only">Common errors</caption><thead><tr><th>Response</th><th>What to do</th></tr></thead><tbody>
+<tr><td><code>422 EVALUATION_FAILED</code></td><td>Your code failed; nothing committed. Read <code>failure.code</code>: yours, or <code>INVALID_ARGUMENT</code>, <code>INVALID_RECORD</code>, <code>COMPUTE_ERROR</code>…</td></tr>
+<tr><td><code>403 FORBIDDEN</code></td><td>Access was denied. <code>failure.code</code> is <code>UNAUTHENTICATED</code>, <code>FORBIDDEN</code> or your own.</td></tr>
+<tr><td><code>422 TRANSACTION_ABORTED</code></td><td>A participant failed; <code>failure</code> is its failure. Final for that request ID.</td></tr>
+<tr><td><code>404 METHOD_NOT_FOUND</code></td><td>Use a name the current deployment exposes. Removing a name also rejects old retries through it.</td></tr>
+<tr><td><code>409 REQUEST_ID_REUSED</code></td><td>That ID was already used with different arguments.</td></tr>
+<tr><td><code>409 REVISION_CONFLICT</code></td><td>Read the current state, then decide whether to send a new operation.</td></tr>
+<tr><td><code>503 UNAVAILABLE</code></td><td>Wait for the leader or queue to recover, then retry with the same request ID.</td></tr>
+</tbody></table></div>
+<p>Network errors and aborts throw ordinary errors, so don't assume every failure is a <code>FlowerError</code>.</p>
+</section>
+<section id="authorization">
+<h2>Authorize callers</h2>
+<p>Send tokens in <code>credentials</code>, never in arguments, so a refreshed token doesn't break a retry. The app decides what they mean:</p>
+<div class="code-block"><div class="code-head"><span>Credentials on every call</span><button type="button" class="copy-button" aria-label="Copy Credentials on every call">Copy</button></div><pre tabindex="0"><code class="language-ts">const client = new FlowerClient&lt;typeof counter&gt;("https://flower.example", {
+  credentials: async () =&gt; `Bearer ${await session.token()}`,
+});</code></pre></div>
+<p><a href="access.html">Access control</a> shows how an app authenticates callers and sets access per method.</p>
+</section>
+<section id="retry-retention">
+<h2>Limit how long retry results are kept</h2>
+<p>Flower keeps results so retries can be answered. To bound that, operators use retry windows (epochs) and retire old ones.</p>
+<ol class="steps">
+<li>Initialize the history with <code>admin.controlRetention</code>.</li>
+<li>Create the client with <code>boundedRetries: true</code>.</li>
+<li>Save <code>await client.newRequestId()</code> durably before sending.</li>
+<li>Retire an epoch only after the retry window you promised has passed.</li>
+</ol>
+<ul>
+<li><code>RETRY_WINDOW_EXPIRED</code> means <strong>the mutation may have committed.</strong> Don't resend it under a new ID; check your own records.</li>
+<li>Windows move only when an operator advances them. They aren't TTLs.</li>
+</ul>
+<details><summary>Long-running clients, work queues and restores</summary><div class="details-body">
+<p>Long-running clients can use <code>openRetrySession</code>, and call <code>acknowledgeRetrySession</code> only after durably handling results up to that point. Acknowledged sequences never run again.</p>
+<p>Queue claims then carry a history identity; pass it back unchanged. After a restore, old claims are rejected. External systems must check an increasing fencing token too; lease expiry can't stop a paused worker.</p>
+</div></details>
+<p>See the <a href="../reference/access.html#retention">retention reference</a> for budgets and restores.</p>
+</section>
+<section id="one-transaction-several-groups" data-toc="Transactions">
+<h2>Transactions across partitions</h2>
+<p>A transaction calls exposed methods in several partitions or Raft groups. All of them commit, or none do. <code>participant</code> types each call against the methods it targets.</p>
+<div class="code-block"><div class="code-head"><span>bank.ts</span><button type="button" class="copy-button" aria-label="Copy bank.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, fail, mutation, participant, transaction, v } from "@flower-js/sdk";
+
+const balances = collection("balances", v.int({ min: 0 }));
+const entry = v.object({ id: v.string({ min: 1 }), cents: v.int({ min: 1 }) });
+const debit = mutation("debit", { args: entry }, (ctx, { id, cents }) =&gt; {
+  const balance = ctx.get(balances, id) ?? 0;
+  if (balance &lt; cents) fail("INSUFFICIENT_FUNDS", `${id} has ${balance}`, { balance });
+  ctx.set(balances, id, balance - cents);
+  return balance - cents;
+});
+const credit = mutation("credit", { args: entry }, (ctx, { id, cents }) =&gt; {
+  ctx.set(balances, id, (ctx.get(balances, id) ?? 0) + cents);
+  return ctx.get(balances, id);
+});
+const accounts = { debit, credit };
+
+const transfer = transaction("transfer", {
+  args: v.object({ from: v.string(), to: v.string(), cents: v.int({ min: 1 }) }),
+}, ({ from, to, cents }) =&gt; ({
+  calls: [
+    participant&lt;typeof accounts&gt;({ partition: "west" }).call("debit", { id: from, cents }),
+    participant&lt;typeof accounts&gt;({ partition: "east" }).call("credit", { id: to, cents }),
+  ],
+  value: { cents },
+}));
+
+const app = define({ http: { ...accounts, transfer } });
+export default app;</code></pre></div>
+<ul>
+<li>The plan sees only its arguments; business checks belong in the participant methods. A call returns <code>{ results }</code> in plan order, plus the plan’s <code>value</code> when it has one.</li>
+<li>If any participant fails, nothing commits and the caller gets <code>422 TRANSACTION_ABORTED</code> with that participant's <code>failure</code>, here <code>INSUFFICIENT_FUNDS</code>.</li>
+<li>Until it resolves, each partition involved blocks fresh reads and writes. Others stay available. Opt-in replica-local reads can still see the older state.</li>
+</ul>
+<p>See the <a href="../reference/partitions.html#transactions">transaction reference</a> and the <a href="https://github.com/xmit-dev/flower/blob/main/TRANSACTIONS.md">transaction guide</a> for setup and recovery.</p>
+</section>

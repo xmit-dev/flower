@@ -1,0 +1,82 @@
+<section id="authorization" data-toc="Authentication &amp; access">
+<h2>Authenticate and authorize</h2>
+<p><code>define({ auth })</code> and each method’s <code>access</code> compile into one access check. It runs before every public call, retry replay, cached read and watch refresh. Flower compiles it only when a call could be refused: when <code>auth.authenticate</code> or <code>auth.delegation</code> is set, or an exposed method’s access is a predicate. Otherwise every exposed method is public. The <a href="../guide/access.html">access guide</a> walks through an example.</p>
+<div class="code-block"><div class="code-head"><span>JWT sessions, one public method</span><button class="copy-button" type="button" aria-label="Copy JWT sessions, one public method">Copy</button></div><pre tabindex="0"><code class="language-ts">import { define, jwtBearer, key, query } from "@flower-js/sdk";
+
+const sessions = key("sessions", { algorithm: "Ed25519", usages: ["verify"] });
+const me = query("me", (ctx) =&gt; ctx.principal());
+const status = query("status", { access: "public" }, () =&gt; "ok");
+
+export default define({
+  auth: { authenticate: jwtBearer({ key: sessions, audience: ["api"] }) },
+  http: { me, status },
+});</code></pre></div>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th><code data-api-symbol="AuthConfig">AuthConfig</code></th><td>Optional <code>authenticate</code>; <code>default</code>, the access of methods that declare none (<code>"authenticated"</code> when <code>authenticate</code> is set, otherwise <code>"public"</code>); <code>sessions</code>, the access to retry sessions (defaults to <code>default</code>); and <code>delegation(ctx, coordinator, principal)</code>, which can refuse a transaction coordinator (cluster peers are trusted by default).</td></tr>
+<tr><th><code data-api-symbol="Authenticate">Authenticate</code></th><td><code>(ctx: QueryContext, credentials: Json, request: AuthorizationRequest) =&gt; Principal | null</code>. Return <code>null</code> for an anonymous caller. <code>fail()</code> rejects the call with 403 <code>FORBIDDEN</code> and that failure.</td></tr>
+<tr><th><code data-api-symbol="Authenticator">Authenticator</code></th><td><code>{ kind: "authenticator", keys, authenticate }</code>: what <code>jwtBearer</code> returns. Its keys join the app’s <code>keys</code>.</td></tr>
+<tr><th><code data-api-symbol="jwtBearer">jwtBearer(options): Authenticator</code></th><td>Verifies bearer JWTs natively. Credentials may be the token, <code>"Bearer …"</code> or <code>{ token }</code>; <code>null</code> means anonymous. Anything else, or a token that fails verification, fails with <code>UNAUTHENTICATED</code>. Managed-key trouble such as <code>KEY_FORBIDDEN</code> keeps its own code, since the token isn't at fault.</td></tr>
+<tr><th><code data-api-symbol="JwtBearerOptions">JwtBearerOptions</code></th><td>Required <code>key</code>: a <a href="keys.html">managed key</a> or key version, raw HMAC bytes, or a PEM public key. Optional <code>algorithms</code> (required for raw keys), <code>issuer</code>, <code>audience</code>, <code>clockToleranceSeconds</code>, and <code>principal(claims)</code>, which defaults to <code>sub</code>, a <code>tenant</code> claim if present, and all claims.</td></tr>
+<tr><th><code data-api-symbol="Access">Access&lt;A&gt;</code></th><td>A method’s <code>access</code>: <code>"public"</code>, <code>"authenticated"</code> (<code>UNAUTHENTICATED</code> without a principal) or <code>(ctx: QueryContext, principal, args) =&gt; boolean</code> (<code>FORBIDDEN</code> on false). Predicates see arguments that passed the method’s schema, or fail with <code>INVALID_ARGUMENT</code> first.</td></tr>
+<tr><th><code data-api-symbol="Principal">Principal</code></th><td><code>{subject: string, tenant?: string, claims?: Json}</code>. <code>subject</code> and <code>tenant</code> must be nonempty, and <code>$anonymous</code> is reserved. In a named partition, <code>tenant</code> must equal the partition name.</td></tr>
+<tr><th><code data-api-symbol="AuthorizationRequest">AuthorizationRequest</code></th><td><code>{credentials: Json, method: string, args: Json, partition: string|null, delegation: {coordinator:string,principal:Principal|null}|null}</code>. <code>method</code> is the alias, or <code>$flower.session.*</code> for retry sessions. <code>credentials</code> defaults to <code>null</code>. <code>delegation</code> is set on participant calls from a transaction coordinator.</td></tr>
+<tr><th><code>ctx.principal()</code></th><td>The admitted principal in a query or mutation, or <code>null</code> for anonymous callers and apps without access checks. Not available in derived values or transaction plans.</td></tr>
+<tr><th><code data-api-symbol="HistoryIdentity">HistoryIdentity</code></th><td><code>{database:string,incarnation:string}</code>, 128-bit hex. Stable across restarts and moves; changes only on a fenced disaster restore.</td></tr>
+<tr><th><code data-api-method="QueryContext.history">ctx.history()</code></th><td>This database's <code>HistoryIdentity</code>, or <code>null</code> before retention is initialized. Queries and mutations only.</td></tr>
+<tr><th><code>FlowerClientOptions.credentials</code></th><td>JSON credentials, or a (possibly async) function returning them per call. <code>RequestOptions.credentials</code> overrides it for one request. A watch keeps its credentials until it closes; <code>subscribe</code> asks the function again on every reconnect.</td></tr>
+</tbody></table></div>
+<ul>
+<li>Credentials are separate from <code>args</code>. A retry with refreshed credentials for the same subject and tenant gets the original result; a different caller can't.</li>
+<li>Anonymous callers are admitted as subject <code>$anonymous</code> (with the partition as tenant in a named partition), so their receipts never mix with a real subject's.</li>
+<li>The check reads a fresh snapshot before the call runs. Recheck state that can change in between inside the mutation.</li>
+<li>An app with an access check reads fresh policy on every call, so even replica-local methods need a quorum. Cached reads also wait for full admission, and some write batching is skipped.</li>
+<li>Watches recheck on each refresh and close when denied. Data already sent can't be taken back.</li>
+<li>A trusted coordinator’s principal is admitted in each participant partition with that partition’s name as its tenant.</li>
+<li><code>define</code> throws if a method, or <code>auth.sessions</code>, needs <code>"authenticated"</code> access and there is no <code>authenticate</code>.</li>
+<li>Authorization doesn't secure peer or admin traffic. Protect the network too.</li>
+</ul>
+</section>
+<section id="retention" data-toc="Retry retention">
+<h2>Limit how long retry results are kept</h2>
+<p>By default Flower keeps every retry result forever. Retention lets you drop old ones. It's opt-in and uses numbered epochs, not calendar time:</p>
+<ol class="steps">
+<li>Initialize retention once.</li>
+<li>Issue request IDs scoped to the current epoch, or keep using your own.</li>
+<li>Advance the minimum epoch, or have the leader rotate epochs on a schedule. Older scoped IDs are then rejected for good.</li>
+<li>Collect the retired results in batches. The leader does this by itself.</li>
+</ol>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th><code data-api-symbol="RetryIdentity">RetryIdentity</code></th><td><code>{database,incarnation,currentEpoch,minEpoch,epochMs?}</code>. IDs are 32 lowercase hex characters; epochs are nonnegative integers. <code>epochMs</code> is how often the leader advances the epoch, or <code>null</code> when an operator does.</td></tr>
+<tr><th><code data-api-symbol="RetentionState">RetentionState</code></th><td><code>RetryIdentity</code> plus <code>receiptBytes</code>, <code>receiptCount</code>, <code>maxReceiptBytes</code> (number|null), <code>gcCursor</code> (string|null), <code>gcComplete</code>, <code>sessionBytes</code>, <code>sessionCount</code>, <code>gcReceiptsComplete</code>, <code>gcSessionCursor</code> and, while rotating, <code>rotation</code> (<code>{epochMs,keepEpochs}</code>).</td></tr>
+<tr><th><code data-api-symbol="RetentionAction">RetentionAction</code></th><td>One of: <code>initialize {database,incarnation,max_receipt_bytes}</code>; <code>advance {incarnation,current_epoch,min_epoch}</code>; <code>collect {incarnation,limit}</code>; <code>set_budget {incarnation,max_receipt_bytes}</code>; <code>rotate {incarnation,epoch_ms,keep_epochs}</code>, where the leader advances the epoch after every <code>epoch_ms</code> (at least 1,000; <code>null</code> stops) of its own monotonic time and keeps the last <code>keep_epochs</code> (at least 2) admissible; <code>reincarnate {incarnation,new_incarnation,fence_attestation}</code>, each with <code>operation</code>. Epochs never go down. <code>reincarnate</code> is for disaster restore only, after you have fenced the old cluster yourself.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.retentionStatus">admin.retentionStatus(options?)</code></th><td>Current <code>RetentionState</code>, or <code>null</code>. Admin token.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.controlRetention">admin.controlRetention(expectedRevision, action, options?)</code></th><td>Apply an action if the revision matches. Returns <code>{state, collected}</code>. After a lost response, check status before sending anything else.</td></tr>
+<tr><th><code data-api-method="FlowerClient.refreshRetryIdentity">client.refreshRetryIdentity(options?)</code></th><td>Reload the current epoch for new request IDs. Doesn't update old IDs. Fails if retention isn't initialized.</td></tr>
+<tr><th><code data-api-method="FlowerClient.newRequestId">client.newRequestId(intent?, options?)</code></th><td>Make an epoch-scoped request ID (random intent by default). Save it before sending and reuse it on retry. The same intent in a new epoch is a new request.</td></tr>
+<tr><th><code data-api-symbol="RetrySession">RetrySession</code></th><td><code>{database,incarnation,id,epoch,acknowledgedThrough,closed}</code>, owned by the caller's principal. Needs access checks: <code>auth.sessions</code> decides who may use sessions, and the check sees <code>$flower.session.open</code>, <code>.status</code>, <code>.ack</code> and <code>.close</code>.</td></tr>
+<tr><th><code data-api-symbol="SessionOptions">SessionOptions</code></th><td><code>RequestOptions</code> plus <code>limit?</code> (default 256 records per call) and <code>abandon?</code> (default <code>false</code>, ACK only).</td></tr>
+<tr><th><code data-api-method="FlowerClient.openRetrySession">client.openRetrySession(id?, options?)</code></th><td>Open a session. Pick and save your own 32-character hex ID first so you can recover a lost response. Reopening an active session is safe; closed ones can't be reopened.</td></tr>
+<tr><th><code data-api-method="FlowerClient.sessionRequestId">client.sessionRequestId(session, sequence)</code></th><td>Request ID for a sequence number above the ACK mark. You track sequence numbers; the SDK never advances or ACKs for you.</td></tr>
+<tr><th><code data-api-method="FlowerClient.retrySessionStatus">client.retrySessionStatus({id,incarnation}, options?)</code></th><td>Current session state, for the owner only. Use it after an uncertain ACK.</td></tr>
+<tr><th><code data-api-method="FlowerClient.acknowledgeRetrySession">client.acknowledgeRetrySession(session, through, options?)</code></th><td>Drop results up to <code>through</code>. ACK only after you've saved them. Every result up to that point must exist, unless <code>abandon: true</code>, which also cancels unknown outcomes for good. Retries at or below the mark return <code>ALREADY_ACKNOWLEDGED</code> and never run again.</td></tr>
+<tr><th><code data-api-method="FlowerClient.closeRetrySession">client.closeRetrySession(session, options?)</code></th><td>Close the session for good. In-flight results may be lost. The ID can't be reused.</td></tr>
+<tr><th><code>FlowerClientOptions.boundedRetries</code></th><td>Default <code>false</code>. When <code>true</code>, generated request IDs use the current epoch. Your own IDs pass through unchanged. The SDK reloads the epoch a quarter of the way through a rotating one; otherwise call <code>refreshRetryIdentity</code>.</td></tr>
+</tbody></table></div>
+<p>Errors to handle:</p>
+<ul>
+<li><code>RETRY_WINDOW_EXPIRED</code>: the result is gone. The mutation may still have committed.</li>
+<li><code>HISTORY_MISMATCH</code>: the ID belongs to a different database history.</li>
+<li><code>RECEIPT_BUDGET_EXCEEDED</code>: new work is rejected; kept results are never evicted.</li>
+</ul>
+<p>Your own request IDs keep working once retention is initialized. Each one deduplicates until the floor passes the epoch it first ran in, even across epoch boundaries. After that its result is collected and the same ID runs again, so it is an idempotency key with bounded memory. Receipts from before initialization count as epoch 0. Transactions and staged deployments need scoped IDs. With <code>rotate</code> at <code>epoch_ms: 3_600_000, keep_epochs: 24</code>, every result is kept for at least 23 hours. A disaster restore needs a new incarnation; restoring an old backup as-is is unsafe. Backups may still contain deleted results. Details: <a href="https://github.com/xmit-dev/flower/blob/main/RETENTION.md">retention protocol</a>.</p>
+<h3>Cleaning up cross-group transactions</h3>
+<p>Records of finished cross-group transactions are removed only when you close and collect them. Prepared transactions without a decision are never released.</p>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th><code data-api-symbol="TransactionClosureTarget">TransactionClosureTarget</code></th><td><code>{group,partition:string|null,epoch,addresses?:string[]}</code>. Placement info; not used for routing.</td></tr>
+<tr><th><code data-api-symbol="TransactionClosureState">TransactionClosureState</code></th><td><code>{history:string|null,nextSequence,closedThrough,pending,blockedReason:string|null,deletedRecords}</code>. <code>pending</code> is <code>null</code> or <code>{through,participants,acknowledged}</code>. <code>blockedReason</code> explains a stall, such as an unfinished transaction or an unreachable peer.</td></tr>
+<tr><th><code data-api-symbol="TransactionClosureAction">TransactionClosureAction</code></th><td><code>{operation:"close",through?:number,maxBytes?:number}</code> or <code>{operation:"collect",maxBytes?:number}</code>. <code>through</code> defaults to all finished transactions; <code>maxBytes</code> defaults to the node's transaction budget.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.transactionClosureStatus">admin.transactionClosureStatus(options?)</code></th><td>Current closure state. Use <code>admin.partition(name)</code> for a named database.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.controlTransactionClosure">admin.controlTransactionClosure(action, options?)</code></th><td><code>close</code> tells participants to reject late messages, then advances the floor. <code>collect</code> deletes old records; run it on coordinators and participants. Safe to repeat. Check <code>pending</code> and <code>blockedReason</code>, not just HTTP success.</td></tr>
+</tbody></table></div>
+<p>An aborted transaction can close only once its request ID can no longer be retried, so old unscoped aborts block closure until retention is initialized.</p>
+</section>

@@ -1,0 +1,155 @@
+{
+  "binary": "target/footprint/flower-disk",
+  "nodes": 1,
+  "orders": 200000,
+  "batch": 500,
+  "lines": 3,
+  "env": {},
+  "samples": [
+    {
+      "label": "deployed",
+      "orders": 0,
+      "seconds": 1.638577792,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 138756096,
+          "redbBytes": 1056768
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 25000,
+      "seconds": 7.753538125,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 449937408,
+          "redbBytes": 335810560
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 50000,
+      "seconds": 13.951931416999999,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 780206080,
+          "redbBytes": 671617024
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 75000,
+      "seconds": 20.301889209000002,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 1062322176,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 100000,
+      "seconds": 26.681483,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 1267761152,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 125000,
+      "seconds": 33.156244584,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 1460518912,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 150000,
+      "seconds": 39.835769542,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 1616789504,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 175000,
+      "seconds": 46.67440575,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 1643069440,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 200000,
+      "seconds": 219.368788959,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 1653161984,
+          "redbBytes": 2686455808
+        }
+      ]
+    },
+    {
+      "label": "touched",
+      "orders": 200000,
+      "seconds": 220.41694204200002,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 1653161984,
+          "redbBytes": 2686455808
+        }
+      ]
+    },
+    {
+      "label": "restarted",
+      "orders": 200000,
+      "seconds": 221.34468637499998,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 120078336,
+          "redbBytes": 2686455808
+        }
+      ]
+    },
+    {
+      "label": "retouched",
+      "orders": 200000,
+      "seconds": 222.550958625,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 162463744,
+          "redbBytes": 2686455808
+        }
+      ]
+    }
+  ],
+  "restartSeconds": 0.8453482499999809
+}

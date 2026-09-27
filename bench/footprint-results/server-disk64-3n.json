@@ -1,0 +1,259 @@
+{
+  "binary": "target/footprint/flower-disk3",
+  "nodes": 3,
+  "orders": 100000,
+  "batch": 500,
+  "lines": 3,
+  "env": {
+    "FLOWER_VALUE_CACHE_BYTES": "67108864",
+    "FLOWER_REDB_CACHE_BYTES": "67108864",
+    "FLOWER_SNAPSHOT_AFTER_LOGS": "16",
+    "FLOWER_SNAPSHOT_KEEP_LOGS": "0"
+  },
+  "samples": [
+    {
+      "label": "deployed",
+      "orders": 0,
+      "seconds": 1.1980647919999998,
+      "mutationMs": null,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 144801792,
+          "redbBytes": 1056768
+        },
+        {
+          "id": 2,
+          "residentBytes": 112132096,
+          "redbBytes": 1056768
+        },
+        {
+          "id": 3,
+          "residentBytes": 112017408,
+          "redbBytes": 1056768
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 25000,
+      "seconds": 8.308847625,
+      "mutationMs": {
+        "count": 50,
+        "mean": 142.01033514,
+        "max": 210.17362500000013
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 371900416,
+          "redbBytes": 335810560
+        },
+        {
+          "id": 2,
+          "residentBytes": 246530048,
+          "redbBytes": 335810560
+        },
+        {
+          "id": 3,
+          "residentBytes": 249397248,
+          "redbBytes": 335810560
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 50000,
+      "seconds": 15.828285334,
+      "mutationMs": {
+        "count": 50,
+        "mean": 150.2174200000001,
+        "max": 176.43470799999886
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 393003008,
+          "redbBytes": 335810560
+        },
+        {
+          "id": 2,
+          "residentBytes": 281362432,
+          "redbBytes": 335810560
+        },
+        {
+          "id": 3,
+          "residentBytes": 251314176,
+          "redbBytes": 335810560
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 75000,
+      "seconds": 23.700013125,
+      "mutationMs": {
+        "count": 50,
+        "mean": 156.87072656000015,
+        "max": 168.78604199999972
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 429113344,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 2,
+          "residentBytes": null,
+          "redbBytes": 335810560
+        },
+        {
+          "id": 3,
+          "residentBytes": 284049408,
+          "redbBytes": 671617024
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 100000,
+      "seconds": 31.924683667,
+      "mutationMs": {
+        "count": 50,
+        "mean": 164.3594366200002,
+        "max": 185.79550000000017
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 437026816,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 2,
+          "residentBytes": null,
+          "redbBytes": 335810560
+        },
+        {
+          "id": 3,
+          "residentBytes": 285032448,
+          "redbBytes": 671617024
+        }
+      ]
+    },
+    {
+      "label": "touched",
+      "orders": 100000,
+      "seconds": 39.821307167,
+      "mutationMs": {
+        "count": 200,
+        "mean": 39.3456939700001,
+        "max": 46.57099999999991
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 437370880,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 2,
+          "residentBytes": null,
+          "redbBytes": 335810560
+        },
+        {
+          "id": 3,
+          "residentBytes": 285212672,
+          "redbBytes": 671617024
+        }
+      ]
+    },
+    {
+      "label": "caught-up",
+      "orders": 100000,
+      "seconds": 56.2422365,
+      "mutationMs": null,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 437469184,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 2,
+          "residentBytes": 298876928,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 3,
+          "residentBytes": 285032448,
+          "redbBytes": 671617024
+        }
+      ]
+    },
+    {
+      "label": "restarted",
+      "orders": 100000,
+      "seconds": 57.187803917,
+      "mutationMs": null,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 120668160,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 2,
+          "residentBytes": 111542272,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 3,
+          "residentBytes": 111591424,
+          "redbBytes": 671617024
+        }
+      ]
+    },
+    {
+      "label": "retouched",
+      "orders": 100000,
+      "seconds": 59.3476295,
+      "mutationMs": {
+        "count": 200,
+        "mean": 10.723866900000175,
+        "max": 169.5770829999965
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 163692544,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 2,
+          "residentBytes": 114475008,
+          "redbBytes": 671617024
+        },
+        {
+          "id": 3,
+          "residentBytes": 114016256,
+          "redbBytes": 671617024
+        }
+      ]
+    }
+  ],
+  "catchUp": {
+    "node": 2,
+    "seconds": 16.413352582999998,
+    "peakResidentBytes": 298876928,
+    "snapshot": {
+      "leader_id": {
+        "term": 1,
+        "node_id": 1
+      },
+      "index": 399
+    }
+  },
+  "restartSeconds": 0.8288892080000005
+}

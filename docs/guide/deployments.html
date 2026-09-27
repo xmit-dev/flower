@@ -1,0 +1,83 @@
+<section id="staged-deployment">
+<h2>Deploy computation changes</h2>
+<p>A change to a <code>derive</code> or aggregate does nothing until you build and deploy the bundle. You have two options:</p>
+<ul>
+<li><strong>Direct deploy</strong> recomputes stored derived values in one step, then switches code and results together. Fine for small apps.</li>
+<li><strong>Staged deploy</strong> rebuilds in pages while the current version keeps serving, then switches when you activate it. Use it for large rebuilds.</li>
+</ul>
+<ol class="steps"><li><strong>Stage.</strong> <code>admin.stageDeployment(bundle, { requestId })</code> records the new bundle and any new indexes.</li><li><strong>Advance.</strong> Each <code>advance</code> call backfills new indexes, then rebuilds a page of derived values in the background. Requests keep using the current code.</li><li><strong>Ready.</strong> Once the rebuild is done, ordinary writes keep the new graph up to date until you activate or cancel.</li><li><strong>Activate.</strong> <code>activate</code> switches bundle, aliases, policy, keys, indexes and derived state in one step.</li><li><strong>Collect.</strong> Call <code>collect</code> until the phase is <code>collected</code> to free the old graph. Finish this before the next deployment.</li></ol>
+<ul>
+<li>Use a unique request ID for each deployment and save it with the bundle. Progress survives leader changes, restarts and partition moves.</li>
+<li>Before resuming, check that both the request ID and bundle hash match, rather than staging again.</li>
+<li>Nothing runs on its own: your code calls <code>advance</code> and <code>activate</code>. The progress counters show work done, not a percentage.</li>
+</ul>
+<div class="code-block"><div class="code-head"><span>Start or resume one deployment</span><button type="button" class="copy-button" aria-label="Copy staged deployment">Copy</button></div><pre tabindex="0"><code class="language-ts">import { FlowerAdmin } from "@flower-js/sdk";
+import { buildBundle } from "@flower-js/sdk/bundle";
+
+const admin = new FlowerAdmin("http://127.0.0.1:7101", { adminToken: process.env.FLOWER_ADMIN_TOKEN });
+const bundle = await buildBundle("app.ts");
+const requestId = "application-upgrade-v2"; // Save and reuse for this bundle.
+const maxBytes = 256 * 1024;
+let build = (await admin.stagedDeploymentStatus()).value;
+if (build === null || build.phase === "collected") {
+  build = (await admin.stageDeployment(bundle, { requestId })).value;
+}
+if (build.requestId !== requestId || build.bundleHash !== bundle.hash) {
+  throw new Error("Existing deployment ID/bundle does not match this intent");
+}
+while (build.phase === "backfill" || build.phase === "rebuilding") {
+  build = (await admin.controlStagedDeployment({
+    operation: "advance", requestId, maxBytes,
+  })).value;
+}
+if (build.phase === "failed") {
+  throw new Error(build.error ?? "Cancel and collect the failed target");
+}
+if (build.phase === "ready") {
+  build = (await admin.controlStagedDeployment({
+    operation: "activate", requestId,
+  })).value;
+}
+while (build.phase === "active" || build.phase === "canceled") {
+  build = (await admin.controlStagedDeployment({
+    operation: "collect", requestId, maxBytes,
+  })).value;
+}</code></pre></div>
+<ul>
+<li><strong>Uncertain response:</strong> read the status and continue with the same request ID. Aborting a request does not undo committed progress.</li>
+<li><strong>Page or activation error:</strong> earlier progress is kept and the active app doesn’t change. Adjust the budget and retry, or cancel and collect.</li>
+<li><strong>Phase <code>failed</code>:</strong> a write hit a fatal error while maintaining the new graph. The job can’t activate; cancel and collect it.</li>
+<li><strong>Canceled:</strong> a canceled deployment can’t be activated. After collecting, stage corrected code with a new request ID.</li>
+<li><strong>No rollback:</strong> after activation, fix forward with another deployment.</li>
+<li>While a cross-group transaction is prepared, deployment controls return <code>TRANSACTION_PREPARED</code>. Status still works.</li>
+</ul>
+</section>
+<section id="deployment-tuning">
+<h2>Tune rebuild pages</h2>
+<p>Each page blocks writes while it prepares and commits; reads continue. Smaller pages mean shorter write stalls and a slower rebuild.</p>
+<ul>
+<li><code>FLOWER_DEPLOYMENT_PAGE_MS</code> sets the target time per page. Default 200 ms, capped by <code>FLOWER_EVALUATION_TIMEOUT_MS</code>. Try 20 ms if write latency matters, and measure.</li>
+<li><code>maxBytes</code> on each request limits page size. It defaults to the transaction byte budget.</li>
+</ul>
+<div class="code-block"><div class="code-head"><span>Each server · independent startup settings</span><button type="button" class="copy-button" aria-label="Copy deployment page tuning">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_DEPLOYMENT_PAGE_MS=20
+export FLOWER_WRITER_BATCH_MS=50
+# Start or restart each Flower node with these settings.</code></pre></div>
+<ul>
+<li>These are startup settings. Restart nodes to apply them. Ordinary write batching is unaffected.</li>
+<li>The page target is not a hard deadline. A page can take the target plus a full evaluation timeout.</li>
+<li>One derived value and the new dependencies it pulls in must fit in one evaluation. The new graph’s scan windows are indexed in memory, like the active graph’s.</li>
+<li>Until you activate, every write also maintains the new graph, and the extra graph uses storage until collected.</li>
+</ul>
+<p>The <a href="https://github.com/xmit-dev/flower/blob/main/bench/STAGED_DEPLOYMENT.md">staged deployment benchmark</a> shows the throughput and latency tradeoff. Those runs used an older shared setting, so treat them as rough.</p>
+</section>
+<section id="data-migrations">
+<h2>Migrate stored records</h2>
+<p>Deploying rebuilds derived values. It does not change stored records. During a staged deployment, old and new code share the same records, so both must read every record shape.</p>
+<ol class="steps"><li><strong>Deploy compatible code.</strong> Read old and new shapes, write only the new shape, and add a <a href="components.html#tasks">task</a> that converts one bounded batch per run.</li><li><strong>Save progress with the data.</strong> Read a cursor from a migration record, convert a page, and save the next cursor with the changed rows. <code>due</code> returns <code>ctx.now()</code> until the cursor says done, so maintenance keeps going page by page. A mutation called by hand works too: check each row’s version so a retried batch doesn’t convert twice, and reuse the request ID for an uncertain batch.</li><li><strong>Page by key.</strong> Use <code>ctx.scan(rows, { gt: afterKey, limit: 100 })</code>, leaving out <code>gt</code> on the first page. An empty page means you’re done. Typed-key collections reject key bounds, so page them, or an indexed subset, with <code>ctx.range</code> on fields the migration doesn’t change. Avoid offsets and unbounded scans.</li><li><strong>Verify, then clean up.</strong> Check that no old rows remain. Then deploy code without the compatibility path and remove old fields with bounded mutations.</li></ol>
+<ul>
+<li>Names are identities. Renaming a collection or derived value, or changing a TypeScript type, doesn’t touch existing data. Copy data explicitly.</li>
+<li>A task needs no public method. If you expose a migration mutation, protect it with <a href="access.html">access rules</a>: an operator token doesn’t make a public mutation admin-only.</li>
+<li>During a staged deployment, each migration batch also updates the new graph. Size batches for that.</li>
+</ul>
+<p>See the <a href="../reference/data.html#collections">range and cursor rules</a>, <a href="../reference/definitions.html#contexts">mutation context</a> and <a href="../reference/deployments.html">staged deployment API</a>. <a href="../operate/#resizing">Moving a partition</a> between Raft groups keeps data and code as they are; it is not a migration.</p>
+</section>

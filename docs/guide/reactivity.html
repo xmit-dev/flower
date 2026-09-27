@@ -1,0 +1,74 @@
+<div class="flow-diagram" role="img" aria-label="A source update recomputes its derived dependencies and result before one atomic commit"><div><span>01</span><strong>Source change</strong><small>orders["o-1"] = { shop: "north", … }</small></div><b aria-hidden="true">→</b><div><span>02</span><strong>Derived values</strong><small>revenue("north"), summary("north")</small></div><b aria-hidden="true">→</b><div><span>03</span><strong>One revision</strong><small>Sources + results + receipt</small></div></div>
+<section id="materialize-what-should-stay-current">
+<h2>Keep a value current</h2>
+<p>A materialized value is stored and recomputed whenever something it read changes. Say which instances to keep with <code>materialize</code>:</p>
+<div class="code-block"><div class="code-head"><span>shops.ts</span><button type="button" class="copy-button" aria-label="Copy shops.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { aggregate, collection, define, derive, fail, query, v } from "@flower-js/sdk";
+
+const shops = collection("shops", v.object({ name: v.string() }));
+const orders = collection("orders", v.object({ shop: v.string(), cents: v.int({ min: 0 }) }))
+  .index("byShop", ["shop"]);
+
+const revenue = aggregate("shop.revenue", {
+  source: orders, index: "byShop",
+  initial: () =&gt; 0,
+  add: (sum, order) =&gt; sum + order.cents,
+  remove: (sum, order) =&gt; sum - order.cents,
+});
+
+const summary = derive("shop.summary", (ctx, id: string) =&gt; ({
+  ...(ctx.get(shops, id) ?? fail("SHOP_NOT_FOUND", `No shop ${id}`)),
+  revenue: ctx.get(revenue, id),
+}), { materialize: { each: shops } });
+
+const shopCount = derive("shop.count", (ctx) =&gt; ctx.scan(shops).length, { materialize: "always" });
+
+const read = query("shop.read", { args: v.string() }, (ctx, id) =&gt; ctx.get(summary, id));
+const count = query("internal.shop.count", (ctx) =&gt; ctx.get(shopCount));
+
+const app = define({
+  definitions: [revenue, summary, shopCount],
+  http: { "shop.read": read, "shop.count": count },
+});
+export default app;</code></pre></div>
+<ul>
+<li><code>{ each: shops }</code> keeps one instance per row of <code>shops</code>, with the row key as its argument. Instances appear and disappear with their rows, in the same commit. Rows that existed before the deploy are picked up in the background.</li>
+<li><code>"always"</code> keeps the single instance without arguments. It is materialized in the background after the deploy.</li>
+<li>Anything else: call <code>ctx.materialize(value, args)</code> in a mutation, and <code>ctx.unmaterialize</code> to stop.</li>
+<li>An instance is its name plus its arguments. Omitted arguments mean <code>null</code>.</li>
+<li>Unmaterialized values can still be read; they're computed on the spot.</li>
+<li>A mutation sees its own earlier writes, including through derived values. Record changes, updated values and the result commit together.</li>
+</ul>
+<p>The background steps run as <a href="components.html">maintenance tasks</a>, which the leader runs as soon as they're due. Until they finish, reads compute the value on the spot.</p>
+</section>
+<section id="choose-useful-dependency-boundaries">
+<h2>Keep dependencies narrow</h2>
+<p>A value recomputes when anything it read changes, so read only what you need.</p>
+<ul>
+<li>Reading a missing record counts; the value updates when it appears.</li>
+<li><code>ctx.scan(collection)</code> depends on the whole collection. With a prefix or bounds, it depends on that range.</li>
+<li>Index lookups depend only on matching entries, as long as the collection is declared: in <code>define({ collections })</code>, a component, or as the source of an aggregate or trigger.</li>
+<li>Split unrelated work into separate derived values, so a tip doesn't recompute every order total.</li>
+</ul>
+</section>
+<section id="maintain-totals-from-row-deltas" data-toc="Aggregates">
+<h2>Maintain totals cheaply</h2>
+<p>Use <code>aggregate</code> for sums and counts, like <code>revenue</code> above. Give it pure <code>initial</code>, <code>add</code> and <code>remove</code> functions; Flower applies only the changed rows. Read it like any derived value, with the index value as the argument: <code>ctx.get(revenue, "north")</code>.</p>
+<ul>
+<li><code>remove</code> must exactly undo <code>add</code>. Integer sums and counts work well.</li>
+<li>The index name and the group type are checked: a two-field index takes a two-element tuple.</li>
+<li>List the aggregate in <code>definitions</code>. Its source collection is declared for you.</li>
+<li>A deploy builds new aggregates in the background. If a write lands meanwhile you get <code>DEPLOYMENT_CONFLICT</code>: retry with the same request ID, or deploy with <code>preparation: "blocking"</code>.</li>
+<li>For large collections, use a <a href="deployments.html#staged-deployment">staged deployment</a>.</li>
+</ul>
+<p>The <a href="https://github.com/xmit-dev/flower/blob/main/INDEXES.md">indexes and aggregates guide</a> has a full example.</p>
+</section>
+<section id="errors-have-defined-behavior">
+<h2>How errors behave</h2>
+<ul>
+<li>If a derived value throws or calls <code>fail()</code>, its readers get the same code and message and may catch it. Details aren't kept.</li>
+<li>A mutation that throws commits nothing.</li>
+<li>Cycles and exhausted transaction budgets always abort, even if your code catches the error.</li>
+<li>Returning an error-shaped object is a success, not an error.</li>
+</ul>
+<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p><strong>Callbacks are sandboxed and synchronous.</strong> Return JSON. There is no network, filesystem, current date (use <code>ctx.now()</code>) or async work. Globals don't persist between calls. Outside facts come in as method arguments, or from <a href="workers.html">external workers</a>.</p></div>
+</section>

@@ -1,0 +1,86 @@
+<p>Without <code>auth</code>, every exposed method is public. With it, each call passes one check before it runs: the credentials become a principal, then the method's access rule decides.</p>
+<section id="protect">
+<h2>Protect an app</h2>
+<p>This notes app accepts JWTs signed with a <a href="crypto.html">managed key</a>. Everyone must sign in except for <code>health</code>, and only a note's owner can read it.</p>
+<div class="code-block"><div class="code-head"><span>notes.ts</span><button type="button" class="copy-button" aria-label="Copy notes.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, fail, jwtBearer, key, mutation, query, v } from "@flower-js/sdk";
+
+const sessions = key("sessions", { algorithm: "Ed25519", usages: ["verify"] });
+const notes = collection("notes", v.object({ owner: v.string(), text: v.string({ max: 10_000 }) }));
+const noteId = v.string({ min: 1, max: 128 });
+
+const read = query("note.read", {
+  args: noteId,
+  access: (ctx, principal, id) =&gt; principal !== null &amp;&amp; ctx.get(notes, id)?.owner === principal.subject,
+}, (ctx, id) =&gt; ctx.get(notes, id));
+
+const write = mutation("note.write", {
+  args: v.object({ id: noteId, text: v.string({ max: 10_000 }) }),
+}, (ctx, { id, text }) =&gt; {
+  const owner = ctx.principal()!.subject;
+  if ((ctx.get(notes, id)?.owner ?? owner) !== owner) fail("NOT_OWNER", "Someone else owns this note");
+  ctx.set(notes, id, { owner, text });
+  return null;
+});
+
+const health = query("health", { access: "public" }, () =&gt; "ok");
+
+const app = define({
+  auth: { authenticate: jwtBearer({ key: sessions, issuer: "notes", audience: ["notes-api"] }) },
+  http: { "note.read": read, "note.write": write, health },
+});
+export default app;</code></pre></div>
+<ul>
+<li><code>jwtBearer</code> verifies tokens natively. Callers send the token as <code>credentials</code>: the token itself, <code>"Bearer …"</code>, or <code>{ token }</code>.</li>
+<li>No credentials means an anonymous caller. A bad or expired token is rejected with <code>UNAUTHENTICATED</code>.</li>
+<li>The principal is the token's <code>sub</code>, its <code>tenant</code> claim if any, and all its claims. Pass <code>principal: (claims) =&gt; …</code> to map claims yourself.</li>
+<li>A managed key is added to the app's keys for you. A raw key needs <code>algorithms</code>.</li>
+<li>From the terminal, pass <code>--credentials</code> or set <code>FLOWER_CREDENTIALS</code>.</li>
+</ul>
+</section>
+<section id="access">
+<h2>Access per method</h2>
+<div class="table-wrap"><table><caption class="sr-only">Access rules</caption><thead><tr><th>Access</th><th>Who may call</th></tr></thead><tbody>
+<tr><td><code>"public"</code></td><td>Anyone, including anonymous callers.</td></tr>
+<tr><td><code>"authenticated"</code></td><td>Any principal. Anonymous callers get <code>403</code> with <code>UNAUTHENTICATED</code>.</td></tr>
+<tr><td><code>(ctx, principal, args) =&gt; boolean</code></td><td>Whoever the predicate allows; <code>false</code> is <code>403</code> with <code>FORBIDDEN</code>. <code>args</code> have already passed the method's schema, and <code>principal</code> is <code>null</code> for anonymous callers.</td></tr>
+</tbody></table></div>
+<ul>
+<li>Methods without <code>access</code> follow <code>auth.default</code>: <code>"authenticated"</code> when there is an <code>authenticate</code>, otherwise <code>"public"</code>.</li>
+<li><code>auth.sessions</code> sets access to retry sessions; it defaults to <code>auth.default</code>.</li>
+<li>Inside a method, <code>ctx.principal()</code> returns the caller, or <code>null</code> for anonymous callers.</li>
+<li>The check reads a fresh snapshot, but it runs before the mutation. Recheck anything that can change in between inside the mutation, like <code>note.write</code> does.</li>
+</ul>
+</section>
+<section id="authenticate">
+<h2>Authenticate your own way</h2>
+<p><code>authenticate</code> can be any function of the credentials. Return a principal <code>{ subject, tenant?, claims? }</code>, return <code>null</code> for an anonymous caller, or <code>fail()</code> to reject the call.</p>
+<div class="code-block"><div class="code-head"><span>Sessions stored in the database</span><button type="button" class="copy-button" aria-label="Copy Sessions stored in the database">Copy</button></div><pre tabindex="0"><code class="language-ts">const sessions = collection("sessions", v.object({ subject: v.string(), expiresAt: v.int() }));
+
+const app = define({
+  collections: [sessions],
+  auth: {
+    authenticate: (ctx, credentials) =&gt; {
+      if (credentials === null) return null;
+      const session = typeof credentials === "string" ? ctx.get(sessions, credentials) : null;
+      if (!session || session.expiresAt &lt;= ctx.clock()) fail("UNAUTHENTICATED", "Sign in again");
+      ctx.changesAt(session.expiresAt); // Idle watches close exactly at expiry.
+      return { subject: session.subject };
+    },
+  },
+  http: { "note.read": read, "note.write": write, health },
+});</code></pre></div>
+<p>A sign-in mutation creates session rows. Deleting a row revokes the session at the next call, retry or watch refresh.</p>
+</section>
+<section id="rules">
+<h2>How the check runs</h2>
+<ul>
+<li>It runs before every call, retry replay, cached read and watch refresh. Watches close when a refresh is denied; data already sent can't be taken back.</li>
+<li>Credentials are separate from arguments. A retry with refreshed credentials for the same subject and tenant gets the original result; a different caller can't.</li>
+<li>Flower adds the check only when a call could be refused: with <code>authenticate</code> or <code>delegation</code>, or a method whose access is a predicate. <code>access: "public"</code> alone adds nothing.</li>
+<li>The check has a cost: replica-local reads become fresh, cached reads wait for full admission, and some write batching is skipped.</li>
+<li>In a named partition, the principal's tenant must be the partition's name. Anonymous callers are admitted there with that tenant.</li>
+<li>Transaction participants see the coordinator's principal, with the participant partition as its tenant. <code>auth.delegation(ctx, coordinator, principal)</code> can refuse a coordinator; by default, cluster peers are trusted.</li>
+<li>Authorization doesn't secure peer or operator traffic. Protect the network and the operator token too.</li>
+</ul>
+<p>Every option is in the <a href="../reference/access.html#authorization">authorization reference</a>. The <a href="testing.html">test database</a> runs your access rules, but can't verify JWTs.</p>
+</section>

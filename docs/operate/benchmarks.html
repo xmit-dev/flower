@@ -1,0 +1,78 @@
+<p>The benchmark runs <a href="https://github.com/xmit-dev/flower/blob/main/examples/goblin-pizza-ts/goblin-pizza.ts"><code>examples/goblin-pizza-ts/goblin-pizza.ts</code></a>, which uses methods, derived stats, timers, worker leases, retries and fencing. It starts its own fresh local cluster and never touches an existing one.</p>
+<!-- latest-benchmark:start -->
+<!-- latest-benchmark:end -->
+<section id="run-the-benchmark">
+<h2>Run it yourself</h2>
+<div class="code-block"><div class="code-head"><span>Run and stress</span><button type="button" class="copy-button" aria-label="Copy Run and stress">Copy</button></div><pre tabindex="0"><code class="language-sh">npm ci
+npm run build
+cargo build --release --bin flower
+npm run bench
+cargo build --release --bin flower --bin flower-bench-driver
+npm run bench:stress
+
+# Customize the base command, with one copy of each flag:
+npm run bench -- --duration 30 --concurrency 16 --workers 4 \
+  --max-orders 64 --drain 180 --json bench/results/custom.json
+npm run bench -- --help</code></pre></div>
+<ul>
+<li><strong>What counts:</strong> successful customer calls (shop reads, orders, tips). A retried call counts once. Worker polls, deliveries, replays, setup and the audit don't count.</li>
+<li><strong>The workload</strong> is closed-loop: each customer waits for one call before starting the next. The mix is 30% orders, 40% reads and 30% tips until the order cap, then orders turn into reads.</li>
+<li><strong>Everything runs on one machine</strong>, servers and load generator together. Your production numbers depend on your workload and hardware.</li>
+<li><strong>The run fails</strong> on unexpected errors, an unfinished drain, bad fencing or replays, or a failed business check.</li>
+<li><strong>Reports</strong> go to <code>bench/results/</code> as JSON and HTML, with the settings and binary used.</li>
+</ul>
+<p>The base command starts one three-node group. <code>bench:stress</code> runs eight independent groups, each with its own customers and workers, on three server processes: each serves one replica of every group from one shared database, so the groups share disk flushes. Halfway through, the server leading the most groups crashes and restarts. Its preset sets 256 customers per group, serial writer preparation and a 1,024-request writer queue, overriding the normal defaults. Environment variables override the preset. See the <a href="https://github.com/xmit-dev/flower/blob/main/bench/README.md">benchmark guide</a> for all options and the <a href="https://github.com/xmit-dev/flower/blob/main/bench/READS.md">measurement analysis</a> for the current result.</p>
+<p>The same workload also runs with the application compiled from Rust: <code>--guest wasm</code> deploys <a href="https://github.com/xmit-dev/flower/tree/main/examples/goblin-pizza-rs"><code>examples/goblin-pizza-rs</code></a>, a port that makes the same database calls and writes the same records as the TypeScript version, as a WebAssembly module instead of a QuickJS bundle.</p>
+<p>To publish new results to this page, run <code>bin/bench</code> inside <code>nix develop</code> with profiling off. It builds the server and both guests, runs the stress preset once per guest, and publishes both. The steps it runs:</p><div class="code-block"><div class="code-head"><span>Measure independent Raft groups</span><button type="button" class="copy-button" aria-label="Copy Measure independent Raft groups">Copy</button></div><pre tabindex="0"><code class="language-sh">npm ci
+cargo build --release --locked --bin flower --bin flower-bench-driver
+cargo build --release --locked -p goblin-pizza --target wasm32-unknown-unknown
+npm run bench:stress
+npm run bench:stress -- --guest wasm
+node scripts/publish-bench-results.mjs bench/results/latest.json bench/results/latest-wasm.json
+node scripts/publish-bench-results.mjs --check</code></pre></div>
+<p>The publisher retains validated JSON in <code>docs/bench/</code>. The live preview and deployment build render the charts, reports and summaries from those measurements. Commit the JSON with your source changes, then use <code>bin/web-deploy</code> to publish the site.</p>
+</section>
+<section id="pizza-dashboard">
+<h2>Watch the live dashboard</h2>
+<p>The <a href="https://github.com/xmit-dev/flower/tree/main/examples/pizza-dashboard">dashboard</a> shows one tenant's stores, orders, oven timers, drone leases and rankings from a single watched <code>pizza.dashboard({tenant})</code> value.</p><div class="code-block"><div class="code-head"><span>Run the live kitchen board</span><button type="button" class="copy-button" aria-label="Copy Run the live kitchen board">Copy</button></div><pre tabindex="0"><code class="language-sh">bin/demo
+# Optional: another pace, fixed port, paused arrivals, stop after two minutes
+bin/demo --rate 80 --port 3030 --paused --duration 120</code></pre></div>
+<p>It builds the server, starts a fresh three-node cluster with three tenants and opens the dashboard. Customers order about 40 pizzas a second; change the pace from the page, place orders, tip goblins, pause arrivals or kill the leader and watch throughput, write latency and the replicas recover. Delivered orders are archived into kitchen tallies so the board's work stays the size of the orders in flight; per-call state such as retry receipts still grows, so arrivals stop at 150,000 orders. Ctrl+C stops everything and deletes its data.</p>
+<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p><strong>The dashboard reads replica-local data.</strong> It can lag with no bound, and a reconnect may show an older revision. The benchmark's shop reads use <code>pizza.shop.local</code> the same way; pass <code>--read-consistency fresh</code> to measure fresh reads instead.</p></div>
+</section>
+<section id="compare-http-transports">
+<h2>Compare HTTP/1.1 and HTTP/2</h2>
+<p>Method calls use HTTP/1.1 by default. Add <code>--http2</code> to use pooled HTTP/2. Node-to-node traffic always uses HTTP/2.</p><div class="code-block"><div class="code-head"><span>HTTP/2 methods with leader failover</span><button type="button" class="copy-button" aria-label="Copy HTTP/2 methods with leader failover">Copy</button></div><pre tabindex="0"><code class="language-sh">npm run bench -- --http2 --duration 30 --concurrency 32 --workers 4 \
+  --max-orders 96 --chaos --json bench/results/http2.json</code></pre></div><p>Keep the workload and binary the same when you compare. The benchmark reuses request IDs when it retries; the HTTP/2 client itself doesn't retry uncertain calls.</p>
+</section>
+<section id="profile-before-tuning">
+<h2>Profile before tuning</h2>
+<p>Profile under the same mixed load before changing settings. Skip the leader crash for a first comparison.</p><div class="code-block"><div class="code-head"><span>macOS · native stack profile</span><button type="button" class="copy-button" aria-label="Copy macOS · native stack profile">Copy</button></div><pre tabindex="0"><code class="language-sh">CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release --bin flower
+npm run bench -- --duration 30 --concurrency 32 --workers 4 \
+  --max-orders 96 --drain 180 \
+  --cpu-profile bench/results/profile-mixed.sample.txt \
+  --json bench/results/profile-mixed.json
+
+# Batch timing for the same mixed workload (one group).
+FLOWER_PROFILE_STORAGE=1 FLOWER_PROFILE_EVALUATOR=1 \
+node bench/profile-mixed.mjs --http2 --duration 30 --concurrency 128 \
+  --workers 4 --max-orders 96 --json /tmp/flower-mixed-profile.json</code></pre></div>
+<ul>
+<li>The first command samples native stacks on the initial leader with macOS <code>/usr/bin/sample</code>. It shows where threads spend time, not CPU percentages or TypeScript lines.</li>
+<li>The second writes an extra <code>*-groups.json</code> with per-batch timings. Phases overlap, so don't add them up as wall time.</li>
+<li><code>node bench/profile-otel.mjs</code> takes the same flags and writes an HTML report of request, writer, storage and Raft timing. See the <a href="https://github.com/xmit-dev/flower/blob/main/TELEMETRY.md">OpenTelemetry guide</a>.</li>
+<li>Profiling slows things down. Rerun without it before quoting throughput.</li>
+</ul>
+<p>More options are in the <a href="https://github.com/xmit-dev/flower/blob/main/bench/README.md#profiling">profiling commands</a>.</p>
+</section>
+<section id="run-the-checks">
+<h2>Run the checks</h2>
+<p>Run the test suite from the checkout:</p>
+<div class="code-block"><div class="code-head"><span>Validation from the checkout</span><button type="button" class="copy-button" aria-label="Copy Validation from the checkout">Copy</button></div><pre tabindex="0"><code class="language-sh">npm run check
+cargo test
+cargo build
+node tests/e2e.mjs
+node tests/e2e-http2.mjs
+node tests/e2e-watch.mjs</code></pre></div>
+<p>Benchmarks clean up their temporary data when they stop; pass <code>--keep-data</code> to keep it for inspection.</p>
+</section>

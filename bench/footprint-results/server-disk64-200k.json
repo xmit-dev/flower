@@ -1,0 +1,210 @@
+{
+  "binary": "target/footprint/flower-disk",
+  "nodes": 1,
+  "orders": 200000,
+  "batch": 500,
+  "lines": 3,
+  "env": {
+    "FLOWER_VALUE_CACHE_BYTES": "67108864",
+    "FLOWER_REDB_CACHE_BYTES": "67108864"
+  },
+  "samples": [
+    {
+      "label": "deployed",
+      "orders": 0,
+      "seconds": 1.1104155,
+      "mutationMs": null,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 141672448,
+          "redbBytes": 1056768
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 25000,
+      "seconds": 7.182461166,
+      "mutationMs": {
+        "count": 50,
+        "mean": 121.3321808,
+        "max": 178.71325000000002
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 267468800,
+          "redbBytes": 335810560
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 50000,
+      "seconds": 13.299779583,
+      "mutationMs": {
+        "count": 50,
+        "mean": 122.24554916000015,
+        "max": 138.65541699999994
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 280346624,
+          "redbBytes": 671617024
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 75000,
+      "seconds": 19.983996666,
+      "mutationMs": {
+        "count": 50,
+        "mean": 133.59468747999995,
+        "max": 160.75687500000095
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 288227328,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 100000,
+      "seconds": 26.510128958000003,
+      "mutationMs": {
+        "count": 50,
+        "mean": 130.43205491999979,
+        "max": 155.22412500000064
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 288882688,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 125000,
+      "seconds": 32.974371875,
+      "mutationMs": {
+        "count": 50,
+        "mean": 129.19879010000025,
+        "max": 152.41858400000274
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 292290560,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 150000,
+      "seconds": 39.448486083000006,
+      "mutationMs": {
+        "count": 50,
+        "mean": 129.39372164,
+        "max": 143.47458299999562
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 322813952,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 175000,
+      "seconds": 46.00077533300001,
+      "mutationMs": {
+        "count": 50,
+        "mean": 130.9567757800006,
+        "max": 152.1765830000004
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 324141056,
+          "redbBytes": 1343229952
+        }
+      ]
+    },
+    {
+      "label": "seeded",
+      "orders": 200000,
+      "seconds": 52.547830125,
+      "mutationMs": {
+        "count": 50,
+        "mean": 130.85288162000026,
+        "max": 154.65708399999858
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 324157440,
+          "redbBytes": 2686455808
+        }
+      ]
+    },
+    {
+      "label": "touched",
+      "orders": 200000,
+      "seconds": 53.491620541,
+      "mutationMs": {
+        "count": 200,
+        "mean": 4.672396464999838,
+        "max": 12.442375000005995
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 324157440,
+          "redbBytes": 2686455808
+        }
+      ]
+    },
+    {
+      "label": "restarted",
+      "orders": 200000,
+      "seconds": 54.316467333,
+      "mutationMs": null,
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 120061952,
+          "redbBytes": 2686455808
+        }
+      ]
+    },
+    {
+      "label": "retouched",
+      "orders": 200000,
+      "seconds": 55.473860333000005,
+      "mutationMs": {
+        "count": 200,
+        "mean": 5.741033959999804,
+        "max": 161.1097910000026
+      },
+      "members": [
+        {
+          "id": 1,
+          "residentBytes": 163676160,
+          "redbBytes": 2686455808
+        }
+      ]
+    }
+  ],
+  "restartSeconds": 0.7984498749999984
+}

@@ -1,0 +1,85 @@
+<section id="partitions" data-toc="Partitions &amp; resizing">
+<h2>Partitions and resizing</h2>
+<p>A named partition is a separate database (its own bundle, data, timers and retry receipts) that you can move between Raft groups. Several partitions share one group.</p>
+<p>For a step-by-step procedure to add or retire groups, including server configuration and completion checks, see <a href="../operate/groups.html">Resize Raft groups</a>.</p>
+<ul>
+<li>Choose partitions when you create a database. Data in the default database can't be turned into a partition later.</li>
+<li>A partition can't read another partition's data directly. A <a href="#transactions">transaction</a> can call exposed methods in several partitions at once.</li>
+</ul>
+<div class="code-block"><div class="code-head"><span>Operator · existing, initialized groups</span><button class="copy-button" type="button" aria-label="Copy partition example">Copy</button></div><pre tabindex="0"><code class="language-ts">import { FlowerAdmin, FlowerClient } from "@flower-js/sdk/client";
+import { buildBundle } from "@flower-js/sdk/bundle";
+
+const admin = new FlowerAdmin("http://catalog-1:7101", { adminToken: process.env.FLOWER_ADMIN_TOKEN });
+await admin.registerGroup({ id: "west", addresses: ["west-1:7101", "west-2:7101", "west-3:7101"] });
+await admin.registerGroup({ id: "east", addresses: ["east-1:7101", "east-2:7101", "east-3:7101"] });
+await admin.createPartition("tenant-a", "west", { requestId: "create-tenant-a" });
+await admin.waitForPartition("tenant-a");
+await admin.partition("tenant-a").deploy(await buildBundle("app.ts"), { requestId: "deploy-tenant-a" });
+const tenant = new FlowerClient("http://catalog-1:7101").partition("tenant-a"); // Calls its exposed methods.
+await admin.resize(["west", "east"], { requestId: "grow-two-groups" });
+console.log(await admin.layout()); // Durable progress; resize continues after this client exits.</code></pre></div>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th><code data-api-method="FlowerClient.partition">client.partition(name): FlowerClient&lt;App&gt;</code></th><td>A client for <code>/partitions/{name}</code>, keeping the same transport, credentials, retry policy and types. Works wherever the partition lives. Isolation only; it doesn't authenticate tenants.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.partition">admin.partition(name): FlowerAdmin</code></th><td>Operator calls against one named database: deploys, staged deployment, keys, retention and transaction closure.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.layout">admin.layout(options?): Promise&lt;ClusterLayout&gt;</code></th><td>Current groups, placements, moves and rebalance plan.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.registerGroup">admin.registerGroup(group, options?): Promise&lt;ClusterGroup&gt;</code></th><td>Register a group that is already running. Safe to repeat. Doesn't start servers.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.removeGroup">admin.removeGroup(id, options?): Promise&lt;{removed: string}&gt;</code></th><td>Unregister a group with no owned partitions or active placement references (never the catalog). Doesn't stop servers, delete files or inspect its default database.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.createPartition">admin.createPartition(name, group, options?): Promise&lt;PartitionPlacement&gt;</code></th><td>Create an empty partition. Wait until active, then deploy to it.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.movePartition">admin.movePartition(name, destination, options?): Promise&lt;PartitionMove&gt;</code></th><td>Start moving to another group. Returns before the move finishes; the move continues if the client goes away.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.resize">admin.resize(groupIds, options?): Promise&lt;RebalancePlan&gt;</code></th><td>Pass the complete, nonempty set of distinct target group IDs. Spread partitions evenly by count across these groups, one move at a time; groups left out are drained. Doesn't balance by size or load. Register new groups first; wait for <code>layout().rebalance.complete</code> before removing drained ones. Rejected while another plan, move or partition creation is unfinished.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.partitionStatus">admin.partitionStatus(name, options?): Promise&lt;PartitionPlacement&gt;</code></th><td>Current phase, owner and epoch.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.waitForPartition">admin.waitForPartition(name, options?): Promise&lt;PartitionPlacement&gt;</code></th><td>Poll until active; the old copy may still be retiring, so this alone doesn't establish that a group is drained. Defaults: <code>timeoutMs</code> 30,000, <code>intervalMs</code> 100. Throws <code>PARTITION_WAIT_TIMEOUT</code> on timeout; abort only stops waiting.</td></tr>
+<tr><th><code data-api-symbol="ControlOptions">ControlOptions</code></th><td>Optional <code>signal</code> and <code>requestId</code>. A UUID is generated if omitted; set your own so you can retry safely.</td></tr>
+<tr><th><code data-api-symbol="PartitionWaitOptions">PartitionWaitOptions</code></th><td>Optional <code>signal</code>, <code>timeoutMs</code> and <code>intervalMs</code>.</td></tr>
+<tr><th><code data-api-symbol="ClusterGroup">ClusterGroup</code></th><td><code>{id: string, addresses: string[]}</code>, with distinct <code>host:port</code> entries. Addresses are seeds and can't be changed while the group is registered; keep at least one reachable.</td></tr>
+<tr><th><code data-api-symbol="PartitionPlacement">PartitionPlacement</code></th><td><code>{partition, epoch, owner: ClusterGroup, status: "creating" | "active" | "moving", operation, movement: PartitionMove | null}</code>.</td></tr>
+<tr><th><code data-api-symbol="PartitionMove">PartitionMove</code></th><td><code>{operation, partition, source: ClusterGroup, destination: ClusterGroup, source_epoch, epoch, phase}</code>. The epoch changes on each move; revision and receipts carry over.</td></tr>
+<tr><th><code data-api-symbol="PartitionMovePhase">PartitionMovePhase</code></th><td><code>"copying" | "freezing" | "importing" | "activating" | "retiring" | "complete"</code>. Moves always finish; there is no cancel.</td></tr>
+<tr><th><code data-api-symbol="RebalanceMove">RebalanceMove</code></th><td><code>{partition, source, destination, operation}</code>, with group IDs.</td></tr>
+<tr><th><code data-api-symbol="RebalancePlan">RebalancePlan</code></th><td><code>{operation, groups: ClusterGroup[], moves: RebalanceMove[], next: number, complete: boolean}</code>. <code>next</code> is the index of the next move.</td></tr>
+<tr><th><code data-api-symbol="ClusterLayout">ClusterLayout</code></th><td><code>{groups: ClusterGroup[], partitions: PartitionPlacement[], moves: PartitionMove[], rebalance: RebalancePlan | null}</code>. Move history is kept indefinitely.</td></tr>
+</tbody></table></div>
+</section>
+<section id="partition-operations" data-toc="Running partitions">
+<h2>Running partitions</h2>
+<p>Configure every server with:</p>
+<ul>
+<li><code>FLOWER_GROUP</code>: this server's group.</li>
+<li><code>FLOWER_CATALOG_GROUP</code>: the group that stores placements.</li>
+<li><code>FLOWER_GROUPS</code>: JSON map of group IDs to <code>host:port</code> lists, including this group and the catalog.</li>
+<li>The same peer secret everywhere, and a separate operator token.</li>
+</ul>
+<p>Initialize each group on its own. Put applications in named partitions, not the catalog's default database.</p>
+<h3>During a move</h3>
+<ul>
+<li>The source keeps serving while it copies, then briefly freezes to send the final changes. Writes either land before the freeze or fail; none are lost.</li>
+<li>The freeze can take longer for large partitions or slow networks. It is not guaranteed to be milliseconds.</li>
+<li>If a group loses quorum after the freeze, the move pauses until it recovers.</li>
+<li>Pending cross-group transactions delay the freeze.</li>
+<li>Live watches end with an error when the owner changes. Reconnect through the partition client; there's no automatic replay.</li>
+<li>Other partitions on the same group keep working but share CPU, disk and the Raft log.</li>
+</ul>
+<div class="table-wrap"><table><thead><tr><th>Setting</th><th>Effect</th></tr></thead><tbody>
+<tr><th><code>FLOWER_ROUTE_CACHE_MS</code></th><td>How long a server trusts a cached owner. Default 1,000 ms. If the catalog is down when an entry expires, requests to that partition fail. While watches are open, the server renews the entry once per partition as it expires, and ends them if the partition moved or the catalog can't confirm it.</td></tr>
+<tr><th><code>FLOWER_PARTITION_TAIL_MAX_BYTES</code></th><td>If the final change set is bigger than this, send a full copy instead. Unset by default.</td></tr>
+<tr><th><code>FLOWER_PARTITION_BASE_MAX_BYTES</code></th><td>Maximum size of the initial copy. Unset by default.</td></tr>
+</tbody></table></div>
+<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p>Partition URLs are not a security boundary. For public traffic, put a trusted gateway in front that limits each caller to its partitions. Retry uncertain mutations with the same request ID and body.</p></div>
+</section>
+<section id="transactions" data-toc="Cross-group transactions">
+<h2>Cross-group transactions</h2>
+<p>A transaction method calls exposed methods in several partitions or groups and commits them all or none. The <a href="../guide/methods.html#one-transaction-several-groups">methods guide</a> has a complete example.</p>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody><tr><th scope="row"><code data-api-symbol="transaction">transaction(name, plan)</code><br><code>transaction(name, spec: MethodSpec, plan)</code></th><td>Returns a <code>TransactionMethod&lt;A, V&gt;</code>. <code>plan(args)</code> returns a <code>TransactionPlan</code>; it sees only its arguments and can’t read data. <code>spec.args</code> checks the arguments and <code>spec.access</code> guards the call. Expose it as an alias and call it with <code>client.call</code>.</td></tr><tr><th scope="row"><code data-api-symbol="participant">participant&lt;Methods&gt;(target).call(alias, args?): TransactionCall</code></th><td>Builds one call. <code>Methods</code>, an <code>http</code> map or <code>typeof app</code>, types the alias and its arguments; transactions can’t be participants. <code>target</code> is <code>{ partition }</code> or <code>{ group }</code>.</td></tr><tr><th scope="row"><code data-api-symbol="TransactionTarget">TransactionTarget</code></th><td>Exactly one of <code>partition: string</code> (a named database) or <code>group: string</code> (a group’s root database).</td></tr><tr><th scope="row"><code data-api-symbol="TransactionCall">TransactionCall</code></th><td>A <code>TransactionTarget</code> plus <code>method</code> (an exposed query or mutation alias) and optional <code>args</code>.</td></tr><tr><th scope="row"><code data-api-symbol="TransactionPlan">TransactionPlan&lt;V = Json&gt;</code></th><td><code>calls: readonly TransactionCall[]</code> and optional <code>value: V</code>. The call list is fixed up front; results can’t choose later calls.</td></tr><tr><th scope="row"><code data-api-symbol="TransactionResult">TransactionResult&lt;V = Json&gt;</code></th><td>What the caller gets: <code>results</code>, one per call in plan order, and the plan’s <code>value</code>, when it returned one.</td></tr><tr><th scope="row"><code data-api-symbol="TransactionMethod">TransactionMethod&lt;A = Json, V = Json&gt;</code></th><td><code>{kind: "transactionMethod", name, compute}</code>. Create it with <code>transaction</code>; don’t call <code>compute</code> yourself.</td></tr></tbody></table></div>
+<ul>
+<li>Check business rules inside the participant methods. Later calls to the same target see earlier ones.</li>
+<li>If a participant fails, nothing commits and the caller gets <code>422 TRANSACTION_ABORTED</code> with that participant’s <code>failure</code>. It is final for that request ID; fix the problem and use a new ID.</li>
+<li>Participants are authorized with the coordinator’s principal; see <a href="access.html#authorization">delegation</a>.</li>
+<li>While a transaction is prepared, each participating database blocks fresh reads, watches, writes, deploys and maintenance, even for unrelated keys. Other partitions on the same group are unaffected.</li>
+<li>Replica-local reads may not see the transaction atomically.</li>
+<li><strong>If the coordinator is unreachable, participants stay blocked until it recovers.</strong> Nothing times out on its own.</li>
+<li><code>TRANSACTION_PREPARED</code>: wait for recovery and retry with the same ID and content.</li>
+<li>Completed transaction records are cleaned up only by operator action; see <a href="access.html#retention">retry retention and transaction closure</a>.</li>
+<li>Every participant needs <code>FLOWER_GROUP</code>, <code>FLOWER_GROUPS</code> and the shared peer secret; named partitions also need <code>FLOWER_CATALOG_GROUP</code>.</li>
+</ul>
+<p>Full protocol: <a href="https://github.com/xmit-dev/flower/blob/main/TRANSACTIONS.md">transactions and recovery</a>.</p>
+</section>

@@ -1,0 +1,64 @@
+<div class="prerequisites"><strong>Before you begin</strong><span>Node.js 22.18+</span><span>Rust 1.96+</span><span>A C compiler</span></div>
+<section id="build-the-server" data-toc="1. Build">
+<h2>1. Build Flower</h2>
+<p>Clone and build the SDK and server.</p>
+<div class="code-block"><div class="code-head"><span>Terminal · repository root</span><button type="button" class="copy-button" aria-label="Copy Terminal · repository root">Copy</button></div><pre tabindex="0"><code class="language-sh">git clone https://github.com/flower-js-org/runtime.git
+cd runtime
+npm ci
+npm run build
+cargo build --release --bin flower</code></pre></div>
+</section>
+<section id="start-one-node" data-toc="2. Start a node">
+<h2>2. Start a node</h2>
+<p>Pick an operator token and use it in every terminal.</p>
+<div class="code-block"><div class="code-head"><span>Terminal 1</span><button type="button" class="copy-button" aria-label="Copy Terminal 1">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='local-development-secret'
+./target/release/flower \
+  --id 1 \
+  --listen 127.0.0.1:7101 \
+  --data .flower/node1</code></pre></div>
+</section>
+<section id="initialize-once-then-deploy" data-toc="3. Initialize and deploy">
+<h2>3. Initialize and deploy</h2>
+<p>In a second terminal, initialize, check for a leader, and deploy the example app.</p>
+<div class="code-block"><div class="code-head"><span>Terminal 2</span><button type="button" class="copy-button" aria-label="Copy Terminal 2">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='local-development-secret'
+node sdk/cli.ts init --members 1=127.0.0.1:7101
+
+# Check that the initial election has produced a leader.
+curl -fsS -H "Authorization: Bearer $FLOWER_ADMIN_TOKEN" \
+  http://127.0.0.1:7101/raft/metrics
+
+node sdk/cli.ts deploy examples/orders.ts</code></pre></div>
+<ul>
+<li>Deploy once metrics show <code>state: "Leader"</code>. <code>UNAVAILABLE</code> means the election is still settling; retry.</li>
+<li>Run <code>init</code> only on a fresh cluster, never on a restarted data directory.</li>
+<li>Callers of your methods don't need the operator token.</li>
+</ul>
+</section>
+<section id="make-a-change-read-its" data-toc="4. Call a method">
+<h2>4. Call a method</h2>
+<p>Create an order, read it, change it and watch it.</p>
+<div class="code-block"><div class="code-head"><span>Terminal 2</span><button type="button" class="copy-button" aria-label="Copy Terminal 2">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts call order.create @examples/orders.create.json \
+  --request-id create-order-42
+node sdk/cli.ts call order.get '"order-42"'
+# value: { order: { shippingCents: 500 }, subtotal: 3200, total: 3700 }
+
+node sdk/cli.ts mutate order.updateLine @examples/orders.update.json \
+  --request-id update-line-2
+node sdk/cli.ts query order.get '"order-42"'
+# value: { order: { shippingCents: 500 }, subtotal: 4600, total: 5100 }
+
+node sdk/cli.ts watch order.get '"order-42"'</code></pre></div>
+<ul>
+<li>If a mutation times out, retry with the <strong>same</strong> <code>--request-id</code>.</li>
+<li>A rejected call prints its failure, such as <code>flower: ORDER_NOT_FOUND: Order order-7 does not exist</code>, and exits nonzero.</li>
+<li><code>watch</code> prints the value, then each change. It can skip intermediate commits. Stop it with Ctrl+C.</li>
+</ul>
+</section>
+<section id="terrarium" data-toc="Try the terrarium"><span id="tiny-pizzeria"></span>
+<h2>Next: try the terrarium</h2>
+<p>With the node still running, deploy the app from the <a href="../#recipe">homepage walkthrough</a> and run its client:</p>
+<div class="code-block"><div class="code-head"><span>Terminal 2 · repository root</span><button type="button" class="copy-button" aria-label="Copy terrarium commands">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts deploy docs/terrarium.ts
+node docs/terrarium-client.ts</code></pre></div>
+<p>It plants a seed in a shared, public garden (twelve spots) and watches it. Timers bloom the seed after 5 seconds and remove it after 35; timers mean “not before”, so downtime can delay them. Source: <a href="../terrarium.ts">application</a> and <a href="../terrarium-client.ts">client</a>.</p>
+<p>Next: <a href="applications.html">write an application</a>, <a href="testing.html">test it</a>, <a href="methods.html">call it from TypeScript</a>, <a href="reads.html">read and watch</a>, or <a href="../operate/">run a three-node cluster</a>.</p>
+</section>

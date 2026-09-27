@@ -1,0 +1,116 @@
+<section id="groups-and-partitions" data-toc="Groups and partitions">
+<h2>Scale by moving named partitions</h2>
+<p>To increase the number of Raft groups, start and initialize another group, register it, then call <code>admin.resize()</code> with the complete desired set of groups. To decrease it, resize onto the groups you want to keep, wait for completion, unregister the drained groups, and stop their servers.</p>
+<p>Each Flower process belongs to one physical Raft group. A group has its own log, leader and quorum; several named partitions can share it. Adding replicas to a group changes its replication and fault tolerance. Adding groups gives partitions independent Raft logs and writers. The <a href="https://github.com/xmit-dev/flower/blob/main/MEMBERSHIP.md">membership API</a> handles replica changes within a group.</p>
+<p>This walkthrough grows from one three-replica group, <code>west</code>, to two, <code>west</code> and <code>east</code>: three server processes become six. <code>west</code> also stores the partition catalog. A dedicated catalog group is supported too; count it separately if you leave it out of the partition-placement target set.</p>
+<div class="table-wrap"><table><thead><tr><th>Group</th><th>Role</th><th>Example replica addresses</th></tr></thead><tbody>
+<tr><th><code>west</code></th><td>Existing group; catalog and named partitions</td><td><code>127.0.0.1:7101</code>, <code>:7102</code>, <code>:7103</code></td></tr>
+<tr><th><code>east</code></th><td>New group for named partitions</td><td><code>127.0.0.1:7201</code>, <code>:7202</code>, <code>:7203</code></td></tr>
+</tbody></table></div>
+<p>Partition count sets the granularity: two or more partitions can use two groups, but one large partition moves as a whole. Flower does not split its keys automatically. Data in a group's default database, including composite tenant keys, is not moved by a resize or automatically converted into named partitions.</p>
+</section>
+<section id="prepare" data-toc="Prepare the existing group">
+<h2>Enable partitions on the existing group</h2>
+<p>Configure every <code>west</code> replica with these settings, alongside its existing operator and peer tokens:</p>
+<div class="code-block"><div class="code-head"><span>Every west server terminal</span><button class="copy-button" type="button" aria-label="Copy west group configuration">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_GROUP=west
+export FLOWER_CATALOG_GROUP=west
+export FLOWER_GROUPS='{"west":["127.0.0.1:7101","127.0.0.1:7102","127.0.0.1:7103"]}'</code></pre></div>
+<p>For a new deployment, <a href="./#start-three-distinct-nodes">start and initialize the three replicas</a> with that environment. For an existing initialized group, apply the settings on restart, keeping each node's ID, address and data directory; do not initialize it again. Keep the same designated catalog group throughout the resize.</p>
+<p>The TypeScript snippets below form an operator script using the SDK. Connect it to a reachable <code>west</code> replica and register the existing group:</p>
+<div class="code-block"><div class="code-head"><span>Operator · resize.ts</span><button class="copy-button" type="button" aria-label="Copy resize operator setup">Copy</button></div><pre tabindex="0"><code class="language-ts">import { FlowerAdmin } from "@flower-js/sdk/client";
+
+const admin = new FlowerAdmin("http://127.0.0.1:7101", {
+  adminToken: process.env.FLOWER_ADMIN_TOKEN,
+});
+await admin.registerGroup({
+  id: "west",
+  addresses: ["127.0.0.1:7101", "127.0.0.1:7102", "127.0.0.1:7103"],
+});</code></pre></div>
+<p>Registration is safe to repeat with the exact same group descriptor. Registered seed addresses are immutable until the group is removed. If you already registered <code>west</code>, use its existing descriptor from <code>admin.layout()</code>.</p>
+<p>Put the workload in named partitions before resizing: <a href="../reference/partitions.html#partitions">create a partition, wait for it to become active, and deploy its application</a>. A new, empty cluster has no partitions to rebalance.</p>
+</section>
+<section id="start-a-group" data-toc="Start another group">
+<h2>Start an additional Raft group</h2>
+<p>Use the same Flower build and shared peer token as <code>west</code>. Each new replica gets its own address and fresh data directory. The loopback addresses below let you try this on one machine; across hosts, use addresses peers can reach and the deployment's <a href="https://github.com/xmit-dev/flower/blob/main/TLS.md">TLS configuration</a>.</p>
+<div class="code-block"><div class="code-head"><span>Every east server terminal</span><button class="copy-button" type="button" aria-label="Copy east group startup">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='same-operator-token-as-west'
+export FLOWER_PEER_TOKEN='same-peer-token-as-west'
+export FLOWER_GROUP=east
+export FLOWER_CATALOG_GROUP=west
+export FLOWER_GROUPS='{"west":["127.0.0.1:7101","127.0.0.1:7102","127.0.0.1:7103"],"east":["127.0.0.1:7201","127.0.0.1:7202","127.0.0.1:7203"]}'
+
+# Run one command per terminal, with the environment above in each:
+./target/release/flower --id 1 --listen 127.0.0.1:7201 --data .flower/east/node1
+./target/release/flower --id 2 --listen 127.0.0.1:7202 --data .flower/east/node2
+./target/release/flower --id 3 --listen 127.0.0.1:7203 --data .flower/east/node3</code></pre></div>
+<p>Bootstrap <code>east</code> once, using only its own members. The explicit URL selects the new group:</p>
+<div class="code-block"><div class="code-head"><span>Operator terminal · new group only</span><button class="copy-button" type="button" aria-label="Copy east group initialization">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='same-operator-token-as-west'
+node sdk/cli.ts init --url http://127.0.0.1:7201 \
+  --members 1=127.0.0.1:7201,2=127.0.0.1:7202,3=127.0.0.1:7203
+
+curl -fsS -H "Authorization: Bearer $FLOWER_ADMIN_TOKEN" \
+  http://127.0.0.1:7201/raft/metrics</code></pre></div>
+<p>Wait for the new group to elect a leader and establish quorum before registering it. <code>FLOWER_GROUPS</code> supplies bootstrap contacts; adding an entry there does not provision or register a group. Existing partition-enabled replicas learn new partition owners and their addresses from the catalog, so they can route to <code>east</code> without restarting to add it to their bootstrap map. Transactions that directly target <code>{ group: "east" }</code> use the startup registry instead; configure those callers with the new group's peers.</p>
+</section>
+<section id="grow" data-toc="Grow the group count">
+<h2>Grow from one group to two</h2>
+<p>With <code>east</code> initialized and reachable, continue the operator script:</p>
+<div class="code-block"><div class="code-head"><span>Register, then rebalance</span><button class="copy-button" type="button" aria-label="Copy group expansion">Copy</button></div><pre tabindex="0"><code class="language-ts">await admin.registerGroup({
+  id: "east",
+  addresses: ["127.0.0.1:7201", "127.0.0.1:7202", "127.0.0.1:7203"],
+});
+const growth = await admin.resize(["west", "east"], {
+  requestId: "grow-west-east-001",
+});
+console.log(growth);</code></pre></div>
+<p>The argument is the <strong>complete, nonempty set of groups that should own named partitions</strong>, with no duplicates. To grow again, register another initialized group and include it alongside every group you want to retain. Groups omitted from the list are drained. Registration alone leaves existing placements where they are.</p>
+<p>The returned plan records the moves durably; the call returns before they finish. Flower balances all named partitions by count, retains existing owners where possible, and moves one partition at a time. Use a new request ID for each intended resize, and reuse that ID and target set when retrying an uncertain request.</p>
+</section>
+<section id="progress" data-toc="Wait for completion">
+<h2>Wait for the resize to finish</h2>
+<p>Poll <code>admin.layout()</code> and check the operation ID and <code>rebalance.complete</code>. Add this helper to the same script:</p>
+<div class="code-block"><div class="code-head"><span>Observe durable progress</span><button class="copy-button" type="button" aria-label="Copy resize progress polling">Copy</button></div><pre tabindex="0"><code class="language-ts">import { setTimeout as delay } from "node:timers/promises";
+
+async function waitForResize(operation: string) {
+  const signal = AbortSignal.timeout(15 * 60_000);
+  while (true) {
+    const layout = await admin.layout({ signal });
+    const plan = layout.rebalance;
+    if (plan?.operation !== operation) {
+      throw new Error("The catalog has a different resize plan; inspect admin.layout()");
+    }
+    console.log(`${plan.next}/${plan.moves.length} moves complete`);
+    if (plan.complete) return layout;
+    await delay(1000, undefined, { signal });
+  }
+}
+
+const layout = await waitForResize(growth.operation);
+console.table(layout.partitions.map((p) => ({
+  partition: p.partition, group: p.owner.id, status: p.status,
+})));</code></pre></div>
+<p>The 15-minute deadline only stops this observer. A timeout, disconnected operator or catalog leader restart does not cancel the durable plan. Reconnect, inspect the layout, and resume waiting for the same operation. A completed plan can be replaced by a later resize, which is why the helper checks its identity.</p>
+<p><code>admin.waitForPartition()</code> waits for serving status <code>active</code>, which can occur while the old copy is still being retired. For draining a group, wait for the whole resize plan to be <code>complete</code>. <code>layout.moves</code> shows each move's phase and retains completed history; a nonempty history does not mean a move is still running.</p>
+</section>
+<section id="shrink" data-toc="Drain and remove a group">
+<h2>Shrink back to one group</h2>
+<p>Reuse <code>admin</code> and <code>waitForResize</code> from above. Keep both groups running while Flower drains <code>east</code> into <code>west</code>:</p>
+<div class="code-block"><div class="code-head"><span>Drain east, then unregister it</span><button class="copy-button" type="button" aria-label="Copy group shrink">Copy</button></div><pre tabindex="0"><code class="language-ts">const shrink = await admin.resize(["west"], {
+  requestId: "shrink-to-west-001",
+});
+await waitForResize(shrink.operation);
+await admin.removeGroup("east");
+console.log(await admin.layout());</code></pre></div>
+<p><code>removeGroup()</code> rejects a group that still owns a partition or has active placement references. It unregisters the group; its processes and files remain under your control. After removal succeeds, take <code>east</code> out of client entry URLs and load-balancer targets, then stop its three server processes. A client entering through <code>west</code> keeps using the same <code>client.partition(name)</code> address throughout.</p>
+<p>The designated catalog group cannot be removed. A dedicated catalog can be omitted from the resize target set to drain its named partitions, but its replicas must keep serving the catalog. A group's default database and direct group-targeted transactions are outside partition resizing; account for those separately before retiring servers.</p>
+</section>
+<section id="during-resize" data-toc="Availability and sizing">
+<h2>What to expect during a resize</h2>
+<ul>
+<li><strong>Each move copies while serving, then freezes for cutover.</strong> The partition's code, data, indexes, timers, leases and retry receipts move together. Other partitions keep serving but share CPU, disk and Raft resources.</li>
+<li><strong>Recovery rolls forward.</strong> Moves have no cancel operation. Loss of a required group's quorum pauses progress; a frozen partition stays unavailable until the required groups recover. Pending cross-group transactions can also delay its freeze.</li>
+<li><strong>Clients retry and reconnect.</strong> Retry uncertain mutations with the same request ID and body. Reconnect live watches through the stable partition URL after an ownership change.</li>
+<li><strong>Finish the current placement work first.</strong> A new resize is rejected while another plan, move or partition creation is unfinished. Complete one plan before starting another.</li>
+<li><strong>Balance is by partition count.</strong> Size and traffic can differ greatly between partitions. Use <code>admin.movePartition(name, destination, { requestId })</code> for a deliberate placement when no resize is running. More groups on the same host still share its resources.</li>
+</ul>
+<p>See the <a href="../reference/partitions.html#partitions">partition API</a> for the full request and status types, and <a href="../reference/partitions.html#partition-operations">partition operations</a> for routing and transfer settings.</p>
+</section>

@@ -1,0 +1,57 @@
+<section id="values" data-toc="Values &amp; purity">
+<h2>Values and callbacks</h2>
+<p>Flower stores JSON. Callbacks are plain synchronous functions over that JSON.</p>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody><tr><th scope="row"><code data-api-symbol="Json">Json</code></th><td>The stored value type: <code>null | boolean | number | string | Json[] | { [key: string]: Json }</code>. Numbers must be finite. Checked at runtime too.</td></tr><tr><th scope="row"><code data-api-symbol="canonicalJson">canonicalJson(value: unknown): string</code></th><td>Serializes with sorted object keys; used for identity, equality and typed keys. <code>-0</code> becomes <code>0</code>. Throws <code>TypeError</code> for anything that isn’t plain JSON (cycles, depth over 128, BigInt, undefined, class instances, and so on).</td></tr></tbody></table></div>
+<ul>
+<li>Encode BigInt, Date, Map, Set and typed arrays as JSON yourself. Use safe integers (such as cents) when you need exact math.</li>
+<li>Return a JSON value, never a Promise or undefined. Use <code>null</code> for “nothing”.</li>
+<li>Callbacks have no filesystem, network, timers or wall clock. Use <code>ctx.now()</code> or <code>ctx.clock()</code> for time and external workers for side effects.</li>
+<li>Each callback starts from a copy of your initialized module. Changes to module globals don’t persist between calls.</li>
+</ul>
+</section>
+<section id="collections" data-toc="Collections &amp; indexes">
+<h2>Collections and indexes</h2>
+<p>A collection is a named set of JSON records. Keys are strings, or JSON values checked by a key schema. Indexes find records by field.</p>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody><tr><th scope="row"><code data-api-symbol="collection">collection&lt;T = Json&gt;(name): Collection&lt;T&gt;</code><br><code>collection(name, schema): Collection&lt;Infer&lt;S&gt;&gt;</code></th><td>A reference to a collection; it doesn’t contact a server. With a <a href="schemas.html">schema</a>, <code>T</code> comes from it and every write is checked: a bad record fails with <code>INVALID_RECORD</code> and <code>details: { collection, key, path }</code>. Missing records read as null.</td></tr><tr><th scope="row"><code data-api-method="Collection.key">ref.key(schema): Collection&lt;T, K&gt;</code></th><td>A new reference whose keys are JSON values, usually tuples, stored as canonical JSON. A key that fails the schema fails with <code>INVALID_KEY</code>. Scans and ranges return decoded keys.</td></tr><tr><th scope="row"><code data-api-method="Collection.index">ref.index(name, fields): Collection&lt;T, K, I&gt;</code></th><td>A new reference with one more index on one or more fields of <code>T</code>. Duplicate index names are rejected. Chain it where you declare the collection and use the result.</td></tr><tr><th scope="row"><code data-api-method="Collection.by">ref.by(name): Index</code></th><td>A declared index. Unknown names are type errors, and throw <code>TypeError</code> at run time.</td></tr><tr><th scope="row"><code data-api-symbol="Index">Index&lt;T, K, F&gt;</code></th><td><code>eq(value)</code>: an equality <code>Query</code>; for several fields, pass a tuple in field order. <code>range(options)</code>: an ordered <code>RangeQuery</code>.</td></tr><tr><th scope="row"><code data-api-symbol="Collection">Collection&lt;T = Json, K = string, I = {}&gt;</code></th><td>Readonly <code>kind: "collection"</code>, <code>name</code> and <code>indexes</code>, plus <code>key</code>, <code>index</code> and <code>by</code>. A definition, not a client-side table.</td></tr><tr><th scope="row"><code data-api-symbol="Query">Query&lt;T, K&gt;</code></th><td>Readonly <code>kind: "query"</code>, <code>collection</code>, <code>fields</code> and <code>value</code>. Pass it to <code>ctx.query</code>.</td></tr><tr><th scope="row"><code data-api-symbol="RangeQuery">RangeQuery&lt;T, K&gt;</code></th><td>Readonly <code>kind: "range"</code>, collection, fields and options. Pass it to <code>ctx.range</code>.</td></tr><tr><th scope="row"><code data-api-symbol="IndexScalar">IndexScalar</code></th><td><code>null | boolean | number | string</code>. Sort order: null, false, true, numbers, then strings. Ties break by record key. Records with a missing or non-scalar field are left out of ordered scans.</td></tr><tr><th scope="row"><code data-api-symbol="IndexMap">IndexMap</code></th><td>Index names to field lists: the <code>I</code> of a collection.</td></tr><tr><th scope="row"><code data-api-symbol="FieldOf">FieldOf&lt;T&gt;</code></th><td>The field names an index may use: the string keys of <code>T</code>.</td></tr><tr><th scope="row"><code data-api-symbol="IndexValues">IndexValues&lt;T, F&gt;</code></th><td>The value types of fields <code>F</code>, as a tuple.</td></tr><tr><th scope="row"><code data-api-symbol="EqualityValue">EqualityValue&lt;T, F&gt;</code></th><td>What <code>eq</code> and aggregate groups take: the field’s type for a one-field index, otherwise <code>IndexValues</code>.</td></tr><tr><th scope="row"><code data-api-symbol="ScanOptions">ScanOptions</code></th><td>Options for <code>ctx.scan</code>: <code>index</code> (a declared index; omit to walk keys), <code>prefix</code>, one lower bound (<code>gt</code>/<code>gte</code>) and one upper bound (<code>lt</code>/<code>lte</code>) on the next field, <code>reverse</code>, <code>offset</code> and <code>limit</code>. Typed-key collections take a tuple <code>prefix</code> without an index, but reject key bounds with <code>INVALID_SCAN</code>.</td></tr><tr><th scope="row"><code data-api-symbol="RangeOptions">RangeOptions</code></th><td>Required positive <code>limit</code>. Optional <code>prefix</code> (leading field values, typed), bounds, <code>reverse</code>, and <code>after</code> (a cursor from the previous page).</td></tr><tr><th scope="row"><code data-api-symbol="Row">Row&lt;T, K&gt;</code></th><td><code>{ key, value }</code>, with a decoded key for typed-key collections.</td></tr><tr><th scope="row"><code data-api-symbol="RangePage">RangePage&lt;T, K&gt;</code></th><td><code>rows: Row[]</code> and <code>cursor: string | null</code>; null means no more rows. Pass the cursor as <code>after</code> with the same query. Rows edited between pages can be skipped or repeated.</td></tr><tr><th scope="row"><code data-api-symbol="CollectionManifest">CollectionManifest</code></th><td>Readonly <code>name</code> and <code>indexes</code>: the collection schema as stored in a deployed module.</td></tr></tbody></table></div><div class="code-block"><div class="code-head"><span>Declare the schema as part of the application</span><button class="copy-button" type="button" aria-label="Copy Declare the schema as part of the application">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, query, v } from "@flower-js/sdk";
+
+const orders = collection("orders", v.object({
+  tenant: v.string(), state: v.enum(["pending", "paid"]), cents: v.int({ min: 0 }),
+})).index("byTenantState", ["tenant", "state"]);
+
+const pending = query("orders.pending", { args: v.string() }, (ctx, tenant) =&gt;
+  ctx.query(orders.by("byTenantState").eq([tenant, "pending"])));
+
+export default define({ collections: [orders], http: { pending } });</code></pre></div>
+<ul>
+<li>Declare indexed collections: in <code>define({ collections })</code>, in a component, or as the source of an aggregate or trigger. Otherwise queries fall back to scanning, and test databases fail with <code>UNDECLARED_INDEX</code>.</li>
+<li>A collection name must always carry the same indexes; declaring it twice with different ones is rejected.</li>
+<li>Indexes don’t enforce uniqueness. A missing field doesn’t match <code>null</code>.</li>
+<li>Rows and their index entries commit together. Queries inside a mutation see that mutation’s writes.</li>
+<li>Deploying a new index builds it in one step. For large collections, use <a href="deployments.html">staged deployment</a>.</li>
+</ul>
+<p>Example: find the first due timer with <code>ctx.range(timers.by("due").range({ prefix: ["pending"], lte: ctx.now(), limit: 1 }))</code>. More detail is in <a href="https://github.com/xmit-dev/flower/blob/main/INDEXES.md">INDEXES.md</a>.</p>
+</section>
+<section id="aggregates" data-toc="Incremental aggregates">
+<h2>Running totals</h2>
+<p>An aggregate keeps a per-group value, such as a sum, and updates it from each changed row. It doesn’t reread the whole group.</p>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody><tr><th scope="row"><code data-api-symbol="aggregate">aggregate(name, options): Aggregate&lt;G, V&gt;</code></th><td>A derived value per group, where the group is a value of one index: the field’s type, or a tuple for several fields. Read it with <code>ctx.get(agg, group)</code>. List it in <code>definitions</code>; its source collection is declared for you.</td></tr><tr><th scope="row"><code data-api-symbol="Aggregate">Aggregate&lt;G, V&gt;</code></th><td>A <code>Derived&lt;G, V&gt;</code> with readonly <code>aggregate: AggregateMetadata</code>.</td></tr><tr><th scope="row"><code data-api-symbol="AggregateMetadata">AggregateMetadata</code></th><td>Readonly <code>collection</code> and <code>fields</code>.</td></tr><tr><th scope="row"><code data-api-symbol="AggregateOptions">AggregateOptions</code></th><td>Required <code>source</code>, <code>index</code> (a declared index name), <code>initial(group)</code>, <code>add(value, row, key, group)</code> and <code>remove(value, row, key, group)</code>. Keys are decoded for typed-key collections.</td></tr></tbody></table></div><div class="code-block"><div class="code-head"><span>Maintain a sum from changed rows</span><button class="copy-button" type="button" aria-label="Copy Maintain a sum from changed rows">Copy</button></div><pre tabindex="0"><code class="language-ts">import { aggregate, collection, define, query, v } from "@flower-js/sdk";
+
+const lines = collection("lines", v.object({ shop: v.string(), cents: v.int() }))
+  .index("byShop", ["shop"]);
+const total = aggregate("shop.total", {
+  source: lines, index: "byShop",
+  initial: () =&gt; 0,
+  add: (sum, row) =&gt; sum + row.cents,
+  remove: (sum, row) =&gt; sum - row.cents,
+});
+const read = query("internal.shop.total", { args: v.string() }, (ctx, shop) =&gt; ctx.get(total, shop));
+
+export default define({ definitions: [total], http: { "shop.total": read } });</code></pre></div>
+<ul>
+<li><code>add</code> and <code>remove</code> must be deterministic, work in any order, and undo each other. Flower can’t check this for you.</li>
+<li>Use integer units for exact totals. Floating-point sums can drift.</li>
+<li>An update removes the old row and adds the new one, so moving a row between groups updates both.</li>
+<li>Materialize an aggregate, or a value that reads it, to keep it maintained. Unmaterialized ones may rebuild on every read. Redeploying rebuilds them.</li>
+<li>If a reducer throws, the error is stored and the next relevant change rebuilds from scratch.</li>
+</ul>
+</section>

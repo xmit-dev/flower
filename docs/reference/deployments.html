@@ -1,0 +1,53 @@
+<p>A plain deploy rebuilds all derived values at once. A staged deploy builds the new version in the background while the old one keeps serving, then switches when you say so. Nothing activates automatically.</p>
+<section id="deployment-api" data-toc="Staged deployment API">
+<h2>Staged deployment API</h2>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th><code data-api-symbol="StagedDeploymentState">StagedDeploymentState</code></th><td><code>{requestId, phase, baseRevision, baseBundleHash: string|null, bundleHash, cursor: string|null, scannedRows, builtEntries, generation: string|null, graphCursor: string|null, rebuiltRoots, error?: string|null, cleanupCursor: string|null}</code>. Survives restarts and partition moves. Counters show work done, not a percentage.</td></tr>
+<tr><th><code data-api-symbol="StagedDeploymentAction">StagedDeploymentAction</code></th><td><code>{operation: "advance"|"collect", requestId, maxBytes?: number}</code> or <code>{operation: "activate"|"cancel", requestId}</code>. Use the job's original request ID. <code>maxBytes</code> caps the work per call; raise it if a single row doesn't fit.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.stageDeployment">admin.stageDeployment(bundle, options?)</code></th><td>Start a staged job (admin token). Returns <code>QueryResult&lt;StagedDeploymentState&gt;</code>. One unfinished job per database. Keep the <code>requestId</code> for retries.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.stagedDeploymentStatus">admin.stagedDeploymentStatus(options?)</code></th><td>Current job state, or <code>null</code> if none. Check it after a restart or an uncertain response before your next step.</td></tr>
+<tr><th><code data-api-method="FlowerAdmin.controlStagedDeployment">admin.controlStagedDeployment(action, options?)</code></th><td><code>advance</code> does the next page of work. <code>activate</code> switches bundle, indexes, aliases, authorization, keys and derived values at once. <code>cancel</code> abandons the job. <code>collect</code> deletes leftover state in pages. Aborting the HTTP request doesn't undo committed work.</td></tr>
+</tbody></table></div>
+</section>
+<section id="deployment-lifecycle">
+<h2>Phases, resume and failure</h2>
+<ol class="steps"><li><strong><code>backfill</code>:</strong> <code>advance</code> fills new indexes page by page. Code-only changes skip to <code>rebuilding</code>.</li><li><strong><code>rebuilding</code>:</strong> <code>advance</code> recomputes derived values in a hidden copy. Public calls still use the old version.</li><li><strong><code>ready</code>:</strong> the new version is complete and kept up to date by normal writes.</li><li><strong><code>active</code>:</strong> <code>activate</code> switched everything at once.</li><li><strong><code>canceled</code> / <code>collected</code>:</strong> cancel keeps the old version. <code>collect</code> cleans up. Collect before starting another job. To undo an activation, deploy again.</li></ol>
+<ul>
+<li>Only advance <code>backfill</code>/<code>rebuilding</code>, activate <code>ready</code>, and collect <code>active</code>/<code>canceled</code>.</li>
+<li>After an uncertain response, check status and confirm <code>requestId</code> and <code>bundleHash</code> before resuming. A repeated <code>advance</code> may do the next page rather than repeat the last one.</li>
+<li>A failed page or activation keeps earlier progress. Fix the budget and retry, or cancel and collect.</li>
+<li>If the new code fails while handling a normal write, the job becomes <code>failed</code> with an <code>error</code>; the write itself still commits. Cancel and collect, then stage fixed code.</li>
+<li>While a cross-group transaction is prepared, controls return <code>TRANSACTION_PREPARED</code>.</li>
+<li>After cleanup, status shows the last <code>collected</code> job instead of <code>null</code>.</li>
+<li>Don't retire the job's retry epoch or session before activating it; see <a href="access.html#retention">retry retention</a>.</li>
+</ul>
+<p>Example: <a href="../guide/deployments.html#staged-deployment">restart-aware lifecycle</a>.</p>
+</section>
+<section id="deployment-tuning">
+<h2>Page size and limits</h2>
+<ul>
+<li><code>FLOWER_DEPLOYMENT_PAGE_MS</code>: target time per page. Default 200, at most <code>FLOWER_EVALUATION_TIMEOUT_MS</code>. Set at startup. Smaller pages mean shorter write stalls; larger pages finish sooner.</li>
+<li>Each page blocks writes to that database while it runs; reads continue. A page can overrun the target by up to one full evaluation.</li>
+<li><code>maxBytes</code> separately caps the work per call.</li>
+<li>Each derived value, with its dependencies, must fit in one evaluation.</li>
+<li>The staged copy uses extra storage and adds work to each write until you collect.</li>
+</ul>
+<p>Measure rebuild time and write latency on your own workload. See the <a href="../guide/deployments.html#deployment-tuning">tuning guide</a>.</p>
+</section>
+<section id="data-migrations">
+<h2>Migrate stored records</h2>
+<p>Deploys never rewrite stored records. To change their shape, write migration mutations:</p>
+<ol class="steps">
+<li>Deploy code that reads both old and new shapes, and make writers emit the new shape.</li>
+<li>Migrate in batches with <code>ctx.scan(rows, {gt: afterKey, limit: 100})</code> (omit <code>gt</code> at first). Save the converted rows and the next cursor in the same mutation.</li>
+<li>Reuse the batch's request ID if a response is lost. Record completion when a page is empty.</li>
+<li>Check that no old records remain before deploying code that drops the old shape.</li>
+</ol>
+<ul>
+<li>Avoid unbounded scans and growing offsets. Index ranges (<code>ctx.range</code>) can skip or repeat rows that change during the migration.</li>
+<li>Renaming a collection or derived value doesn't move its data. Copy it explicitly.</li>
+<li>Protect migration methods with <a href="access.html#authorization">application authorization</a>. The admin token doesn't protect public mutations.</li>
+<li><a href="partitions.html#partitions">Moving a partition</a> doesn't change record shapes.</li>
+</ul>
+<p>See the <a href="../guide/deployments.html#data-migrations">migration workflow</a>, <a href="data.html#collections">range contracts</a> and <a href="definitions.html#contexts">mutation context</a>.</p>
+</section>

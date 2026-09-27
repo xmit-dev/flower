@@ -1,0 +1,53 @@
+<p>It runs jobs from the queue in <a href="https://github.com/xmit-dev/flower/blob/main/examples/workers.ts"><code>examples/workers.ts</code></a>, on as many machines as you like. Keeping a result current instead of running jobs? See <a href="workers.html#reconcile">External workers</a>.</p>
+<section id="how">
+<h2>How it works</h2>
+<div class="flow-diagram" role="img" aria-label="Each worker waits for work, claims jobs, runs them while renewing their leases, then reports each outcome"><div><span>01</span><strong>Wait</strong><small>watch jobs.ready</small></div><b aria-hidden="true">→</b><div><span>02</span><strong>Claim</strong><small>jobs.claim gives leases</small></div><b aria-hidden="true">→</b><div><span>03</span><strong>Work</strong><small>your code; jobs.renew keeps the leases</small></div><b aria-hidden="true">→</b><div><span>04</span><strong>Report</strong><small>jobs.complete or jobs.fail</small></div></div>
+<ul>
+<li>A claim gives one worker a job until its lease ends. Flower decides who gets which job, so there is no coordinator or leader to run.</li>
+<li>While your code runs, the worker renews the lease. If a worker dies, renewals stop, the lease runs out, and the next claim takes the job again with <code>attempt</code> one higher.</li>
+<li>A worker that reports after its lease ended gets <code>LEASE_LOST</code>, and its report is ignored.</li>
+<li>Each process runs several jobs at once: more while the queue holds more than it runs, fewer once its event loop or memory falls behind. One watch and a few claims serve them all.</li>
+<li>Idle workers wait in the queue's line. A new job wakes the first in line only; if it hasn't claimed the job within a second, any worker may.</li>
+</ul>
+</section>
+<section id="runner">
+<h2>The worker</h2>
+<p>Replace <code>work()</code> with your job. <code>runQueueWorker</code> does the rest: waiting, claiming, renewing, retrying lost replies, riding out outages, and shutting down cleanly. <a href="../job-worker.ts" download>Download job-worker.ts</a>.</p>
+<div class="code-block"><div class="code-head"><span>docs/job-worker.ts</span><button class="copy-button" type="button" aria-label="Copy docs/job-worker.ts">Copy</button></div><pre tabindex="0"><code class="language-ts" data-src="../job-worker.ts"></code></pre></div>
+<div class="table-wrap"><table><caption class="sr-only">Worker settings</caption><thead><tr><th>Environment variable</th><th>Default</th></tr></thead><tbody><tr><td><code>FLOWER_URL</code></td><td><code>http://127.0.0.1:7101</code>. Any member works; writes are forwarded to the leader.</td></tr><tr><td><code>WORKER_CONCURRENCY</code></td><td>Unset: from 1 to 16 jobs at a time, following the backlog and the process’s load. A number fixes it.</td></tr><tr><td><code>WORKER_LEASE_MS</code></td><td>10,000 ms per claim and renewal. At most the queue’s <code>lease.maxMs</code>, 30,000 in the example.</td></tr><tr><td><code>WORKER_ID</code></td><td>Host name and process ID. Must be unique per process.</td></tr></tbody></table></div>
+<p>Ctrl+C or SIGTERM stops claiming and finishes held jobs. A second Ctrl+C quits at once; the jobs it held run again after their leases.</p>
+</section>
+<section id="try">
+<h2>Try it: kill a worker</h2>
+<ol class="steps">
+<li><a href="./">Start a local node</a>, then deploy the queue from the checkout:<div class="code-block"><div class="code-head"><span>Terminal 1 · repository root</span><button class="copy-button" type="button" aria-label="Copy deploy commands">Copy</button></div><pre tabindex="0"><code class="language-sh">npm run build
+node sdk/cli.ts deploy examples/workers.ts</code></pre></div></li>
+<li>Start two workers, one job at a time each so there is time to watch:<div class="code-block"><div class="code-head"><span>Terminal 2</span><button class="copy-button" type="button" aria-label="Copy worker alpha command">Copy</button></div><pre tabindex="0"><code class="language-sh">WORKER_ID=alpha WORKER_CONCURRENCY=1 node docs/job-worker.ts</code></pre></div><div class="code-block"><div class="code-head"><span>Terminal 3</span><button class="copy-button" type="button" aria-label="Copy worker beta command">Copy</button></div><pre tabindex="0"><code class="language-sh">WORKER_ID=beta WORKER_CONCURRENCY=1 node docs/job-worker.ts</code></pre></div></li>
+<li>Queue 20 jobs:<div class="code-block"><div class="code-head"><span>Terminal 1</span><button class="copy-button" type="button" aria-label="Copy enqueue loop">Copy</button></div><pre tabindex="0"><code class="language-sh">for i in $(seq 1 20); do
+  node sdk/cli.ts call jobs.enqueue "{\"id\":\"job-$i\",\"payload\":{\"n\":$i}}" \
+    --request-id "enqueue-job-$i" &gt; /dev/null
+done</code></pre></div></li>
+<li>While they run, crash alpha: press Ctrl+\ in its terminal. That kills it without the clean shutdown Ctrl+C would do. Note the job it last claimed.</li>
+<li>Within about ten seconds alpha's lease runs out and the job goes back in line, behind the jobs that were already waiting. Beta logs <code>claimed</code> for it when its turn comes. Check it:<div class="code-block"><div class="code-head"><span>Terminal 1</span><button class="copy-button" type="button" aria-label="Copy job lookup">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts query jobs.get '{"id":"job-7"}'
+# "state": "completed", "result": { "attempt": 2, "handledBy": "beta" }</code></pre></div></li>
+</ol>
+<p>Run <code>node sdk/cli.ts watch jobs.stats</code> alongside to see the backlog rise and fall.</p>
+</section>
+<section id="scale">
+<h2>Pick the numbers</h2>
+<div class="table-wrap"><table><caption class="sr-only">Sizing a worker pool</caption><thead><tr><th>Setting</th><th>Start with</th></tr></thead><tbody><tr><td>Lease length</td><td>10–30 s. Renewal lets jobs outlast it, so it only needs to cover a missed renewal or a leader election. A dead worker’s job waits up to this long before another worker takes it.</td></tr><tr><td>Jobs per process</td><td>The default adapts from 1 to 16. For jobs that mostly wait on other services, raise <code>max</code> to 64 or more: the process’s load still holds it back. CPU-heavy jobs in the worker’s own thread stop its growth near what one core takes; run a process per core.</td></tr><tr><td>Jobs per claim</td><td><code>batch: 1</code>. With many short jobs, 8–32: fewer claims, and claims on one queue conflict with each other.</td></tr><tr><td>Line</td><td><code>wait: true</code> once you run more than a couple of processes, so a new job wakes one of them rather than all.</td></tr><tr><td>Processes</td><td>At least two, on different machines, so one crash or deploy doesn’t stop the work.</td></tr><tr><td>Worker ID</td><td>The default. It is stored on every job the worker holds, so you can see who has what.</td></tr><tr><td>Retries</td><td>The queue’s <code>retry</code> policy: five attempts with backoff in the example. Keep the job’s own timeouts shorter than the lease.</td></tr></tbody></table></div>
+</section>
+<section id="failures">
+<h2>When things go wrong</h2>
+<div class="table-wrap"><table><caption class="sr-only">Failures and what the worker does</caption><thead><tr><th>What happens</th><th>What the worker does, and what you do</th></tr></thead><tbody><tr><td>A worker crashes mid-job</td><td>Once the lease runs out, another worker runs the job again. <strong>Make jobs safe to run twice:</strong> pass <code>job.id</code> to external services as an idempotency key.</td></tr><tr><td>A job throws</td><td>The worker fails the job with the error message, and the queue retries it with backoff. After the last attempt it stays failed: fix the cause, then call <code>jobs.retry</code>.</td></tr><tr><td>Renewals stop landing</td><td>Shortly before the lease ends, the worker aborts <code>work()</code>’s signal and fails the job, which is then retried.</td></tr><tr><td>A reply from Flower is lost</td><td>The worker retries with the same request ID, and Flower applies it once. Nothing to do.</td></tr><tr><td>Flower is down or has lost its majority</td><td>The worker retries with backoff and keeps waiting for work (<code>waiting</code> events). A report that can’t land before the lease ends is dropped (<code>unreported</code>), and the job runs again later.</td></tr><tr><td>A worker restarts while a job runs for hours</td><td>Stopping waits for held jobs to finish, and a process manager may not start the new worker until then. Pass <code>drainMs</code>: held jobs get that long, then their signal aborts and they fail, so the queue can retry them. Work that ignores the abort gets 5 s more, then the worker stops without it and the job runs again once its lease ends. Add <code>release: true</code> when a job cut short is simply unfinished: it goes back to the queue with no error, keeping its place, and another worker runs it again at once.</td></tr><tr><td>A service the job calls pushes back</td><td>Call <code>control.throttle(ms, reason)</code>, the third argument of <code>work()</code>: the worker claims nothing for <code>ms</code> and halves how many jobs it runs at once, then grows back slowly.</td></tr><tr><td>A paused worker wakes after its lease</td><td>Its report gets <code>LEASE_LOST</code> and is ignored (<code>lost</code>). Anything it already did outside Flower stays done, which is why jobs must be safe to repeat.</td></tr></tbody></table></div>
+</section>
+<section id="backlog">
+<h2>Know when to add workers</h2>
+<p>Watch how long the oldest ready job has been waiting. The queue's <code>stats</code> method reports it:</p>
+<div class="code-block"><div class="code-head"><span>Backlog check</span><button class="copy-button" type="button" aria-label="Copy backlog check">Copy</button></div><pre tabindex="0"><code class="language-ts">for await (const { value } of client.subscribe("jobs.stats", null)) {
+  const waitingMs = value.oldestReadyAt === null ? 0 : Date.now() - value.oldestReadyAt;
+  console.log(`${value.readyCount} ready, ${value.leasedCount} running; the oldest has waited ${Math.round(waitingMs / 1000)} s`);
+}</code></pre></div>
+<p>If that wait keeps growing, add workers, as long as the services they call can take the extra load. If it stays near zero, you have enough. <code>readyCount</code>, <code>leasedCount</code> and <code>delayedCount</code> count jobs up to 100, and at that value mean at least as many; pass <code>{ "countUpTo": 1000 }</code> for more, at a higher cost per update. <code>nextAvailableAt</code> says when a delayed job or running lease next makes work available.</p>
+<p>Some jobs need their own workers, or one Raft group can't keep up with the claims? See <a href="workers.html#shard">Shard the work</a>.</p>
+</section>

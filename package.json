@@ -1,0 +1,95 @@
+{
+  "name": "@flower-js/sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "TypeScript SDK for the Flower reactive database",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
+    "./crypto": {
+      "types": "./dist/crypto.d.ts",
+      "import": "./dist/crypto.js"
+    },
+    "./temporal": {
+      "types": "./dist/temporal.d.ts",
+      "import": "./dist/temporal.js"
+    },
+    "./scheduler": {
+      "types": "./dist/scheduler.d.ts",
+      "import": "./dist/scheduler.js"
+    },
+    "./worker": {
+      "types": "./dist/worker.d.ts",
+      "import": "./dist/worker.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
+    "./http2": {
+      "types": "./dist/http2.d.ts",
+      "import": "./dist/http2.js"
+    },
+    "./bundle": {
+      "types": "./dist/bundle.d.ts",
+      "import": "./dist/bundle.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "flower": "node sdk/cli.ts",
+    "test": "node --test runtime/*.test.js sdk/*.test.ts bench/*.test.mjs examples/pizza-dashboard/*.test.mjs",
+    "bench": "node bench/goblin-pizza.mjs",
+    "demo:pizza": "node examples/pizza-dashboard/demo.mjs",
+    "bench:stress": "node bench/stress.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "build": "node scripts/build-sdk.mjs",
+    "docs:build": "node scripts/build-docs.mjs",
+    "docs:check": "node scripts/build-docs.mjs --check",
+    "docs:dev": "eleventy --serve",
+    "prepack": "npm run build",
+    "check:package": "node scripts/check-package.mjs"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "^3.1.6",
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xmit-dev/flower.git"
+  },
+  "homepage": "https://flower.xmit.dev",
+  "bugs": {
+    "url": "https://github.com/xmit-dev/flower/issues"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE-MIT"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "bin": {
+    "flower": "./dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}

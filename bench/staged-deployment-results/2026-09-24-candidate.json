@@ -1,0 +1,640 @@
+{
+  "format": "flower-staged-deployment-benchmark-v1",
+  "startedAt": "2026-09-24T19:40:57.992Z",
+  "options": {
+    "binary": "/tmp/flower-staged-candidate-20260924/flower-b8c14aadf212c15c",
+    "output": "/tmp/flower-staged-controlled-candidate.json",
+    "sizes": [
+      100,
+      500,
+      1000
+    ],
+    "modes": [
+      "staged"
+    ],
+    "nodes": 3,
+    "repeats": 3,
+    "maxBytes": 262144,
+    "seedBatch": 100,
+    "readBatch": 100,
+    "writeRate": 50,
+    "hotRoots": 8,
+    "warmupMs": 250,
+    "requestTimeoutMs": 30000,
+    "caseTimeoutMs": 180000,
+    "keepData": false,
+    "help": false,
+    "label": "debug-candidate-controlled",
+    "warmTargetBundle": true
+  },
+  "binary": {
+    "source": "/tmp/flower-staged-candidate-20260924/flower-b8c14aadf212c15c",
+    "pinned": "/var/folders/00/5g1pnzgj0f16s_9n9bwkvdg80000gn/T/flower-staged-benchmark-QCXjM2/flower",
+    "sha256": "b8c14aadf212c15c2e10e17636ab7c5be3949edae68867401863eefa7eeeeb0e",
+    "bytes": 199375720
+  },
+  "environment": {
+    "platform": "darwin",
+    "release": "27.2.0",
+    "cpu": "Apple M5 Pro",
+    "logicalCpus": 18,
+    "memoryBytes": 51539607552,
+    "node": "v26.9.0",
+    "runtime": {}
+  },
+  "workload": {
+    "independentMaterializedRoots": true,
+    "sharedDerivedDependencies": 1,
+    "sourceRowsPerRoot": 1,
+    "oldMultiplier": 11,
+    "newMultiplier": 12,
+    "indexBackfill": false,
+    "rootCollectionScan": false,
+    "targetCodeWarmedDuringSetup": true,
+    "note": "Fresh isolated cluster per case, one physical Raft group, all replicas/load generation on one host. Setup/audit/cleanup are excluded from deployment duration. Direct preparation is blocking; staged advances are sequential client requests. No measurement here establishes a production capacity limit."
+  },
+  "cases": [
+    {
+      "roots": 100,
+      "mode": "staged",
+      "repetition": 1,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7039.523541999999,
+        "stageMs": 23.479209000000992,
+        "prepareMs": 235.99762499999997,
+        "activationMs": 36.718292000001384,
+        "deploymentMs": 296.2069169999995,
+        "writeDrainMs": 12.281749999998283,
+        "cleanupMs": 26.470124999999825,
+        "caseMs": 22817.947125
+      },
+      "pages": {
+        "advance": 7,
+        "backfill": 0,
+        "rebuilding": 7,
+        "collect": 1
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 9,
+        "p50Ms": 30.14862500000163,
+        "p95Ms": 49.04816600000049,
+        "p99Ms": 49.04816600000049,
+        "maxMs": 49.04816600000049,
+        "started": 9,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 29.174491521920526,
+        "measurementMs": 308.4886669999978,
+        "missedStartSlots": 5,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 100,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 16,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000099\"]",
+        "phase": "ready",
+        "rebuiltRoots": 100,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    },
+    {
+      "roots": 100,
+      "mode": "staged",
+      "repetition": 2,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7164.959917,
+        "stageMs": 23.242249999995693,
+        "prepareMs": 232.13058399999863,
+        "activationMs": 37.54620799999975,
+        "deploymentMs": 292.9251660000009,
+        "writeDrainMs": 12.29258299999492,
+        "cleanupMs": 26.574541000001773,
+        "caseMs": 21754.187292
+      },
+      "pages": {
+        "advance": 7,
+        "backfill": 0,
+        "rebuilding": 7,
+        "collect": 1
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 9,
+        "p50Ms": 30.11974999999802,
+        "p95Ms": 48.882707999997365,
+        "p99Ms": 48.882707999997365,
+        "maxMs": 48.882707999997365,
+        "started": 9,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 29.48714493009423,
+        "measurementMs": 305.2177489999958,
+        "missedStartSlots": 5,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 100,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 16,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000099\"]",
+        "phase": "ready",
+        "rebuiltRoots": 100,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    },
+    {
+      "roots": 100,
+      "mode": "staged",
+      "repetition": 3,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7172.588708000003,
+        "stageMs": 23.168583000006038,
+        "prepareMs": 233.78666599999997,
+        "activationMs": 35.39833300000464,
+        "deploymentMs": 292.35870799999975,
+        "writeDrainMs": 11.434292000005371,
+        "cleanupMs": 25.543958000009297,
+        "caseMs": 22152.141667000004
+      },
+      "pages": {
+        "advance": 7,
+        "backfill": 0,
+        "rebuilding": 7,
+        "collect": 1
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 9,
+        "p50Ms": 29.104042000006302,
+        "p95Ms": 48.72312499998952,
+        "p99Ms": 48.72312499998952,
+        "maxMs": 48.72312499998952,
+        "started": 9,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 29.625435740783523,
+        "measurementMs": 303.7930000000051,
+        "missedStartSlots": 5,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 100,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 16,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000099\"]",
+        "phase": "ready",
+        "rebuiltRoots": 100,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    },
+    {
+      "roots": 500,
+      "mode": "staged",
+      "repetition": 1,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7666.161959000005,
+        "stageMs": 21.84625000000233,
+        "prepareMs": 467.08191599999554,
+        "activationMs": 40.81362500000978,
+        "deploymentMs": 529.7471249999944,
+        "writeDrainMs": 14.584624999988591,
+        "cleanupMs": 86.721000000005,
+        "caseMs": 23134.599417000005
+      },
+      "pages": {
+        "advance": 9,
+        "backfill": 0,
+        "rebuilding": 9,
+        "collect": 1
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 11,
+        "p50Ms": 35.29512500000419,
+        "p95Ms": 132.7544590000034,
+        "p99Ms": 132.7544590000034,
+        "maxMs": 132.7544590000034,
+        "started": 11,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 20.208264537206112,
+        "measurementMs": 544.331749999983,
+        "missedStartSlots": 15,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 500,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 20,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000499\"]",
+        "phase": "ready",
+        "rebuiltRoots": 500,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    },
+    {
+      "roots": 500,
+      "mode": "staged",
+      "repetition": 2,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7442.476374999998,
+        "stageMs": 22.133874999999534,
+        "prepareMs": 451.8394580000022,
+        "activationMs": 37.214540999993915,
+        "deploymentMs": 511.19354100000055,
+        "writeDrainMs": 12.137957999992068,
+        "cleanupMs": 83.85158299999603,
+        "caseMs": 22804.912624999997
+      },
+      "pages": {
+        "advance": 9,
+        "backfill": 0,
+        "rebuilding": 9,
+        "collect": 1
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 11,
+        "p50Ms": 33.68674999999348,
+        "p95Ms": 120.07733299999381,
+        "p99Ms": 120.07733299999381,
+        "maxMs": 120.07733299999381,
+        "started": 11,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 21.019181954496027,
+        "measurementMs": 523.3314989999926,
+        "missedStartSlots": 14,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 500,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 20,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000499\"]",
+        "phase": "ready",
+        "rebuiltRoots": 500,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    },
+    {
+      "roots": 500,
+      "mode": "staged",
+      "repetition": 3,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7409.156875000015,
+        "stageMs": 22.050958999985596,
+        "prepareMs": 438.8288750000065,
+        "activationMs": 36.662000000011176,
+        "deploymentMs": 497.54475000000093,
+        "writeDrainMs": 12.049457999994047,
+        "cleanupMs": 83.16766599999391,
+        "caseMs": 22517.46429200002
+      },
+      "pages": {
+        "advance": 9,
+        "backfill": 0,
+        "rebuilding": 9,
+        "collect": 1
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 11,
+        "p50Ms": 31.40066599997226,
+        "p95Ms": 121.64050000000861,
+        "p99Ms": 121.64050000000861,
+        "maxMs": 121.64050000000861,
+        "started": 11,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 21.58580263926412,
+        "measurementMs": 509.594207999995,
+        "missedStartSlots": 14,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 500,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 20,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000499\"]",
+        "phase": "ready",
+        "rebuiltRoots": 500,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    },
+    {
+      "roots": 1000,
+      "mode": "staged",
+      "repetition": 1,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7929.74879100002,
+        "stageMs": 22.5836249999993,
+        "prepareMs": 690.809042000008,
+        "activationMs": 36.33574999999837,
+        "deploymentMs": 749.7295000000158,
+        "writeDrainMs": 11.451499999995576,
+        "cleanupMs": 172.07766700000502,
+        "caseMs": 23262.632500000007
+      },
+      "pages": {
+        "advance": 11,
+        "backfill": 0,
+        "rebuilding": 11,
+        "collect": 2
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 12,
+        "p50Ms": 31.628582999983337,
+        "p95Ms": 244.10670800000662,
+        "p99Ms": 244.10670800000662,
+        "maxMs": 244.10670800000662,
+        "started": 12,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 15.764975741643342,
+        "measurementMs": 761.1810000000114,
+        "missedStartSlots": 25,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 1000,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 25,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000999\"]",
+        "phase": "ready",
+        "rebuiltRoots": 1000,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    },
+    {
+      "roots": 1000,
+      "mode": "staged",
+      "repetition": 2,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 8016.842667000019,
+        "stageMs": 23.33629199999268,
+        "prepareMs": 715.8158750000002,
+        "activationMs": 36.199832999991486,
+        "deploymentMs": 775.3536670000176,
+        "writeDrainMs": 12.28620800000499,
+        "cleanupMs": 171.96845800001756,
+        "caseMs": 23156.855083000002
+      },
+      "pages": {
+        "advance": 11,
+        "backfill": 0,
+        "rebuilding": 11,
+        "collect": 2
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 13,
+        "p50Ms": 32.83479100000113,
+        "p95Ms": 160.86424999998417,
+        "p99Ms": 160.86424999998417,
+        "maxMs": 160.86424999998417,
+        "started": 13,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 16.50500490468392,
+        "measurementMs": 787.6398750000226,
+        "missedStartSlots": 25,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 1000,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 25,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000999\"]",
+        "phase": "ready",
+        "rebuiltRoots": 1000,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    },
+    {
+      "roots": 1000,
+      "mode": "staged",
+      "repetition": 3,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7773.221832999989,
+        "stageMs": 23.323875000001863,
+        "prepareMs": 701.6711669999931,
+        "activationMs": 36.82958300001337,
+        "deploymentMs": 761.8272920000018,
+        "writeDrainMs": 12.183832999988226,
+        "cleanupMs": 168.39725000000908,
+        "caseMs": 23660.358915999997
+      },
+      "pages": {
+        "advance": 11,
+        "backfill": 0,
+        "rebuilding": 11,
+        "collect": 2
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 13,
+        "p50Ms": 32.98237500002142,
+        "p95Ms": 150.59170900000026,
+        "p99Ms": 150.59170900000026,
+        "maxMs": 150.59170900000026,
+        "started": 13,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 16.79562422310166,
+        "measurementMs": 774.01112499999,
+        "missedStartSlots": 25,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 1000,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 25,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000999\"]",
+        "phase": "ready",
+        "rebuiltRoots": 1000,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    }
+  ],
+  "passed": true,
+  "bundleHashes": [
+    "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+    "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf"
+  ],
+  "completedAt": "2026-09-24T19:44:23.667Z"
+}

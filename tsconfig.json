@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@flower-js/sdk": [
+        "./sdk/index.ts"
+      ],
+      "@flower-js/sdk/*": [
+        "./sdk/*.ts"
+      ]
+    }
+  },
+  "include": [
+    "sdk/**/*.ts",
+    "examples/**/*.ts",
+    "docs/*.ts"
+  ],
+  "exclude": [
+    "examples/trinity"
+  ]
+}

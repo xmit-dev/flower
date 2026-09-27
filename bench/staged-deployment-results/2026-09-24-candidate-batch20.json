@@ -1,0 +1,128 @@
+{
+  "format": "flower-staged-deployment-benchmark-v1",
+  "startedAt": "2026-09-24T19:44:30.330Z",
+  "options": {
+    "binary": "/tmp/flower-staged-candidate-20260924/flower-b8c14aadf212c15c",
+    "output": "/tmp/flower-staged-controlled-candidate-batch20.json",
+    "sizes": [
+      1000
+    ],
+    "modes": [
+      "staged"
+    ],
+    "nodes": 3,
+    "repeats": 1,
+    "maxBytes": 262144,
+    "seedBatch": 100,
+    "readBatch": 100,
+    "writeRate": 50,
+    "hotRoots": 8,
+    "warmupMs": 250,
+    "requestTimeoutMs": 30000,
+    "caseTimeoutMs": 180000,
+    "keepData": false,
+    "help": false,
+    "label": "debug-candidate-batch20-sensitivity",
+    "warmTargetBundle": true
+  },
+  "binary": {
+    "source": "/tmp/flower-staged-candidate-20260924/flower-b8c14aadf212c15c",
+    "pinned": "/var/folders/00/5g1pnzgj0f16s_9n9bwkvdg80000gn/T/flower-staged-benchmark-fxwmPP/flower",
+    "sha256": "b8c14aadf212c15c2e10e17636ab7c5be3949edae68867401863eefa7eeeeb0e",
+    "bytes": 199375720
+  },
+  "environment": {
+    "platform": "darwin",
+    "release": "27.2.0",
+    "cpu": "Apple M5 Pro",
+    "logicalCpus": 18,
+    "memoryBytes": 51539607552,
+    "node": "v26.9.0",
+    "runtime": {
+      "FLOWER_WRITER_BATCH_MS": "20"
+    }
+  },
+  "workload": {
+    "independentMaterializedRoots": true,
+    "sharedDerivedDependencies": 1,
+    "sourceRowsPerRoot": 1,
+    "oldMultiplier": 11,
+    "newMultiplier": 12,
+    "indexBackfill": false,
+    "rootCollectionScan": false,
+    "targetCodeWarmedDuringSetup": true,
+    "note": "Fresh isolated cluster per case, one physical Raft group, all replicas/load generation on one host. Setup/audit/cleanup are excluded from deployment duration. Direct preparation is blocking; staged advances are sequential client requests. No measurement here establishes a production capacity limit."
+  },
+  "cases": [
+    {
+      "roots": 1000,
+      "mode": "staged",
+      "repetition": 1,
+      "nodes": 3,
+      "passed": true,
+      "timings": {
+        "setupMs": 7669.066708000002,
+        "stageMs": 23.14979200000016,
+        "prepareMs": 841.072750000003,
+        "activationMs": 34.927708999999595,
+        "deploymentMs": 899.1614580000023,
+        "writeDrainMs": 12.034790999998222,
+        "cleanupMs": 164.82787500000268,
+        "caseMs": 24275.933083
+      },
+      "pages": {
+        "advance": 16,
+        "backfill": 0,
+        "rebuilding": 16,
+        "collect": 2
+      },
+      "writes": {
+        "targetStartsPerSecond": 50,
+        "concurrency": 1,
+        "hotRoots": 8,
+        "count": 18,
+        "p50Ms": 52.98754100000224,
+        "p95Ms": 74.80225000000064,
+        "p99Ms": 74.80225000000064,
+        "maxMs": 74.80225000000064,
+        "started": 18,
+        "failedInitialAttempts": 0,
+        "unresolved": null,
+        "completedPerSecond": 19.754251644203148,
+        "measurementMs": 911.1962490000005,
+        "missedStartSlots": 27,
+        "errors": [],
+        "recoveredRequests": [],
+        "note": "Includes only logical writes started during deployment; latency includes retries and final drain. Failed initial attempts may later succeed with the same ID. The achieved rate denominator includes deployment and outstanding-write drain. No backlog accumulates after missed paced starts."
+      },
+      "correctness": {
+        "passed": true,
+        "checkedRoots": 1000,
+        "independentLedger": true,
+        "version": 2
+      },
+      "ready": {
+        "baseBundleHash": "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+        "baseRevision": 25,
+        "builtEntries": 0,
+        "bundleHash": "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf",
+        "cleanupCursor": null,
+        "cursor": null,
+        "error": null,
+        "generation": "b1819a0ac98cbbba0627d960f40fd5d775da89b16baacb5c5ccc4a1be44f0532",
+        "graphCursor": "root:[\"result\",\"0000000999\"]",
+        "phase": "ready",
+        "rebuiltRoots": 1000,
+        "requestId": "upgrade",
+        "scannedRows": 0
+      },
+      "directory": null
+    }
+  ],
+  "passed": true,
+  "bundleHashes": [
+    "3e4d4f57cab4687bf87d481299a323a88fa7fc746131d63812eacaf042a1d5a9",
+    "188faa8dd3931e236034d2d10d39055368c49a06214670bbaa0bb5f2d4589ddf"
+  ],
+  "completedAt": "2026-09-24T19:44:54.744Z"
+}

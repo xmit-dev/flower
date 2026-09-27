@@ -1,0 +1,73 @@
+<section id="schemas" data-toc="Schemas">
+<h2>Schemas</h2>
+<p><code>v</code> builds runtime validators. Their types flow into method arguments, records, keys, queue payloads and clients. Import it from <code>@flower-js/sdk</code>.</p>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th scope="row"><code data-api-symbol="v">v</code></th><td>A frozen object of the validators below.</td></tr>
+<tr><th scope="row"><code data-api-method="v.string">v.string({ min?, max?, pattern? })</code></th><td>A string, with optional length bounds and a <code>RegExp</code> (its <code>g</code> and <code>y</code> flags are ignored).</td></tr>
+<tr><th scope="row"><code data-api-method="v.number">v.number({ min?, max?, integer? })</code></th><td>A finite number. <code>integer: true</code> requires a safe integer.</td></tr>
+<tr><th scope="row"><code data-api-method="v.int">v.int({ min?, max? })</code></th><td>A safe integer.</td></tr>
+<tr><th scope="row"><code data-api-method="v.boolean">v.boolean()</code>, <code data-api-method="v.null">v.null()</code></th><td>Exactly a boolean, or <code>null</code>.</td></tr>
+<tr><th scope="row"><code data-api-method="v.literal">v.literal(value)</code></th><td>One string, number, boolean or <code>null</code>.</td></tr>
+<tr><th scope="row"><code data-api-method="v.enum">v.enum([...values])</code></th><td>One of several strings or numbers.</td></tr>
+<tr><th scope="row"><code data-api-method="v.array">v.array(item, { min?, max? })</code></th><td>An array of <code>item</code>, with optional length bounds.</td></tr>
+<tr><th scope="row"><code data-api-method="v.tuple">v.tuple([...items])</code></th><td>An array of exactly these items. The usual key schema.</td></tr>
+<tr><th scope="row"><code data-api-method="v.object">v.object(shape, { rest? })</code></th><td>A plain object with these properties. Unknown properties are rejected unless <code>rest</code> validates them.</td></tr>
+<tr><th scope="row"><code data-api-method="v.optional">v.optional(schema)</code></th><td>Marks an object property as optional. Only valid inside <code>v.object</code> shapes.</td></tr>
+<tr><th scope="row"><code data-api-method="v.nullable">v.nullable(schema)</code></th><td>The schema, or <code>null</code>.</td></tr>
+<tr><th scope="row"><code data-api-method="v.union">v.union(...schemas)</code></th><td>Any of the schemas. A failure reports the alternative that got furthest.</td></tr>
+<tr><th scope="row"><code data-api-method="v.record">v.record(item, { key? })</code></th><td>An object with any keys, every value matching <code>item</code>; <code>key</code> can check the keys.</td></tr>
+<tr><th scope="row"><code data-api-method="v.json">v.json()</code></th><td>Any JSON value: finite numbers, no cycles, at most 128 levels deep.</td></tr>
+<tr><th scope="row"><code data-api-method="v.refine">v.refine(schema, predicate, reason)</code></th><td>The schema, plus a check that fails with <code>reason</code>.</td></tr>
+<tr><th scope="row"><code data-api-method="v.lazy">v.lazy(() =&gt; schema)</code></th><td>A schema resolved on first use, for recursive shapes.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Schema">Schema&lt;T&gt;</code></th><td>Readonly <code>kind: "schema"</code> and <code>description</code>; <code>parse(value)</code> returns the value unchanged or throws <code>ValidationError</code>; <code>is(value)</code> returns a boolean. Also a Standard Schema.</td></tr>
+<tr><th scope="row"><code data-api-symbol="StandardSchema">StandardSchema&lt;T&gt;</code></th><td>The <a href="https://standardschema.dev/">Standard Schema v1</a> contract. Any synchronous implementation, such as zod, works wherever Flower takes a schema; asynchronous ones throw <code>TypeError</code>.</td></tr>
+<tr><th scope="row"><code data-api-symbol="SchemaLike">SchemaLike&lt;T&gt;</code></th><td><code>Schema&lt;T&gt; | StandardSchema&lt;T&gt;</code>: what every <code>args</code>, <code>payload</code>, <code>result</code> and collection option accepts.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Optional">Optional&lt;T&gt;</code></th><td>What <code>v.optional</code> returns: readonly <code>kind: "optional"</code> and <code>schema</code>.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Infer">Infer&lt;S&gt;</code></th><td>The TypeScript type a schema validates.</td></tr>
+<tr><th scope="row"><code data-api-symbol="ObjectOf">ObjectOf&lt;Shape&gt;</code></th><td>The type of <code>v.object(shape)</code>: optional properties become <code>?:</code>.</td></tr>
+<tr><th scope="row"><code data-api-symbol="ValidationError">ValidationError</code></th><td>Thrown by <code>parse</code>: an <code>Error</code> with <code>reason</code> (such as <code>must be at most 4</code>), <code>path</code>, and a message that joins them: <code>lines[0].quantity: must be at most 4</code>.</td></tr>
+<tr><th scope="row"><code data-api-symbol="SchemaPath">SchemaPath</code></th><td><code>readonly (string | number)[]</code>: property names and array indexes from the root.</td></tr>
+</tbody></table></div>
+<div class="code-block"><div class="code-head"><span>Schemas outside methods</span><button class="copy-button" type="button" aria-label="Copy Schemas outside methods">Copy</button></div><pre tabindex="0"><code class="language-ts">import { v, ValidationError, type Infer } from "@flower-js/sdk";
+
+const topping = v.enum(["mushroom", "olive", "basil"]);
+const pizza = v.object({ size: v.int({ min: 20, max: 40 }), toppings: v.array(topping, { max: 5 }) });
+type Pizza = Infer&lt;typeof pizza&gt;; // { size: number; toppings: ("mushroom" | "olive" | "basil")[] }
+
+try {
+  pizza.parse({ size: 30, toppings: ["pineapple"] });
+} catch (error) {
+  if (error instanceof ValidationError) console.log(error.message); // toppings[0]: must be one of "mushroom", "olive", "basil"
+}</code></pre></div>
+<ul>
+<li>Schemas check values; they never transform them. <code>parse</code> returns its input.</li>
+<li>Only the first problem is reported.</li>
+<li>Where a schema checks method arguments, a failure becomes <code>INVALID_ARGUMENT</code> before your code runs.</li>
+</ul>
+</section>
+<section id="failures" data-toc="fail()">
+<h2>Failures</h2>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th scope="row"><code data-api-symbol="fail">fail(code, message, details?): never</code></th><td>Aborts the callback with a failure. <code>code</code> must be <code>UPPER_SNAKE_CASE</code> and <code>details</code> must be JSON, or it throws <code>TypeError</code> instead. A failing mutation commits nothing.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Failure">Failure</code></th><td>Readonly <code>code</code>, <code>message</code> and optional <code>details</code>: what callers receive as <code>FlowerError.failure</code>, what <code>task</code> error handlers get, and what failed timers store.</td></tr>
+</tbody></table></div>
+<p>Over HTTP, a failing method answers <code>422</code> with <code>{"error":{"code":"EVALUATION_FAILED","message":"CODE: message","failure":{"code","message","details"}}}</code>. A failure from an access check arrives as <code>403 FORBIDDEN</code>, and one from a transaction participant as <code>422 TRANSACTION_ABORTED</code>, each with its <code>failure</code>. Watch error events carry it too. A plain <code>throw</code> becomes <code>COMPUTE_ERROR</code> with the error's message. Details thrown inside a derived value aren't kept.</p>
+</section>
+<section id="codes" data-toc="Built-in codes">
+<h2>Built-in failure codes</h2>
+<div class="table-wrap"><table><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody>
+<tr><th scope="row"><code>INVALID_ARGUMENT</code></th><td>Arguments failed the method's <code>args</code> schema, or a queue payload, queue result or external result failed its schema. <code>details: { path }</code>.</td></tr>
+<tr><th scope="row"><code>INVALID_RECORD</code></th><td>A write failed the collection's record schema. <code>details: { collection, key, path }</code>.</td></tr>
+<tr><th scope="row"><code>INVALID_KEY</code></th><td>A key failed the collection's key schema, or a string-keyed collection got a non-string key.</td></tr>
+<tr><th scope="row"><code>INVALID_SCAN</code></th><td>Key bounds on a typed-key collection, or a malformed prefix.</td></tr>
+<tr><th scope="row"><code>INVALID_VALUE</code></th><td>A callback returned or stored something that isn't JSON.</td></tr>
+<tr><th scope="row"><code>COMPUTE_ERROR</code></th><td>Your code threw an ordinary error.</td></tr>
+<tr><th scope="row"><code>EVALUATION_BUDGET</code></th><td>The call ran out of time or memory.</td></tr>
+<tr><th scope="row"><code>DEFINITION_MISSING</code></th><td>A derived value or method isn't registered. List derived values in <code>definitions</code>.</td></tr>
+<tr><th scope="row"><code>TRIGGER_LOOP</code></th><td>Triggers kept changing records for 32 rounds.</td></tr>
+<tr><th scope="row"><code>UNAUTHENTICATED</code>, <code>FORBIDDEN</code></th><td>An <a href="access.html#authorization">access check</a> refused the call (HTTP 403).</td></tr>
+<tr><th scope="row"><code>LEASE_LOST</code>, <code>LEASE_TOO_LONG</code>, <code>JOB_EXISTS</code>, <code>JOB_NOT_FAILED</code></th><td><a href="time.html#leases">Queue</a> rules.</td></tr>
+<tr><th scope="row"><code>TIMER_NOT_FAILED</code>, <code>SCHEDULER_HANDLER_MISSING</code></th><td><a href="time.html#scheduler">Scheduler</a> rules.</td></tr>
+<tr><th scope="row"><code>UNDECLARED_INDEX</code></th><td>Test databases only: an index read on an undeclared index. See <a href="testing.html">Testing</a>.</td></tr>
+</tbody></table></div>
+</section>

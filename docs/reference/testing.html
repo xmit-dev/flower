@@ -1,0 +1,29 @@
+<section id="database" data-toc="Test databases">
+<h2>Test databases</h2>
+<p><code>@flower-js/sdk/testing</code> runs an application on Flower’s reference engine, in-process. It is Node only; keep it out of application bundles. The <a href="../guide/testing.html">testing guide</a> shows it in use.</p>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th scope="row"><code data-api-symbol="testDatabase">testDatabase&lt;App&gt;(app, options?): Promise&lt;TestDatabase&lt;App&gt;&gt;</code></th><td>Starts a database. Pass the imported <code>define(...)</code> module to run it directly, or a path to bundle it and run it in an isolated <code>node:vm</code> context, as the server does; with a path, pass <code>typeof app</code> yourself for typed calls.</td></tr>
+<tr><th scope="row"><code data-api-symbol="TestDatabaseOptions">TestDatabaseOptions</code></th><td>Optional <code>now</code> (starting server time; 1,000,000 ms), <code>credentials</code> (sent by the client and by calls that pass none) and <code>partitions</code> (names of extra logical databases running the same app).</td></tr>
+<tr><th scope="row"><code data-api-symbol="TestCallOptions">TestCallOptions</code></th><td>Optional <code>credentials</code> and <code>requestId</code>, as the last argument of a call.</td></tr>
+<tr><th scope="row"><code data-api-symbol="TestDatabase">TestDatabase&lt;App&gt;</code></th><td>The root database. Mutable <code>now</code>; readonly <code>client</code>; getters <code>revision</code> and <code>data</code> (a copy of the raw state, for debugging; its format isn’t stable).</td></tr>
+<tr><th scope="row"><code data-api-method="TestDatabase.constructor">constructor(module, engine, options?, local?)</code></th><td>Used by <code>testDatabase</code>; call that instead.</td></tr>
+<tr><th scope="row"><code data-api-method="TestDatabase.query">query(alias, args?, options?): V</code></th><td>Calls an exposed query synchronously and returns its value. Arguments, access checks and failures behave as over HTTP: failures throw <code>FlowerError</code> with the same status, code and <code>failure</code>.</td></tr>
+<tr><th scope="row"><code data-api-method="TestDatabase.mutate">mutate(alias, args?, options?): V</code></th><td>Calls an exposed mutation or transaction and commits it. A reused request ID replays the first result; with different arguments it throws <code>REQUEST_ID_REUSED</code>.</td></tr>
+<tr><th scope="row"><code data-api-method="TestDatabase.call">call(alias, args?, options?): V</code></th><td>Calls any alias. Transactions run across the test partitions and return <code>{ results }</code>, plus <code>value</code> when the plan has one; a participant failure throws <code>TRANSACTION_ABORTED</code> with its <code>failure</code>, and nothing commits.</td></tr>
+<tr><th scope="row"><code data-api-method="TestDatabase.maintain">maintain(limit = 10_000, partition = ""): number</code></th><td>Runs due maintenance like the leader, one task per commit, while tasks stay due. Returns the number of committed runs.</td></tr>
+<tr><th scope="row"><code data-api-method="TestDatabase.advance">advance(ms): number</code></th><td>Moves <code>now</code> forward, then runs due maintenance in every partition and refreshes watches. Returns the number of committed runs.</td></tr>
+<tr><th scope="row"><code data-api-method="TestDatabase.partition">partition(name): TestPartition&lt;App&gt;</code></th><td>A named partition from <code>options.partitions</code>; unknown names throw <code>PARTITION_NOT_FOUND</code>. Partitions share the clock.</td></tr>
+<tr><th scope="row"><code data-api-method="TestDatabase.fetch">fetch(url, init): Promise&lt;Response&gt;</code></th><td>A <code>FlowerFetch</code> serving <code>/v1/query</code>, <code>/v1/mutate</code>, <code>/v1/call</code> and <code>/v1/watch</code> from this database, for root and partition URLs. <code>client</code> uses it; pass it to other clients.</td></tr>
+<tr><th scope="row"><code data-api-symbol="TestPartition">TestPartition&lt;App&gt;</code></th><td>One named partition. Readonly <code>client</code>, scoped to the partition.</td></tr>
+<tr><th scope="row"><code data-api-method="TestPartition.constructor">constructor(database, name)</code></th><td>Used by <code>db.partition(name)</code>; call that instead.</td></tr>
+<tr><th scope="row"><code data-api-method="TestPartition.query">query(alias, args?, options?)</code>, <code data-api-method="TestPartition.mutate">mutate(…)</code>, <code data-api-method="TestPartition.call">call(…)</code></th><td>The same calls as on <code>TestDatabase</code>, against this partition.</td></tr>
+<tr><th scope="row"><code data-api-method="TestPartition.maintain">maintain(limit?): number</code></th><td>Runs this partition’s due maintenance.</td></tr>
+</tbody></table></div>
+<ul>
+<li>Time moves only through <code>now</code> and <code>advance</code>. Maintenance runs only through <code>maintain</code> and <code>advance</code>.</li>
+<li>If the app has access checks, a partition’s principals must carry its name as their tenant, as on a server.</li>
+<li>Native crypto isn’t available: NaCl, JWT, managed keys and <code>jwtBearer</code> fail. Retry sessions and bounded retries aren’t simulated.</li>
+<li>Index reads on indexes that aren’t declared fail with <code>UNDECLARED_INDEX</code>, where a server would silently scan.</li>
+<li>Watches send full snapshots rather than patches.</li>
+</ul>
+</section>

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run the Goblin Pizza example on a temporary three-replica cluster at a lively
+# pace and open its dashboard. Arguments go to the launcher, for example
+# --rate 80, --port 8080, --paused or --max-orders 50000. Ctrl+C cleans up.
+set -eu
+
+cd "$(dirname "$0")/.."
+[ -d node_modules ] || npm ci
+cargo build --release --bin flower
+exec node examples/pizza-dashboard/demo.mjs --open "$@"

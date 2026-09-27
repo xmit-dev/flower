@@ -1,0 +1,51 @@
+<div class="raft-diagram" role="img" aria-label="One Raft leader replicates committed changes to two followers. A majority of two can continue after one failure."><div><span class="node-light"></span><strong>Leader</strong><small>Evaluate + replicate</small></div><span class="raft-line" aria-hidden="true"></span><div><span class="node-light"></span><strong>Follower</strong><small>Apply + read</small></div><span class="raft-line" aria-hidden="true"></span><div><span class="node-light"></span><strong>Follower</strong><small>Apply + read</small></div><p>3 members · 2 for quorum · 1 failure tolerated</p></div>
+<section id="start-three-distinct-nodes">
+<h2>Start three nodes</h2>
+<p>Stop any single-node server first, since it holds port 7101. Run each server in its own terminal with the same operator token. Each node needs its own ID, address and data directory.</p><div class="code-block"><div class="code-head"><span>Each server terminal · same token</span><button type="button" class="copy-button" aria-label="Copy Each server terminal · same token">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='replace-with-a-shared-operator-secret'
+# Run one of these commands per terminal:
+./target/release/flower --id 1 --listen 127.0.0.1:7101 --data .flower/cluster/node1
+./target/release/flower --id 2 --listen 127.0.0.1:7102 --data .flower/cluster/node2
+./target/release/flower --id 3 --listen 127.0.0.1:7103 --data .flower/cluster/node3</code></pre></div><div class="code-block"><div class="code-head"><span>Operator terminal · bootstrap once</span><button type="button" class="copy-button" aria-label="Copy Operator terminal · bootstrap once">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='replace-with-a-shared-operator-secret'
+node sdk/cli.ts init \
+  --members 1=127.0.0.1:7101,2=127.0.0.1:7102,3=127.0.0.1:7103
+
+curl -fsS -H "Authorization: Bearer $FLOWER_ADMIN_TOKEN" \
+  http://127.0.0.1:7101/raft/metrics</code></pre></div>
+<p>Point clients at any node. Writes and deployments go to the leader for you; queries and watches run on the node you called.</p><div class="code-block"><div class="code-head"><span>Select any reachable member</span><button type="button" class="copy-button" aria-label="Copy Select any reachable member">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_URL='http://127.0.0.1:7102'
+node sdk/cli.ts deploy examples/orders.ts
+# Or pass --url http://127.0.0.1:7102 on an individual command.</code></pre></div>
+<ul>
+<li><strong>Separate hosts:</strong> use addresses the other nodes can reach. <code>--listen</code> is the socket to bind; <code>--advertise HOST:PORT</code> is the address peers use, if different. Member addresses have no <code>http://</code>.</li>
+<li><strong>If your entry node dies,</strong> switch clients to another node. Retrying calls and reconnecting watches is up to your application.</li>
+<li><strong>Failover</strong> usually starts within about 0.5 s (50 ms heartbeat, 150–300 ms election timeout, 300 ms leader lease). On slow networks or disks, raise <code>FLOWER_RAFT_HEARTBEAT_MS</code>, <code>FLOWER_RAFT_ELECTION_MIN_MS</code> and <code>FLOWER_RAFT_ELECTION_MAX_MS</code>. Use the same integer milliseconds on every node, with heartbeat &lt; min &lt; max. Values that are too short cause needless elections under load.</li>
+<li><strong>Node-to-node traffic</strong> uses HTTP/2 on the same ports. It is not encrypted unless you enable TLS (see below).</li>
+</ul>
+</section>
+<section id="know-what-an-acknowledgement-means">
+<h2>What an acknowledged write means</h2>
+<p>A mutation reply means a quorum stored the change durably and the node you called applied it. Crashes after that don't lose it.</p>
+<ul>
+<li><strong>One node can fail.</strong> Without a quorum, writes and fresh reads stop. Replica-local reads keep serving local data, which can be stale with no bound.</li>
+<li><strong>A timed-out mutation may still have committed.</strong> Retry with the same request ID.</li>
+<li><strong>Restart a stopped node with the same ID and data directory.</strong> It catches up on its own. Never run <code>init</code> on it again or reuse its directory under another ID. While it catches up, even its replica-local reads can be unavailable.</li>
+<li><strong>Live data is served from redb.</strong> Memory holds writes still queued for disk and two caches, sized by <code>FLOWER_VALUE_CACHE_BYTES</code> and <code>FLOWER_REDB_CACHE_BYTES</code> (see <a href="capacity.html#storage">capacity</a>). Raft checkpoints write metadata only; full images are encoded, and streamed, when a replica needs a snapshot transfer. Snapshot status is in <code>GET /admin/resources</code>; see the <a href="https://github.com/xmit-dev/flower/blob/main/bench/LIMITS.md">snapshot settings</a> to tune when they run.</li>
+</ul>
+<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p><strong>Flower is unreleased.</strong> APIs and storage and wire formats can change with no migration path. You can't downgrade a data directory, and some upgrades can't be rolled one node at a time: old and new builds refuse to talk, so upgrade all nodes together.</p></div>
+</section>
+<section id="a-practical-operator-loop">
+<h2>Day-to-day operations</h2>
+<ol class="steps"><li><strong>Check the process.</strong> <code>GET /health</code> only says the process is up. It doesn't prove quorum.</li><li><strong>Check consensus.</strong> <code>GET /raft/metrics</code> (operator token) shows the leader, members and replication progress. Read server logs during elections or storage errors.</li><li><strong>Check load.</strong> <code>GET /admin/resources</code> (operator token) shows worker pools, memory budgets and snapshots. Tune them with the <a href="capacity.html#capacity">capacity settings</a>.</li><li><strong>Deploy deliberately.</strong> A deployment switches code and recomputed values in one step; a rejected one leaves the old version running. For large rebuilds, use <a href="../guide/deployments.html#staged-deployment">staged deployment</a> and <a href="../guide/deployments.html#deployment-tuning">page tuning</a>. <a href="../guide/deployments.html#data-migrations">Data migrations</a> are explicit.</li><li><strong>Keep node data safe.</strong> Give each node its own persistent directory. Add nodes, remove nodes and upgrade with the <a href="https://github.com/xmit-dev/flower/blob/main/MEMBERSHIP.md">membership API and rolling-upgrade procedure</a>, one node at a time.</li></ol>
+<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p><strong>Before production:</strong> enable TLS with the three <code>FLOWER_TLS_*_FILE</code> settings, and set a separate <code>FLOWER_PEER_TOKEN</code> for node-to-node traffic (it falls back to <code>FLOWER_ADMIN_TOKEN</code> otherwise). Only trusted operators and nodes should reach admin endpoints. Flower has no identity provider; each app's <code>auth</code> decides who callers are. A compromised node compromises the cluster. See the <a href="https://github.com/xmit-dev/flower/blob/main/TLS.md">TLS and token rotation guide</a>.</p></div>
+</section>
+<section id="resizing">
+<h2>Change the number of Raft groups</h2>
+<p>To spread load, move named partitions to other Raft groups. A partition's data, code, timers, leases and retry history move with it.</p>
+<ul>
+<li>Create and register the new groups first, then call <code>admin.resize(groupIds)</code> with a <code>FlowerAdmin</code>. Flower moves one partition at a time.</li>
+<li>A partition keeps serving while it's copied and pauses only for the final cutover.</li>
+<li>Groups still share the machine's resources. Balancing is by partition count.</li>
+<li>A failed move resumes when its groups recover.</li>
+<li>Existing composite tenant keys are not movable partitions.</li>
+</ul>
+<p>Follow <a href="groups.html">Resize Raft groups</a> for the complete grow-and-shrink procedure: configure and initialize a new group, register it, rebalance, wait for the plan to finish, and unregister a drained group before stopping its servers. The <a href="../reference/partitions.html#partitions">partition API</a> documents each operation.</p>
+</section>

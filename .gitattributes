@@ -1,0 +1,4 @@
+# Keep vendored inputs byte-for-byte identical to their pinned upstream sources.
+vendor/quickjs-ng/upstream/** -text -whitespace linguist-vendored
+vendor/quickjs-ng/licenses/** -text -whitespace linguist-vendored
+vendor/quickjs-ng/quickjs.wasm binary linguist-generated

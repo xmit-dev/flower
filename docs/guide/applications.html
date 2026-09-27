@@ -1,0 +1,132 @@
+<p>An application is one TypeScript module built from three pieces:</p>
+<div class="definition-grid"><article><span class="small-label">SOURCE</span><h3>collection</h3><p>Named JSON records. An optional schema checks every write.</p></article><article><span class="small-label">DEPENDENCY</span><h3>derive</h3><p>A synchronous function of records and other derived values. Always private.</p></article><article><span class="small-label">BOUNDARY</span><h3>query / mutation</h3><p>Read a snapshot, or make one atomic change. Public only if you list it in <code>http</code>.</p></article></div>
+<section id="example">
+<h2>A complete example</h2>
+<p>Save this as <code>examples/counter.ts</code>:</p>
+<div class="code-block"><div class="code-head"><span>examples/counter.ts</span><button type="button" class="copy-button" aria-label="Copy examples/counter.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, derive, fail, mutation, query, v } from "@flower-js/sdk";
+
+const counterId = v.string({ min: 1, max: 64 });
+const counters = collection("counters", v.int({ min: 0 }));
+
+const doubled = derive("counter.doubled", (ctx, id: string) =&gt;
+  (ctx.get(counters, id) ?? 0) * 2,
+);
+
+const increment = mutation("internal.counter.increment", {
+  args: v.object({ id: counterId, by: v.int({ min: 1, max: 10 }) }),
+}, (ctx, { id, by }) =&gt; {
+  const count = (ctx.get(counters, id) ?? 0) + by;
+  if (count &gt; 1_000) fail("COUNTER_FULL", "Counters stop at 1,000", { count });
+  ctx.set(counters, id, count);
+  ctx.materialize(doubled, id);
+  return ctx.get(doubled, id); // Includes the write above.
+});
+
+const get = query("internal.counter.get", { args: counterId }, (ctx, id) =&gt; ({
+  count: ctx.get(counters, id) ?? 0,
+  doubled: ctx.get(doubled, id),
+}));
+
+const app = define({
+  definitions: [doubled],
+  http: { "counter.increment": increment, "counter.get": get },
+});
+export default app;</code></pre></div>
+<p>Deploy it and call it:</p>
+<div class="code-block"><div class="code-head"><span>Deploy and call</span><button type="button" class="copy-button" aria-label="Copy Deploy and call">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts deploy examples/counter.ts
+node sdk/cli.ts call counter.increment '{"id":"visits","by":1}' --request-id visit-001
+node sdk/cli.ts call counter.get '"visits"'
+# value: { count: 1, doubled: 2 }
+node sdk/cli.ts call counter.increment '{"id":"visits","by":0}'
+# flower: INVALID_ARGUMENT: by: must be at least 1 {"path":["by"]}</code></pre></div>
+<ul>
+<li>Only aliases listed in <code>http</code> are public. Everything else stays private.</li>
+<li>Aliases don't have to match internal names. Each deploy replaces the whole list.</li>
+<li>List every derived value you read in <code>definitions</code>. A missing one fails at run time with <code>DEFINITION_MISSING</code>.</li>
+<li>Export the module as a named constant: clients and tests take its type with <code>typeof app</code>.</li>
+</ul>
+</section>
+<section id="schemas">
+<h2>Check inputs with schemas</h2>
+<p>Pass <code>args</code> to a method and Flower checks every call before your code runs. The argument type comes from the schema, so there's nothing to annotate.</p>
+<div class="code-block"><div class="code-head"><span>A schema for method arguments</span><button type="button" class="copy-button" aria-label="Copy A schema for method arguments">Copy</button></div><pre tabindex="0"><code class="language-ts">const line = v.object({
+  sku: v.string({ pattern: /^[A-Z0-9-]{3,32}$/ }),
+  quantity: v.int({ min: 1, max: 99 }),
+  note: v.optional(v.string({ max: 200 })),
+});
+const place = mutation("order.place", {
+  args: v.object({ id: v.string({ min: 1 }), lines: v.array(line, { min: 1, max: 50 }) }),
+}, (ctx, order) =&gt; {
+  // order: { id: string; lines: { sku: string; quantity: number; note?: string }[] }
+  return order.lines.length;
+});</code></pre></div>
+<ul>
+<li>A bad call fails with <code>INVALID_ARGUMENT</code>, a readable message such as <code>lines[0].quantity: must be at least 1</code>, and <code>details: { path }</code>. Nothing runs.</li>
+<li><code>collection(name, schema)</code> checks every write. A bad record fails the mutation with <code>INVALID_RECORD</code>. Records already stored aren't rechecked when the schema changes.</li>
+<li>Objects are closed: unknown properties are rejected. Use <code>v.record(item)</code> or <code>v.object(shape, { rest })</code> for open maps.</li>
+<li>Any synchronous <a href="https://standardschema.dev/">Standard Schema</a>, such as zod, works wherever a schema does. It is bundled with your app.</li>
+<li>Without <code>args</code>, arguments are unchecked JSON with whatever type you annotate. Check them yourself.</li>
+</ul>
+<p>Every validator is in the <a href="../reference/schemas.html">schema reference</a>.</p>
+</section>
+<section id="keys">
+<h2>Typed keys and indexes</h2>
+<p>Keys are strings unless you give the collection a key schema. Tuple keys keep related records together, and indexes find records by field.</p>
+<div class="code-block"><div class="code-head"><span>Tuple keys and a typed index</span><button type="button" class="copy-button" aria-label="Copy Tuple keys and a typed index">Copy</button></div><pre tabindex="0"><code class="language-ts">const orders = collection("orders", v.object({
+  shop: v.string(), status: v.enum(["open", "paid"]), cents: v.int({ min: 0 }),
+}))
+  .key(v.tuple([v.string(), v.string()])) // [tenant, orderId]
+  .index("byShopStatus", ["shop", "status"]);
+
+const openOrders = query("orders.open", { args: v.string() }, (ctx, shop) =&gt;
+  ctx.query(orders.by("byShopStatus").eq([shop, "open"])));
+const tenantOrders = query("orders.tenant", { args: v.string() }, (ctx, tenant) =&gt;
+  ctx.scan(orders, { prefix: [tenant] })); // [{ key: [tenant, id], value }]
+
+export default define({ collections: [orders], http: { openOrders, tenantOrders } });</code></pre></div>
+<ul>
+<li><code>.key()</code> and <code>.index()</code> each return a new reference. Chain them where you declare the collection and use the result everywhere.</li>
+<li>Index names and fields are checked against the record type, and so is the value you pass to <code>eq</code>.</li>
+<li>Typed keys are stored as canonical JSON. A key that doesn't match fails with <code>INVALID_KEY</code>. Scans decode keys back to tuples.</li>
+<li>List indexed collections in <code>define({ collections })</code>, or reach them through a component. Otherwise the server scans the whole collection, and tests fail with <code>UNDECLARED_INDEX</code>.</li>
+</ul>
+</section>
+<section id="failures">
+<h2>Fail with a code</h2>
+<p><code>fail(code, message, details?)</code> aborts the call with a failure the caller can act on. A failing mutation commits nothing.</p>
+<div class="code-block"><div class="code-head"><span>Inside a mutation</span><button type="button" class="copy-button" aria-label="Copy Inside a mutation">Copy</button></div><pre tabindex="0"><code class="language-ts">if (shop.stock &lt; quantity) fail("OUT_OF_STOCK", "Not enough dough", { stock: shop.stock });</code></pre></div>
+<div class="code-block"><div class="code-head"><span>What an HTTP caller receives · 422</span><button type="button" class="copy-button" aria-label="Copy What an HTTP caller receives">Copy</button></div><pre tabindex="0"><code>{"error":{"code":"EVALUATION_FAILED","message":"OUT_OF_STOCK: Not enough dough",
+  "failure":{"code":"OUT_OF_STOCK","message":"Not enough dough","details":{"stock":2}}}}</code></pre></div>
+<div class="code-block"><div class="code-head"><span>What the TypeScript client sees</span><button type="button" class="copy-button" aria-label="Copy What the TypeScript client sees">Copy</button></div><pre tabindex="0"><code class="language-ts">try {
+  await client.mutate("pizza.order", { id: "o-7", shop: "north", quantity: 3 });
+} catch (error) {
+  if (!(error instanceof FlowerError) || error.failure?.code !== "OUT_OF_STOCK") throw error;
+  console.log("Sold out", error.failure.details);
+}</code></pre></div>
+<ul>
+<li>Codes are <code>UPPER_SNAKE_CASE</code>; details must be JSON.</li>
+<li><code>error.code</code> says what happened to the request (<code>EVALUATION_FAILED</code>, <code>FORBIDDEN</code>, <code>TRANSACTION_ABORTED</code>). <code>error.failure</code> is the method's own failure, with <code>code</code>, <code>message</code> and optional <code>details</code>.</li>
+<li>A plain <code>throw</code> arrives as <code>COMPUTE_ERROR</code> with its message. Returning an error-shaped object is a success.</li>
+<li>Flower's own codes, such as <code>INVALID_ARGUMENT</code>, are listed in the <a href="../reference/schemas.html#codes">failure reference</a>.</li>
+</ul>
+</section>
+<section id="a-small-context-ordinary-typescript" data-toc="The context">
+<h2>What <code>ctx</code> can do</h2>
+<p>Queries can read; mutations can also write.</p>
+<div class="table-wrap"><table><caption class="sr-only">Database context operations</caption><thead><tr><th>Read operations</th><th>Mutation-only operations</th></tr></thead><tbody><tr><td><code>ctx.get(collection, key)</code></td><td><code>ctx.set(collection, key, value)</code></td></tr><tr><td><code>ctx.get(derived, args?)</code></td><td><code>ctx.delete(collection, key)</code></td></tr><tr><td><code>ctx.scan(collection, options?)</code></td><td><code>ctx.materialize(derived, args?)</code></td></tr><tr><td><code>ctx.query(collection.by(index).eq(value))</code></td><td><code>ctx.unmaterialize(derived, args?)</code></td></tr><tr><td><code>ctx.range(collection.by(index).range({ prefix, lte, limit }))</code></td><td><code>fail(code, message)</code> aborts the whole mutation.</td></tr><tr><td><code>ctx.now()</code>, and in methods <code>ctx.principal()</code></td><td>All writes commit together, or none do.</td></tr></tbody></table></div>
+<ul>
+<li><code>get</code> returns <code>null</code> for a missing record.</li>
+<li><code>scan</code> returns <code>{ key, value }</code> rows in key order.</li>
+<li>Everything a callback reads is tracked. See <a href="reactivity.html">Reactive values</a>.</li>
+</ul>
+</section>
+<section id="reuse-initialized-application-snapshots" data-toc="Module setup">
+<h2>Module setup runs once</h2>
+<p>When you deploy, Flower runs your module's top level once, including <code>define()</code> and every component, and snapshots the result. Each callback starts from a copy of that snapshot, so imports and setup cost nothing per call.</p>
+<ul>
+<li>Top-level code has no database access and no randomness. Do that work inside callbacks.</li>
+<li>Globals still reset: every callback gets a fresh copy, and changes to module state don't persist.</li>
+<li>A setup heap over 8 MiB isn't snapshotted; callbacks then start from the shared base image and your compiled code.</li>
+<li>To rerun module code in every callback instead, build or deploy with <code>--initialization per-invocation</code>.</li>
+</ul>
+</section>

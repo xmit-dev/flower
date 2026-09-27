@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+npm run docs:build
+exec xmit flower.xmit.dev _site/

@@ -1,0 +1,73 @@
+<p>A passkey is a WebAuthn credential that the user’s device or password manager keeps. Signing in is a fingerprint, face or PIN check, with no password to phish, reuse or leak. The browser creates and uses the passkey; your methods issue challenges, verify responses natively, and keep the records.</p>
+<section id="how">
+<h2>How it works</h2>
+<p>Registration and sign-in are each a pair of mutations around one browser call:</p>
+<ol>
+<li><strong>Begin.</strong> Build options with a fresh challenge (<code>webauthn.registrationOptions</code> or <code>webauthn.authenticationOptions</code>) and store the challenge.</li>
+<li><strong>The browser.</strong> Pass the options to <code>navigator.credentials.create()</code> or <code>get()</code>. The user confirms with their device.</li>
+<li><strong>Finish.</strong> Verify <code>credential.toJSON()</code> against the stored challenge and delete it. Registration stores the new passkey; sign-in opens a session.</li>
+</ol>
+<p>Each challenge is accepted once. A failed verification rolls back the whole mutation, the deletion included, so the user can retry until the challenge expires.</p>
+</section>
+<section id="server">
+<h2>The server</h2>
+<div class="code-block"><div class="code-head"><span>docs/passkeys.ts</span><button class="copy-button" type="button" aria-label="Copy docs/passkeys.ts">Copy</button></div><pre tabindex="0"><code class="language-ts" data-src="../passkeys.ts"></code></pre></div>
+<ul>
+<li>Set <code>RP.id</code> to your domain and <code>ORIGINS</code> to exactly what browsers report, scheme and port included. An RP ID of <code>example.com</code> also covers its subdomains; list each origin you serve.</li>
+<li>Sign-in offers every passkey the device holds for your site, so nobody types a username. The response’s <code>id</code> picks the stored passkey, and its user handle must match the account.</li>
+<li>Signed in, <code>passkey.register.begin</code> adds a passkey to your account and excludes the ones it already has. Finishing needs the same session.</li>
+<li>Sessions are random tokens. The database keeps only their SHA-256, so its records can’t sign anyone in.</li>
+<li>Abandoned ceremonies expire on a <a href="timers.html">timer</a>.</li>
+</ul>
+</section>
+<section id="browser">
+<h2>The browser</h2>
+<div class="code-block"><div class="code-head"><span>passkeys-browser.ts</span><button class="copy-button" type="button" aria-label="Copy passkeys-browser.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { FlowerClient } from "@flower-js/sdk";
+import type app from "./passkeys.ts";
+
+const url = "https://garden.example";
+const client = new FlowerClient&lt;typeof app&gt;(url);
+
+// Pass a session token to add a passkey to that account instead of opening one.
+export async function register(name: string, token?: string) {
+  const options = token === undefined ? {} : { credentials: token };
+  const { value: begun } = await client.mutate("passkey.register.begin", token === undefined ? { name } : {}, options);
+  const credential = await navigator.credentials.create({
+    publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(begun.options),
+  }) as PublicKeyCredential;
+  return client.mutate("passkey.register.finish", { ceremony: begun.ceremony, response: credential.toJSON() }, options);
+}
+
+export async function signIn() {
+  const { value: begun } = await client.mutate("passkey.signIn.begin");
+  const credential = await navigator.credentials.get({
+    publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(begun.options),
+  }) as PublicKeyCredential;
+  const { value } = await client.mutate("passkey.signIn.finish", { ceremony: begun.ceremony, response: credential.toJSON() });
+  return new FlowerClient&lt;typeof app&gt;(url, { credentials: value.token });
+}</code></pre></div>
+<ul>
+<li><code>parseCreationOptionsFromJSON</code>, <code>parseRequestOptionsFromJSON</code> and <code>toJSON()</code> are in current browsers. For older ones, a converter such as <code>@github/webauthn-json</code> produces the same JSON.</li>
+<li>To offer passkeys in the username field’s autofill, call <code>get()</code> with <code>mediation: "conditional"</code> and mark the input <code>autocomplete="username webauthn"</code>.</li>
+<li>If the user cancels, <code>create()</code> and <code>get()</code> reject with <code>NotAllowedError</code>; nothing reaches the server.</li>
+</ul>
+</section>
+<section id="checks">
+<h2>What verification checks</h2>
+<ul>
+<li><strong>Client data:</strong> the ceremony type, your stored challenge and an allowed origin. Cross-origin ceremonies from iframes are rejected.</li>
+<li><strong>Authenticator data:</strong> the SHA-256 of your RP ID, user presence, user verification when required, and consistent backup flags.</li>
+<li><strong>Registration:</strong> the credential ID matches, and the key is a valid public COSE key using one of your algorithms. EdDSA, ES256 and RS256 are the default; ES384, ES512 and PS256 are available.</li>
+<li><strong>Sign-in:</strong> the credential ID, the signature over the authenticator data and client data hash, the user handle, and the counter.</li>
+</ul>
+<p>A rejected response fails with <code>CRYPTO_ERROR</code>, and its message says what failed. Attestation statements aren’t evaluated: the options request <code>"none"</code>, which is what passkeys use, so the authenticator model (<code>aaguid</code>) is an unverified hint.</p>
+</section>
+<section id="counters">
+<h2>Counters and synced passkeys</h2>
+<p>Passkeys that sync, like those in iCloud Keychain or Google Password Manager, report a counter of zero. Hardware security keys count up. Once either side has used a counter, each sign-in must exceed the stored value; otherwise verification fails with <code>WEBAUTHN_COUNTER</code>, because the key may be cloned. Store the returned <code>signCount</code> after each sign-in.</p>
+<p><code>backupEligible</code> and <code>backupState</code> say whether a passkey can sync and whether it does now. A passkey that doesn’t sync is lost with its device, so suggest adding a second one.</p>
+</section>
+<section id="testing">
+<h2>Testing</h2>
+<p>The <a href="testing.html">in-process test database</a> has no native crypto, so run passkey flows against a local cluster. <code>tests/e2e-passkeys.mjs</code> does so with a software authenticator: Node’s crypto makes keys and signatures, and a few lines of CBOR build what a browser would send.</p>
+</section>

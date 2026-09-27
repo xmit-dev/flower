@@ -1,0 +1,20 @@
+#!/bin/sh
+# Measure the stress preset with each guest, then retain both results in docs/bench/.
+set -eu
+
+cd "$(dirname "$0")/.."
+cargo build --release
+cargo build --release -p goblin-pizza --target wasm32-unknown-unknown
+
+# Builds and the previous run's deleted databases leave write-back pending on
+# the shared disk, which slows the next run's flushes. Let it drain first.
+settle() {
+  sync
+  sleep 30
+}
+
+settle
+npm run bench:stress
+settle
+npm run bench:stress -- --guest wasm
+node scripts/publish-bench-results.mjs bench/results/latest.json bench/results/latest-wasm.json

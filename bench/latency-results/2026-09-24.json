@@ -1,0 +1,3439 @@
+{
+  "schemaVersion": 1,
+  "note": "Full-duration exploratory controls and final publication. Shared desktop; closed-loop concurrency, not a fixed offered rate. Compare identical settings before attributing a difference to code. Diagnostic timings are wall time, overlap, and exclude incomplete edge metric intervals. Receiver counters cannot measure all upstream export loss.",
+  "runs": [
+    {
+      "label": "before-matched-1",
+      "runId": "f83a54b6-51e4-40f8-95b8-f8d71c8cda4d",
+      "loadStartedAt": "2026-09-24T23:28:20.653Z",
+      "loadEndedAt": "2026-09-24T23:29:20.776Z",
+      "durationMs": 60123,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/before",
+        "json": "/tmp/flower-latency-20260924/before-matched-1.json",
+        "html": "/tmp/flower-latency-20260924/before-matched-1.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/before",
+        "sha256": "3b47cf25cfa2a278f6b96e9ab675c70694b1ad4408e6f09a18e2555c0939c9c9",
+        "bytes": 44575760,
+        "modifiedAt": "2026-09-24T23:00:58.184Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3819810,
+        "failed": 0,
+        "reads": 2672794,
+        "mutations": 1147016,
+        "orders": 768,
+        "pizzas": 1915,
+        "revenue": 13405,
+        "tips": 2294104,
+        "replays": 115018,
+        "staleLeases": 95
+      },
+      "goodputRps": 63533.2568235118,
+      "latencyMs": {
+        "read": {
+          "min": 0.035709,
+          "max": 1419.52675,
+          "p50": 1.113188001807785,
+          "p95": 7.672113703218662,
+          "p99": 19.941917430589417
+        },
+        "mutation": {
+          "min": 22.170917,
+          "max": 1162.608708,
+          "p50": 81.92227247419699,
+          "p95": 157.98383811429295,
+          "p99": 329.9091193138746
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3819810,
+        "failed": 0,
+        "reads": 2672794,
+        "mutations": 1147016,
+        "durationMs": 60123,
+        "goodputRps": 63533.2568235118,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 547310,
+          "coverageMin": 0.9564034645011544,
+          "coverageMax": 0.9910865297357505,
+          "estimatedLoadCpuMs": 560867.8499873822,
+          "estimatedMeanCores": 9.328673718666437,
+          "estimatedCpuUsPerSuccessfulCall": 146.8313476291706
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 109562.34000000001,
+          "coverageMin": 0.9897311142973766,
+          "coverageMax": 0.9910865297357505,
+          "estimatedLoadCpuMs": 110616.62901564012,
+          "estimatedMeanCores": 1.8398388140252502,
+          "estimatedCpuUsPerSuccessfulCall": 28.958673079456865
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 656872.3400000001,
+          "coverageMin": 0.9564034645011544,
+          "coverageMax": 0.9910865297357505,
+          "estimatedLoadCpuMs": 671484.4790030221,
+          "estimatedMeanCores": 11.168512532691683,
+          "estimatedCpuUsPerSuccessfulCall": 175.79002070862742
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "after-matched-1",
+      "runId": "cf133785-5163-4347-82cf-b85adc637aba",
+      "loadStartedAt": "2026-09-24T23:29:25.579Z",
+      "loadEndedAt": "2026-09-24T23:30:25.744Z",
+      "durationMs": 60165,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/after",
+        "json": "/tmp/flower-latency-20260924/after-matched-1.json",
+        "html": "/tmp/flower-latency-20260924/after-matched-1.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/after",
+        "sha256": "7c153b05d27b9388104f98e7b24f97161c0a562747be80f24600596c766e2aa1",
+        "bytes": 44661376,
+        "modifiedAt": "2026-09-24T23:27:06.454Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3935937,
+        "failed": 0,
+        "reads": 2754054,
+        "mutations": 1181883,
+        "orders": 768,
+        "pizzas": 1912,
+        "revenue": 13384,
+        "tips": 2363641,
+        "replays": 118533,
+        "staleLeases": 102
+      },
+      "goodputRps": 65419.04761904762,
+      "latencyMs": {
+        "read": {
+          "min": 0.036333,
+          "max": 1421.719875,
+          "p50": 1.146918711450563,
+          "p95": 11.422731852687491,
+          "p99": 28.532272944648167
+        },
+        "mutation": {
+          "min": 21.111083999999998,
+          "max": 1170.259791,
+          "p50": 75.65384417754544,
+          "p95": 159.56367649543589,
+          "p99": 295.7053682664373
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3935937,
+        "failed": 0,
+        "reads": 2754054,
+        "mutations": 1181883,
+        "durationMs": 60165,
+        "goodputRps": 65419.04761904762,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 559940,
+          "coverageMin": 0.9554773930567398,
+          "coverageMax": 0.9902660370389335,
+          "estimatedLoadCpuMs": 574496.1529985304,
+          "estimatedMeanCores": 9.548677021499715,
+          "estimatedCpuUsPerSuccessfulCall": 145.9617247426802
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 112737.085,
+          "coverageMin": 0.988729833884037,
+          "coverageMax": 0.9902660370389335,
+          "estimatedLoadCpuMs": 113913.7044520023,
+          "estimatedMeanCores": 1.8933550145766194,
+          "estimatedCpuUsPerSuccessfulCall": 28.94195319996288
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 672677.0850000001,
+          "coverageMin": 0.9554773930567398,
+          "coverageMax": 0.9902660370389335,
+          "estimatedLoadCpuMs": 688409.8574505328,
+          "estimatedMeanCores": 11.442032036076338,
+          "estimatedCpuUsPerSuccessfulCall": 174.90367794264307
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "after-matched-2",
+      "runId": "6b93a52f-1242-4f3c-a3b0-3e08c12d3c0e",
+      "loadStartedAt": "2026-09-24T23:30:30.673Z",
+      "loadEndedAt": "2026-09-24T23:31:30.781Z",
+      "durationMs": 60108,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/after",
+        "json": "/tmp/flower-latency-20260924/after-matched-2.json",
+        "html": "/tmp/flower-latency-20260924/after-matched-2.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/after",
+        "sha256": "7c153b05d27b9388104f98e7b24f97161c0a562747be80f24600596c766e2aa1",
+        "bytes": 44661376,
+        "modifiedAt": "2026-09-24T23:27:06.454Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3774133,
+        "failed": 0,
+        "reads": 2640789,
+        "mutations": 1133344,
+        "orders": 768,
+        "pizzas": 1923,
+        "revenue": 13461,
+        "tips": 2266396,
+        "replays": 113640,
+        "staleLeases": 96
+      },
+      "goodputRps": 62789.19611366208,
+      "latencyMs": {
+        "read": {
+          "min": 0.036375000000000005,
+          "max": 2003.8886659999998,
+          "p50": 1.1355630806441217,
+          "p95": 10.760730115410706,
+          "p99": 28.249775192720957
+        },
+        "mutation": {
+          "min": 20.670125000000002,
+          "max": 1067.289708,
+          "p50": 78.72569362306895,
+          "p95": 166.04260161149332,
+          "p99": 350.2051780187075
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3774133,
+        "failed": 0,
+        "reads": 2640789,
+        "mutations": 1133344,
+        "durationMs": 60108,
+        "goodputRps": 62789.196113662074,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 537710,
+          "coverageMin": 0.957119307075968,
+          "coverageMax": 0.9911217994830789,
+          "estimatedLoadCpuMs": 551192.6554281196,
+          "estimatedMeanCores": 9.170038188396214,
+          "estimatedCpuUsPerSuccessfulCall": 146.04484140546174
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 108499.755,
+          "coverageMin": 0.9903928097673887,
+          "coverageMax": 0.9911217994830789,
+          "estimatedLoadCpuMs": 109520.21394839142,
+          "estimatedMeanCores": 1.822057196186721,
+          "estimatedCpuUsPerSuccessfulCall": 29.01864188368333
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 646209.755,
+          "coverageMin": 0.957119307075968,
+          "coverageMax": 0.9911217994830789,
+          "estimatedLoadCpuMs": 660712.8693765112,
+          "estimatedMeanCores": 10.992095384582937,
+          "estimatedCpuUsPerSuccessfulCall": 175.06348328914515
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "before-matched-2",
+      "runId": "a1fd88f5-14dc-4189-b5f8-d5062e60637e",
+      "loadStartedAt": "2026-09-24T23:31:35.761Z",
+      "loadEndedAt": "2026-09-24T23:32:35.927Z",
+      "durationMs": 60166,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/before",
+        "json": "/tmp/flower-latency-20260924/before-matched-2.json",
+        "html": "/tmp/flower-latency-20260924/before-matched-2.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/before",
+        "sha256": "3b47cf25cfa2a278f6b96e9ab675c70694b1ad4408e6f09a18e2555c0939c9c9",
+        "bytes": 44575760,
+        "modifiedAt": "2026-09-24T23:00:58.184Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3991517,
+        "failed": 0,
+        "reads": 2792758,
+        "mutations": 1198759,
+        "orders": 768,
+        "pizzas": 1925,
+        "revenue": 13475,
+        "tips": 2397226,
+        "replays": 120273,
+        "staleLeases": 105
+      },
+      "goodputRps": 66341.73785859124,
+      "latencyMs": {
+        "read": {
+          "min": 0.034083,
+          "max": 1940.671875,
+          "p50": 1.069751789451383,
+          "p95": 8.225544326605357,
+          "p99": 23.383466517940825
+        },
+        "mutation": {
+          "min": 18.690292,
+          "max": 1129.511084,
+          "p50": 76.4103826193209,
+          "p95": 154.8709323735839,
+          "p99": 313.89720705571267
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3991517,
+        "failed": 0,
+        "reads": 2792758,
+        "mutations": 1198759,
+        "durationMs": 60166,
+        "goodputRps": 66341.73785859124,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 556070,
+          "coverageMin": 0.955310118849357,
+          "coverageMax": 0.9902249616899377,
+          "estimatedLoadCpuMs": 570505.7238581193,
+          "estimatedMeanCores": 9.482194659078539,
+          "estimatedCpuUsPerSuccessfulCall": 142.9295488051584
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 108352.164,
+          "coverageMin": 0.9885699302424398,
+          "coverageMax": 0.9902249616899377,
+          "estimatedLoadCpuMs": 109503.21661368801,
+          "estimatedMeanCores": 1.820018226468238,
+          "estimatedCpuUsPerSuccessfulCall": 27.433984776637054
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 664422.164,
+          "coverageMin": 0.955310118849357,
+          "coverageMax": 0.9902249616899377,
+          "estimatedLoadCpuMs": 680008.9404718073,
+          "estimatedMeanCores": 11.302212885546775,
+          "estimatedCpuUsPerSuccessfulCall": 170.3635335817954
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "after-capacity",
+      "runId": "5d6116ac-6a4e-47a3-becf-5af2f0e00997",
+      "loadStartedAt": "2026-09-24T23:32:40.507Z",
+      "loadEndedAt": "2026-09-24T23:33:40.708Z",
+      "durationMs": 60201,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 512,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/after",
+        "json": "/tmp/flower-latency-20260924/after-capacity.json",
+        "html": "/tmp/flower-latency-20260924/after-capacity.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "200",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/after",
+        "sha256": "7c153b05d27b9388104f98e7b24f97161c0a562747be80f24600596c766e2aa1",
+        "bytes": 44661376,
+        "modifiedAt": "2026-09-24T23:27:06.454Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 5579124,
+        "failed": 0,
+        "reads": 3904797,
+        "mutations": 1674327,
+        "orders": 768,
+        "pizzas": 1914,
+        "revenue": 13398,
+        "tips": 3347715,
+        "replays": 167231,
+        "staleLeases": 98
+      },
+      "goodputRps": 92674.93895450242,
+      "latencyMs": {
+        "read": {
+          "min": 0.037542,
+          "max": 2029.307708,
+          "p50": 2.6988005091615803,
+          "p95": 25.829894484529536,
+          "p99": 58.9924802808189
+        },
+        "mutation": {
+          "min": 14.94275,
+          "max": 3308.411458,
+          "p50": 97.99111942252591,
+          "p95": 204.62956398032634,
+          "p99": 521.4077888668606
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 5579124,
+        "failed": 0,
+        "reads": 3904797,
+        "mutations": 1674327,
+        "durationMs": 60201,
+        "goodputRps": 92674.93895450242,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 594300,
+          "coverageMin": 0.9549525660906876,
+          "coverageMax": 0.9895779486769793,
+          "estimatedLoadCpuMs": 610454.5666121142,
+          "estimatedMeanCores": 10.140272862778263,
+          "estimatedCpuUsPerSuccessfulCall": 109.41763735886032
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 133684.119,
+          "coverageMin": 0.9881965599367086,
+          "coverageMax": 0.9895779486769793,
+          "estimatedLoadCpuMs": 135175.53836940313,
+          "estimatedMeanCores": 2.245403537638962,
+          "estimatedCpuUsPerSuccessfulCall": 24.228810538966894
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 727984.119,
+          "coverageMin": 0.9549525660906876,
+          "coverageMax": 0.9895779486769793,
+          "estimatedLoadCpuMs": 745630.1049815173,
+          "estimatedMeanCores": 12.385676400417225,
+          "estimatedCpuUsPerSuccessfulCall": 133.64644789782722
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "before-capacity",
+      "runId": "2979f024-9eb2-43b6-a356-3f6e0bd46746",
+      "loadStartedAt": "2026-09-24T23:33:45.634Z",
+      "loadEndedAt": "2026-09-24T23:34:45.873Z",
+      "durationMs": 60239,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 512,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/before",
+        "json": "/tmp/flower-latency-20260924/before-capacity.json",
+        "html": "/tmp/flower-latency-20260924/before-capacity.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "200",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/before",
+        "sha256": "3b47cf25cfa2a278f6b96e9ab675c70694b1ad4408e6f09a18e2555c0939c9c9",
+        "bytes": 44575760,
+        "modifiedAt": "2026-09-24T23:00:58.184Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 4941279,
+        "failed": 0,
+        "reads": 3458027,
+        "mutations": 1483252,
+        "orders": 768,
+        "pizzas": 1914,
+        "revenue": 13398,
+        "tips": 2965493,
+        "replays": 148106,
+        "staleLeases": 102
+      },
+      "goodputRps": 82027.90550971963,
+      "latencyMs": {
+        "read": {
+          "min": 0.035792,
+          "max": 1537.190625,
+          "p50": 2.808382632023582,
+          "p95": 30.590458499923677,
+          "p99": 69.17332258837067
+        },
+        "mutation": {
+          "min": 14.533208,
+          "max": 1117.2605,
+          "p50": 113.76464755150668,
+          "p95": 262.4234999747967,
+          "p99": 444.6676486256402
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 4941279,
+        "failed": 0,
+        "reads": 3458027,
+        "mutations": 1483252,
+        "durationMs": 60239,
+        "goodputRps": 82027.90550971961,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 532030,
+          "coverageMin": 0.9550003528104252,
+          "coverageMax": 0.9904996346551552,
+          "estimatedLoadCpuMs": 545519.4993755134,
+          "estimatedMeanCores": 9.055918912590073,
+          "estimatedCpuUsPerSuccessfulCall": 110.40046501634768
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 122576.79799999998,
+          "coverageMin": 0.9882144579458666,
+          "coverageMax": 0.9904996346551552,
+          "estimatedLoadCpuMs": 123883.51943979318,
+          "estimatedMeanCores": 2.0565334656915484,
+          "estimatedCpuUsPerSuccessfulCall": 25.07114442228281
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 654606.798,
+          "coverageMin": 0.9550003528104252,
+          "coverageMax": 0.9904996346551552,
+          "estimatedLoadCpuMs": 669403.0188153068,
+          "estimatedMeanCores": 11.112452378281626,
+          "estimatedCpuUsPerSuccessfulCall": 135.4716094386305
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "compressed-matched-1",
+      "runId": "762e7c9c-377f-476e-8ebd-8e1343f350c3",
+      "loadStartedAt": "2026-09-24T23:46:22.880Z",
+      "loadEndedAt": "2026-09-24T23:47:23.049Z",
+      "durationMs": 60169,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/compressed",
+        "json": "/tmp/flower-latency-20260924/compressed-matched-1.json",
+        "html": "/tmp/flower-latency-20260924/compressed-matched-1.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/compressed",
+        "sha256": "d823cf696a78b226a6d82cfdcd03c90a0998fdb3c905e7aff6e4b51a11cca457",
+        "bytes": 44848576,
+        "modifiedAt": "2026-09-24T23:46:17.772Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3671725,
+        "failed": 0,
+        "reads": 2569205,
+        "mutations": 1102520,
+        "orders": 768,
+        "pizzas": 1919,
+        "revenue": 13433,
+        "tips": 2204918,
+        "replays": 110574,
+        "staleLeases": 103
+      },
+      "goodputRps": 61023.533713374,
+      "latencyMs": {
+        "read": {
+          "min": 0.036209,
+          "max": 2004.714333,
+          "p50": 0.968432339749812,
+          "p95": 5.001450304775976,
+          "p99": 12.005405976771947
+        },
+        "mutation": {
+          "min": 26.479208,
+          "max": 1123.158041,
+          "p50": 84.40459925243765,
+          "p95": 178.0201431435024,
+          "p99": 292.7775923430072
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3671725,
+        "failed": 0,
+        "reads": 2569205,
+        "mutations": 1102520,
+        "durationMs": 60169,
+        "goodputRps": 61023.533713373996,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 530000,
+          "coverageMin": 0.955166689267019,
+          "coverageMax": 0.9896885839697181,
+          "estimatedLoadCpuMs": 544137.2328664762,
+          "estimatedMeanCores": 9.043481408474067,
+          "estimatedCpuUsPerSuccessfulCall": 148.19661953617882
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 103956.655,
+          "coverageMin": 0.9884052569111581,
+          "coverageMax": 0.9896885839697181,
+          "estimatedLoadCpuMs": 105099.50828059122,
+          "estimatedMeanCores": 1.7467384912594728,
+          "estimatedCpuUsPerSuccessfulCall": 28.624014129759505
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 633956.655,
+          "coverageMin": 0.955166689267019,
+          "coverageMax": 0.9896885839697181,
+          "estimatedLoadCpuMs": 649236.7411470673,
+          "estimatedMeanCores": 10.790219899733538,
+          "estimatedCpuUsPerSuccessfulCall": 176.8206336659383
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "after-matched-3",
+      "runId": "683ea8a9-fcf2-4d2c-bdae-390bf1603c97",
+      "loadStartedAt": "2026-09-24T23:47:27.774Z",
+      "loadEndedAt": "2026-09-24T23:48:27.997Z",
+      "durationMs": 60223,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/after",
+        "json": "/tmp/flower-latency-20260924/after-matched-3.json",
+        "html": "/tmp/flower-latency-20260924/after-matched-3.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/after",
+        "sha256": "7c153b05d27b9388104f98e7b24f97161c0a562747be80f24600596c766e2aa1",
+        "bytes": 44661376,
+        "modifiedAt": "2026-09-24T23:27:06.454Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 4080251,
+        "failed": 0,
+        "reads": 2855027,
+        "mutations": 1225224,
+        "orders": 768,
+        "pizzas": 1917,
+        "revenue": 13419,
+        "tips": 2450286,
+        "replays": 122944,
+        "staleLeases": 100
+      },
+      "goodputRps": 67752.37035684042,
+      "latencyMs": {
+        "read": {
+          "min": 0.035125,
+          "max": 2005.365875,
+          "p50": 1.080449307345897,
+          "p95": 10.444258634525935,
+          "p99": 28.817595674094648
+        },
+        "mutation": {
+          "min": 21.921209,
+          "max": 1088.296667,
+          "p50": 74.16316456969459,
+          "p95": 144.4509147741695,
+          "p99": 273.0789463920084
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 4080251,
+        "failed": 0,
+        "reads": 2855027,
+        "mutations": 1225224,
+        "durationMs": 60223,
+        "goodputRps": 67752.37035684042,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 574090,
+          "coverageMin": 0.9555042079302235,
+          "coverageMax": 0.9907419388953893,
+          "estimatedLoadCpuMs": 588876.7315927979,
+          "estimatedMeanCores": 9.778269624442453,
+          "estimatedCpuUsPerSuccessfulCall": 144.32365351856978
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 114096.424,
+          "coverageMin": 0.9887150069709181,
+          "coverageMax": 0.9907419388953893,
+          "estimatedLoadCpuMs": 115289.38556455637,
+          "estimatedMeanCores": 1.9143746668973045,
+          "estimatedCpuUsPerSuccessfulCall": 28.255464079184435
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 688186.4239999999,
+          "coverageMin": 0.9555042079302235,
+          "coverageMax": 0.9907419388953893,
+          "estimatedLoadCpuMs": 704166.1171573544,
+          "estimatedMeanCores": 11.69264429133976,
+          "estimatedCpuUsPerSuccessfulCall": 172.57911759775425
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "compressed-capacity",
+      "runId": "7bacdd8e-d2ff-451f-818b-0d5ac3112305",
+      "loadStartedAt": "2026-09-24T23:48:32.668Z",
+      "loadEndedAt": "2026-09-24T23:49:32.803Z",
+      "durationMs": 60135,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 512,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/compressed",
+        "json": "/tmp/flower-latency-20260924/compressed-capacity.json",
+        "html": "/tmp/flower-latency-20260924/compressed-capacity.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "200",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/compressed",
+        "sha256": "d823cf696a78b226a6d82cfdcd03c90a0998fdb3c905e7aff6e4b51a11cca457",
+        "bytes": 44848576,
+        "modifiedAt": "2026-09-24T23:46:17.772Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 5532730,
+        "failed": 0,
+        "reads": 3872168,
+        "mutations": 1660562,
+        "orders": 768,
+        "pizzas": 1914,
+        "revenue": 13398,
+        "tips": 3319984,
+        "replays": 165821,
+        "staleLeases": 89
+      },
+      "goodputRps": 92005.1550677642,
+      "latencyMs": {
+        "read": {
+          "min": 0.034125,
+          "max": 2039.8955,
+          "p50": 2.981154754490906,
+          "p95": 33.12508311487986,
+          "p99": 70.56370637239692
+        },
+        "mutation": {
+          "min": 11.288583,
+          "max": 1018.4957080000001,
+          "p50": 97.02091031933259,
+          "p95": 198.61143877403433,
+          "p99": 333.20821050701335
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 5532730,
+        "failed": 0,
+        "reads": 3872168,
+        "mutations": 1660562,
+        "durationMs": 60135,
+        "goodputRps": 92005.1550677642,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 609670,
+          "coverageMin": 0.9557018729283949,
+          "coverageMax": 0.990540855042752,
+          "estimatedLoadCpuMs": 625077.1733164913,
+          "estimatedMeanCores": 10.394565117094725,
+          "estimatedCpuUsPerSuccessfulCall": 112.97807290731542
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 134884.53999999998,
+          "coverageMin": 0.9892387947548367,
+          "coverageMax": 0.9905423999342163,
+          "estimatedLoadCpuMs": 136270.66406246345,
+          "estimatedMeanCores": 2.2660790564972717,
+          "estimatedCpuUsPerSuccessfulCall": 24.62991399588692
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 744554.54,
+          "coverageMin": 0.9557018729283949,
+          "coverageMax": 0.9905423999342163,
+          "estimatedLoadCpuMs": 761347.8373789547,
+          "estimatedMeanCores": 12.660644173591997,
+          "estimatedCpuUsPerSuccessfulCall": 137.60798690320235
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "compressed-matched-2",
+      "runId": "e2f86595-706e-4340-9696-577ae081d406",
+      "loadStartedAt": "2026-09-24T23:49:37.587Z",
+      "loadEndedAt": "2026-09-24T23:50:37.725Z",
+      "durationMs": 60138,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/compressed",
+        "json": "/tmp/flower-latency-20260924/compressed-matched-2.json",
+        "html": "/tmp/flower-latency-20260924/compressed-matched-2.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/compressed",
+        "sha256": "d823cf696a78b226a6d82cfdcd03c90a0998fdb3c905e7aff6e4b51a11cca457",
+        "bytes": 44848576,
+        "modifiedAt": "2026-09-24T23:46:17.772Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3920148,
+        "failed": 0,
+        "reads": 2742993,
+        "mutations": 1177155,
+        "orders": 768,
+        "pizzas": 1921,
+        "revenue": 13447,
+        "tips": 2354190,
+        "replays": 118096,
+        "staleLeases": 105
+      },
+      "goodputRps": 65185.872493265495,
+      "latencyMs": {
+        "read": {
+          "min": 0.034791,
+          "max": 1973.0925419999999,
+          "p50": 1.048673453045175,
+          "p95": 9.176979439286072,
+          "p99": 23.383466517940825
+        },
+        "mutation": {
+          "min": 12.63725,
+          "max": 3258.975666,
+          "p50": 74.90479621539153,
+          "p95": 141.60466108633418,
+          "p99": 287.0087171287199
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3920148,
+        "failed": 0,
+        "reads": 2742993,
+        "mutations": 1177155,
+        "durationMs": 60138,
+        "goodputRps": 65185.87249326549,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 568400,
+          "coverageMin": 0.9549833703355742,
+          "coverageMax": 0.9906221597779605,
+          "estimatedLoadCpuMs": 582044.648803755,
+          "estimatedMeanCores": 9.678483634370197,
+          "estimatedCpuUsPerSuccessfulCall": 148.47517206078825
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 110852.428,
+          "coverageMin": 0.9882383526560498,
+          "coverageMax": 0.9906221597779605,
+          "estimatedLoadCpuMs": 112015.60629068423,
+          "estimatedMeanCores": 1.8626426933167752,
+          "estimatedCpuUsPerSuccessfulCall": 28.574330941251255
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 679252.428,
+          "coverageMin": 0.9549833703355742,
+          "coverageMax": 0.9906221597779605,
+          "estimatedLoadCpuMs": 694060.2550944394,
+          "estimatedMeanCores": 11.541126327686976,
+          "estimatedCpuUsPerSuccessfulCall": 177.04950300203956
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "compressed-middle-1",
+      "runId": "4ffc847e-28fa-4080-8166-6aa60b93d089",
+      "loadStartedAt": "2026-09-24T23:50:55.233Z",
+      "loadEndedAt": "2026-09-24T23:51:55.665Z",
+      "durationMs": 60432,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 384,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/compressed",
+        "json": "/tmp/flower-latency-20260924/compressed-middle-1.json",
+        "html": "/tmp/flower-latency-20260924/compressed-middle-1.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/compressed",
+        "sha256": "d823cf696a78b226a6d82cfdcd03c90a0998fdb3c905e7aff6e4b51a11cca457",
+        "bytes": 44848576,
+        "modifiedAt": "2026-09-24T23:46:17.772Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 4527692,
+        "failed": 0,
+        "reads": 3168428,
+        "mutations": 1359264,
+        "orders": 768,
+        "pizzas": 1914,
+        "revenue": 13398,
+        "tips": 2718769,
+        "replays": 135753,
+        "staleLeases": 96
+      },
+      "goodputRps": 74922.09425469949,
+      "latencyMs": {
+        "read": {
+          "min": 0.035250000000000004,
+          "max": 1413.057959,
+          "p50": 1.4562824269783565,
+          "p95": 11.197658908624145,
+          "p99": 33.12508311487986
+        },
+        "mutation": {
+          "min": 19.91725,
+          "max": 1339.661625,
+          "p50": 97.99111942252591,
+          "p95": 221.58449552584668,
+          "p99": 386.8443880730339
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 4527692,
+        "failed": 0,
+        "reads": 3168428,
+        "mutations": 1359264,
+        "durationMs": 60432,
+        "goodputRps": 74922.09425469949,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 550260,
+          "coverageMin": 0.9520542363598963,
+          "coverageMax": 0.9904540300226055,
+          "estimatedLoadCpuMs": 564930.3786158188,
+          "estimatedMeanCores": 9.348199275480189,
+          "estimatedCpuUsPerSuccessfulCall": 124.77226335532957
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 116509.96399999999,
+          "coverageMin": 0.9851614304919835,
+          "coverageMax": 0.9904540300226055,
+          "estimatedLoadCpuMs": 117849.24565676876,
+          "estimatedMeanCores": 1.9501132786730335,
+          "estimatedCpuUsPerSuccessfulCall": 26.02854736072347
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 666769.964,
+          "coverageMin": 0.9520542363598963,
+          "coverageMax": 0.9904540300226055,
+          "estimatedLoadCpuMs": 682779.6242725876,
+          "estimatedMeanCores": 11.298312554153224,
+          "estimatedCpuUsPerSuccessfulCall": 150.80081071605304
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "compressed-middle-2",
+      "runId": "c4b7ff90-83ca-4f75-ad7f-c2c6bce82413",
+      "loadStartedAt": "2026-09-24T23:52:00.102Z",
+      "loadEndedAt": "2026-09-24T23:53:00.303Z",
+      "durationMs": 60201,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 384,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/compressed",
+        "json": "/tmp/flower-latency-20260924/compressed-middle-2.json",
+        "html": "/tmp/flower-latency-20260924/compressed-middle-2.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/compressed",
+        "sha256": "d823cf696a78b226a6d82cfdcd03c90a0998fdb3c905e7aff6e4b51a11cca457",
+        "bytes": 44848576,
+        "modifiedAt": "2026-09-24T23:46:17.772Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 4549407,
+        "failed": 0,
+        "reads": 3183950,
+        "mutations": 1365457,
+        "orders": 768,
+        "pizzas": 1914,
+        "revenue": 13398,
+        "tips": 2731186,
+        "replays": 136369,
+        "staleLeases": 106
+      },
+      "goodputRps": 75570.28953007425,
+      "latencyMs": {
+        "read": {
+          "min": 0.037292,
+          "max": 2006.400125,
+          "p50": 1.5004092407982277,
+          "p95": 13.130135709392285,
+          "p99": 37.326172779048505
+        },
+        "mutation": {
+          "min": 19.2435,
+          "max": 1200.172875,
+          "p50": 94.16753969891573,
+          "p95": 219.39058962955116,
+          "p99": 364.4249125690309
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 4549407,
+        "failed": 0,
+        "reads": 3183950,
+        "mutations": 1365457,
+        "durationMs": 60201,
+        "goodputRps": 75570.28953007425,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 550150,
+          "coverageMin": 0.9546328740048605,
+          "coverageMax": 0.989878588409464,
+          "estimatedLoadCpuMs": 564905.2998564348,
+          "estimatedMeanCores": 9.383653093078767,
+          "estimatedCpuUsPerSuccessfulCall": 124.17119414825599
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 116580.973,
+          "coverageMin": 0.987878018544478,
+          "coverageMax": 0.989878588409464,
+          "estimatedLoadCpuMs": 117855.42460758185,
+          "estimatedMeanCores": 1.9576987858603985,
+          "estimatedCpuUsPerSuccessfulCall": 25.905667399637327
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 666730.9729999999,
+          "coverageMin": 0.9546328740048605,
+          "coverageMax": 0.989878588409464,
+          "estimatedLoadCpuMs": 682760.7244640166,
+          "estimatedMeanCores": 11.341351878939165,
+          "estimatedCpuUsPerSuccessfulCall": 150.07686154789332
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "redb-matched-1",
+      "runId": "1c7bd273-50bd-46bc-af59-dc9b232e996d",
+      "loadStartedAt": "2026-09-25T00:13:33.294Z",
+      "loadEndedAt": "2026-09-25T00:14:33.410Z",
+      "durationMs": 60116,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/redb",
+        "json": "/tmp/flower-latency-20260924/redb-matched-1.json",
+        "html": "/tmp/flower-latency-20260924/redb-matched-1.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/redb",
+        "sha256": "f9272bd6ccd6b252f6b16cb7e0582878fbc2d8d8936fb5a0fce8c2871a32292e",
+        "bytes": 44817360,
+        "modifiedAt": "2026-09-25T00:12:44.063Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3949758,
+        "failed": 0,
+        "reads": 2763739,
+        "mutations": 1186019,
+        "orders": 768,
+        "pizzas": 1914,
+        "revenue": 13398,
+        "tips": 2371787,
+        "replays": 118991,
+        "staleLeases": 103
+      },
+      "goodputRps": 65702.27560050569,
+      "latencyMs": {
+        "read": {
+          "min": 0.035500000000000004,
+          "max": 1971.549208,
+          "p50": 0.8943310178682419,
+          "p95": 4.438533198175607,
+          "p99": 10.868337416564813
+        },
+        "mutation": {
+          "min": 18.34075,
+          "max": 1026.693167,
+          "p50": 82.74149519893896,
+          "p95": 144.4509147741695,
+          "p99": 196.6449888851825
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3949758,
+        "failed": 0,
+        "reads": 2763739,
+        "mutations": 1186019,
+        "durationMs": 60116,
+        "goodputRps": 65702.27560050569,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 552250,
+          "coverageMin": 0.9559319939532003,
+          "coverageMax": 0.9903365888031187,
+          "estimatedLoadCpuMs": 566267.7725345097,
+          "estimatedMeanCores": 9.419585011220136,
+          "estimatedCpuUsPerSuccessfulCall": 143.36771329648795
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 103478.072,
+          "coverageMin": 0.9892612997688076,
+          "coverageMax": 0.9903365888031187,
+          "estimatedLoadCpuMs": 104543.78564150668,
+          "estimatedMeanCores": 1.739034294389292,
+          "estimatedCpuUsPerSuccessfulCall": 26.468402783539315
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 655728.072,
+          "coverageMin": 0.9559319939532003,
+          "coverageMax": 0.9903365888031187,
+          "estimatedLoadCpuMs": 670811.5581760164,
+          "estimatedMeanCores": 11.15861930560943,
+          "estimatedCpuUsPerSuccessfulCall": 169.8361160800273
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "compressed-matched-3",
+      "runId": "70b37d01-37df-4024-8fdc-a2ce41760772",
+      "loadStartedAt": "2026-09-25T00:14:38.208Z",
+      "loadEndedAt": "2026-09-25T00:15:38.428Z",
+      "durationMs": 60220,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/compressed",
+        "json": "/tmp/flower-latency-20260924/compressed-matched-3.json",
+        "html": "/tmp/flower-latency-20260924/compressed-matched-3.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/compressed",
+        "sha256": "d823cf696a78b226a6d82cfdcd03c90a0998fdb3c905e7aff6e4b51a11cca457",
+        "bytes": 44848576,
+        "modifiedAt": "2026-09-24T23:46:17.772Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3931833,
+        "failed": 0,
+        "reads": 2751053,
+        "mutations": 1180780,
+        "orders": 768,
+        "pizzas": 1917,
+        "revenue": 13419,
+        "tips": 2361349,
+        "replays": 118447,
+        "staleLeases": 98
+      },
+      "goodputRps": 65291.14911989372,
+      "latencyMs": {
+        "read": {
+          "min": 0.034958,
+          "max": 2004.3597499999998,
+          "p50": 0.9214301420406674,
+          "p95": 5.051464807823736,
+          "p99": 14.360236053709368
+        },
+        "mutation": {
+          "min": 17.858083,
+          "max": 1218.480584,
+          "p50": 76.4103826193209,
+          "p95": 174.51244303842995,
+          "p99": 301.6490461685927
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3931833,
+        "failed": 0,
+        "reads": 2751053,
+        "mutations": 1180780,
+        "durationMs": 60220,
+        "goodputRps": 65291.14911989372,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 549410,
+          "coverageMin": 0.9543726979014803,
+          "coverageMax": 0.9895140035302561,
+          "estimatedLoadCpuMs": 564372.2260954303,
+          "estimatedMeanCores": 9.371840353627206,
+          "estimatedCpuUsPerSuccessfulCall": 143.53921595739962
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 105783.23900000002,
+          "coverageMin": 0.9876648653049562,
+          "coverageMax": 0.9895173269273708,
+          "estimatedLoadCpuMs": 106971.73256920878,
+          "estimatedMeanCores": 1.7763489300765323,
+          "estimatedCpuUsPerSuccessfulCall": 27.20658089222222
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 655193.2390000001,
+          "coverageMin": 0.9543726979014803,
+          "coverageMax": 0.9895173269273708,
+          "estimatedLoadCpuMs": 671343.9586646389,
+          "estimatedMeanCores": 11.148189283703735,
+          "estimatedCpuUsPerSuccessfulCall": 170.74579684962177
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "redb-capacity",
+      "runId": "60dded00-7c13-46ee-9d7c-09d08ae85ef5",
+      "loadStartedAt": "2026-09-25T00:15:43.167Z",
+      "loadEndedAt": "2026-09-25T00:16:43.353Z",
+      "durationMs": 60186,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 512,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/redb",
+        "json": "/tmp/flower-latency-20260924/redb-capacity.json",
+        "html": "/tmp/flower-latency-20260924/redb-capacity.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "200",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/redb",
+        "sha256": "f9272bd6ccd6b252f6b16cb7e0582878fbc2d8d8936fb5a0fce8c2871a32292e",
+        "bytes": 44817360,
+        "modifiedAt": "2026-09-25T00:12:44.063Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 4880723,
+        "failed": 0,
+        "reads": 3415997,
+        "mutations": 1464726,
+        "orders": 768,
+        "pizzas": 1914,
+        "revenue": 13398,
+        "tips": 2928531,
+        "replays": 146304,
+        "staleLeases": 101
+      },
+      "goodputRps": 81093.99195826272,
+      "latencyMs": {
+        "read": {
+          "min": 0.034499999999999996,
+          "max": 2011.1735419999998,
+          "p50": 2.278806392738838,
+          "p95": 21.594239012795246,
+          "p99": 58.9924802808189
+        },
+        "mutation": {
+          "min": 19.319333,
+          "max": 1197.514875,
+          "p50": 112.63826490248186,
+          "p95": 244.7671364059303,
+          "p99": 418.8970396594761
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 4880723,
+        "failed": 0,
+        "reads": 3415997,
+        "mutations": 1464726,
+        "durationMs": 60186,
+        "goodputRps": 81093.99195826272,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 533270,
+          "coverageMin": 0.9546226852908446,
+          "coverageMax": 0.9898672245914801,
+          "estimatedLoadCpuMs": 548056.5904008283,
+          "estimatedMeanCores": 9.106047758628723,
+          "estimatedCpuUsPerSuccessfulCall": 112.2900419468239
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 119768.43299999999,
+          "coverageMin": 0.9878562596570211,
+          "coverageMax": 0.9898672245914801,
+          "estimatedLoadCpuMs": 121119.0032846815,
+          "estimatedMeanCores": 2.012411578850256,
+          "estimatedCpuUsPerSuccessfulCall": 24.81579128434076
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 653038.4330000001,
+          "coverageMin": 0.9546226852908446,
+          "coverageMax": 0.9898672245914801,
+          "estimatedLoadCpuMs": 669175.5936855096,
+          "estimatedMeanCores": 11.118459337478976,
+          "estimatedCpuUsPerSuccessfulCall": 137.10583323116467
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "redb-middle",
+      "runId": "c6be1ec7-a4d3-4c49-b896-09debd13a4ef",
+      "loadStartedAt": "2026-09-25T00:16:47.963Z",
+      "loadEndedAt": "2026-09-25T00:17:48.165Z",
+      "durationMs": 60202,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 384,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/redb",
+        "json": "/tmp/flower-latency-20260924/redb-middle.json",
+        "html": "/tmp/flower-latency-20260924/redb-middle.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/redb",
+        "sha256": "f9272bd6ccd6b252f6b16cb7e0582878fbc2d8d8936fb5a0fce8c2871a32292e",
+        "bytes": 44817360,
+        "modifiedAt": "2026-09-25T00:12:44.063Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 4303902,
+        "failed": 0,
+        "reads": 3011270,
+        "mutations": 1292632,
+        "orders": 768,
+        "pizzas": 1914,
+        "revenue": 13398,
+        "tips": 2585245,
+        "replays": 129035,
+        "staleLeases": 105
+      },
+      "goodputRps": 71491.01358758846,
+      "latencyMs": {
+        "read": {
+          "min": 0.034582999999999996,
+          "max": 1773.9149169999998,
+          "p50": 1.4418637890874817,
+          "p95": 9.838964082417764,
+          "p99": 26.612566117305267
+        },
+        "mutation": {
+          "min": 14.142415999999999,
+          "max": 1265.6130839999998,
+          "p50": 106.11034075868419,
+          "p95": 221.58449552584668,
+          "p99": 343.30475249358636
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 4303902,
+        "failed": 0,
+        "reads": 3011270,
+        "mutations": 1292632,
+        "durationMs": 60202,
+        "goodputRps": 71491.01358758846,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 523320,
+          "coverageMin": 0.954410235957828,
+          "coverageMax": 0.9899286892592934,
+          "estimatedLoadCpuMs": 537492.498262145,
+          "estimatedMeanCores": 8.928150198700125,
+          "estimatedCpuUsPerSuccessfulCall": 124.88492959694364
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 111600.401,
+          "coverageMin": 0.9876536951585058,
+          "coverageMax": 0.9899286892592934,
+          "estimatedLoadCpuMs": 112869.68822853875,
+          "estimatedMeanCores": 1.8748494772356192,
+          "estimatedCpuUsPerSuccessfulCall": 26.22496707140143
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 634920.401,
+          "coverageMin": 0.954410235957828,
+          "coverageMax": 0.9899286892592934,
+          "estimatedLoadCpuMs": 650362.1864906837,
+          "estimatedMeanCores": 10.802999675935745,
+          "estimatedCpuUsPerSuccessfulCall": 151.10989666834507
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "redb-matched-2",
+      "runId": "c962a5ce-2e2f-48e3-a800-219cdcf88595",
+      "loadStartedAt": "2026-09-25T00:17:53.037Z",
+      "loadEndedAt": "2026-09-25T00:18:53.228Z",
+      "durationMs": 60191,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/redb",
+        "json": "/tmp/flower-latency-20260924/redb-matched-2.json",
+        "html": "/tmp/flower-latency-20260924/redb-matched-2.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/redb",
+        "sha256": "f9272bd6ccd6b252f6b16cb7e0582878fbc2d8d8936fb5a0fce8c2871a32292e",
+        "bytes": 44817360,
+        "modifiedAt": "2026-09-25T00:12:44.063Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3961103,
+        "failed": 0,
+        "reads": 2771645,
+        "mutations": 1189458,
+        "orders": 768,
+        "pizzas": 1919,
+        "revenue": 13433,
+        "tips": 2378596,
+        "replays": 119365,
+        "staleLeases": 102
+      },
+      "goodputRps": 65808.89169477164,
+      "latencyMs": {
+        "read": {
+          "min": 0.038375,
+          "max": 2006.8697499999998,
+          "p50": 1.048673453045175,
+          "p95": 9.176979439286072,
+          "p99": 25.829894484529536
+        },
+        "mutation": {
+          "min": 10.564125,
+          "max": 998.178416,
+          "p50": 77.94623130996925,
+          "p95": 140.20263473894474,
+          "p99": 185.2484748159026
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3961103,
+        "failed": 0,
+        "reads": 2771645,
+        "mutations": 1189458,
+        "durationMs": 60191,
+        "goodputRps": 65808.89169477165,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 566510,
+          "coverageMin": 0.9547106277781666,
+          "coverageMax": 0.9901071175810869,
+          "estimatedLoadCpuMs": 581394.1588504707,
+          "estimatedMeanCores": 9.659154339527017,
+          "estimatedCpuUsPerSuccessfulCall": 146.77582452424758
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 111238.02499999998,
+          "coverageMin": 0.9879308795632146,
+          "coverageMax": 0.9901071175810869,
+          "estimatedLoadCpuMs": 112453.54121626835,
+          "estimatedMeanCores": 1.8682783342404736,
+          "estimatedCpuUsPerSuccessfulCall": 28.389451427107133
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 677748.0249999999,
+          "coverageMin": 0.9547106277781666,
+          "coverageMax": 0.9901071175810869,
+          "estimatedLoadCpuMs": 693847.7000667389,
+          "estimatedMeanCores": 11.527432673767487,
+          "estimatedCpuUsPerSuccessfulCall": 175.16527595135466
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    },
+    {
+      "label": "final-latency",
+      "runId": "9408da4f-a038-47da-9ac3-c32fe0d5f66e",
+      "loadStartedAt": "2026-09-25T00:20:27.346Z",
+      "loadEndedAt": "2026-09-25T00:21:27.487Z",
+      "durationMs": 60141,
+      "options": {
+        "offeredRate": 0,
+        "groups": 8,
+        "tenants": 2,
+        "duration": 60,
+        "warmup": 1,
+        "drain": 60,
+        "concurrency": 256,
+        "workers": 4,
+        "shops": 4,
+        "hotShops": 1,
+        "hotProbability": 0.8,
+        "maxOrders": 96,
+        "bakeMs": 250,
+        "leaseMs": 2000,
+        "duplicateRate": 0.1,
+        "abandonRate": 0.1,
+        "pollMs": 150,
+        "requestTimeoutMs": 2000,
+        "retryBudgetMs": 15000,
+        "nodes": 3,
+        "seed": "42",
+        "initialization": "static",
+        "queryRouting": "replicas",
+        "readConsistency": "replica-local",
+        "driver": "rust",
+        "driverBinary": "/tmp/flower-latency-20260924/bin/driver",
+        "binary": "/tmp/flower-latency-20260924/bin/redb",
+        "json": "/tmp/flower-latency-20260924/final-latency.json",
+        "html": "/tmp/flower-latency-20260924/final-latency.html",
+        "baseline": null,
+        "cpuProfile": null,
+        "chaos": true,
+        "http2": true,
+        "keepData": false,
+        "help": false
+      },
+      "runtime": {
+        "engine": "quickjs",
+        "settings": {
+          "TOKIO_WORKER_THREADS": "2",
+          "FLOWER_WRITER_BATCH_MODE": "adaptive",
+          "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+          "FLOWER_QUERY_WORKERS": "16",
+          "FLOWER_PREPARATION_WORKERS": "16",
+          "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+          "FLOWER_WRITER_BATCH_MS": "50",
+          "FLOWER_OTEL_ENABLED": "0",
+          "OTEL_SDK_DISABLED": "true"
+        }
+      },
+      "binary": {
+        "path": "/tmp/flower-latency-20260924/bin/redb",
+        "sha256": "f9272bd6ccd6b252f6b16cb7e0582878fbc2d8d8936fb5a0fce8c2871a32292e",
+        "bytes": 44817360,
+        "modifiedAt": "2026-09-25T00:12:44.063Z"
+      },
+      "driver": {
+        "kind": "rust",
+        "orchestration": "node",
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/driver",
+          "sha256": "1cf843cbf4e064d13a1d3597d9295c509325fee5c74b6eb2242ac7e98ece553d",
+          "bytes": 7136160,
+          "modifiedAt": "2026-09-24T23:00:58.193Z"
+        },
+        "warmupRequests": 3
+      },
+      "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+      "environment": {
+        "node": "v26.10.0",
+        "os": "darwin 27.2.0",
+        "arch": "arm64",
+        "cpu": "Apple M5 Pro",
+        "logicalCpus": 18,
+        "colocatedNodes": 24,
+        "replicasPerGroup": 3,
+        "colocatedDrivers": 16,
+        "colocatedControllers": 8,
+        "colocatedNativeDrivers": 8
+      },
+      "passed": true,
+      "totals": {
+        "completed": 3377202,
+        "failed": 0,
+        "reads": 2362869,
+        "mutations": 1014333,
+        "orders": 768,
+        "pizzas": 1916,
+        "revenue": 13412,
+        "tips": 2028760,
+        "replays": 101757,
+        "staleLeases": 107
+      },
+      "goodputRps": 56154.7363695316,
+      "latencyMs": {
+        "read": {
+          "min": 0.035334,
+          "max": 1602.5255,
+          "p50": 0.9588439007423881,
+          "p95": 4.758708353264658,
+          "p99": 12.871420164093994
+        },
+        "mutation": {
+          "min": 21.9355,
+          "max": 1112.427334,
+          "p50": 96.06030724686394,
+          "p95": 172.78459706775243,
+          "p99": 228.29872732477534
+        }
+      },
+      "cpu": {
+        "passed": true,
+        "completed": 3377202,
+        "failed": 0,
+        "reads": 2362869,
+        "mutations": 1014333,
+        "durationMs": 60141,
+        "goodputRps": 56154.7363695316,
+        "servers": {
+          "available": true,
+          "expectedProcesses": 24,
+          "measuredProcesses": 24,
+          "observedCpuMs": 491760,
+          "coverageMin": 0.955229652016403,
+          "coverageMax": 0.9905544606599683,
+          "estimatedLoadCpuMs": 504634.6611265138,
+          "estimatedMeanCores": 8.390859166400855,
+          "estimatedCpuUsPerSuccessfulCall": 149.42389028743727
+        },
+        "drivers": {
+          "available": true,
+          "expectedProcesses": 16,
+          "measuredProcesses": 16,
+          "observedCpuMs": 95391.87400000001,
+          "coverageMin": 0.9884947067958841,
+          "coverageMax": 0.9905544606599683,
+          "estimatedLoadCpuMs": 96380.32305150929,
+          "estimatedMeanCores": 1.6025726717465505,
+          "estimatedCpuUsPerSuccessfulCall": 28.53851296176814
+        },
+        "all": {
+          "available": true,
+          "expectedProcesses": 40,
+          "measuredProcesses": 40,
+          "observedCpuMs": 587151.874,
+          "coverageMin": 0.955229652016403,
+          "coverageMax": 0.9905544606599683,
+          "estimatedLoadCpuMs": 601014.9841780231,
+          "estimatedMeanCores": 9.993431838147405,
+          "estimatedCpuUsPerSuccessfulCall": 177.96240324920544
+        },
+        "note": "CPU counters include replication, retries, delivery workers and background server work. The denominator counts successful primary customer calls only. Estimated load CPU extrapolates each process's sampled CPU/wall ratio across its group's full load duration; it assumes omitted intervals have similar CPU demand. Edge and restart gaps can bias this estimate. It is not exact per-request CPU attribution. Driver CPU excludes the top-level parent, profiler and OTEL collector."
+      }
+    }
+  ],
+  "diagnostics": [
+    {
+      "label": "after-otel-complete",
+      "passed": true,
+      "benchmark": {
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/after",
+          "sha256": "7c153b05d27b9388104f98e7b24f97161c0a562747be80f24600596c766e2aa1",
+          "bytes": 44661376,
+          "modifiedAt": "2026-09-24T23:27:06.454Z"
+        },
+        "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+        "environment": {
+          "node": "v26.10.0",
+          "os": "darwin 27.2.0",
+          "arch": "arm64",
+          "cpu": "Apple M5 Pro",
+          "logicalCpus": 18,
+          "colocatedNodes": 24,
+          "replicasPerGroup": 3,
+          "colocatedDrivers": 16,
+          "colocatedControllers": 8,
+          "colocatedNativeDrivers": 8
+        },
+        "runtime": {
+          "engine": "quickjs",
+          "settings": {
+            "TOKIO_WORKER_THREADS": "2",
+            "FLOWER_WRITER_BATCH_MODE": "adaptive",
+            "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+            "FLOWER_QUERY_WORKERS": "16",
+            "FLOWER_PREPARATION_WORKERS": "16",
+            "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+            "FLOWER_WRITER_BATCH_MS": "50",
+            "FLOWER_OTEL_ENABLED": "1",
+            "OTEL_SDK_DISABLED": "false",
+            "OTEL_TRACES_SAMPLER": "parentbased_traceidratio",
+            "OTEL_TRACES_SAMPLER_ARG": "0.01",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+            "OTEL_METRIC_EXPORT_INTERVAL": "1000",
+            "OTEL_BSP_SCHEDULE_DELAY": "1000"
+          }
+        },
+        "goodputRps": 61745.25005823046,
+        "loadStartedAt": "2026-09-24T23:38:35.278Z",
+        "loadEndedAt": "2026-09-24T23:39:35.384Z"
+      },
+      "window": {
+        "start": 1790293115278,
+        "end": 1790293175384,
+        "durationMs": 60106
+      },
+      "capture": {
+        "startedAt": "2026-09-24T23:38:31.202Z",
+        "requests": 2974,
+        "receivedBytes": 1313195643,
+        "acceptedSpans": 269654,
+        "acceptedMetricPoints": 238812,
+        "retainedBytes": 384178382,
+        "droppedSpans": 0,
+        "droppedMetricPoints": 0,
+        "malformedRequests": 0,
+        "oversizedRequests": 0,
+        "rejectedRequests": 0,
+        "abortedRequests": 0,
+        "invalidRecords": 0,
+        "foreignRecords": 0,
+        "unsupportedMetrics": 0,
+        "omittedSpanEvents": 12194,
+        "locallyDroppedLinks": 0,
+        "sdkDroppedAttributes": 0,
+        "sdkDroppedLinks": 1062,
+        "sdkDroppedEvents": 0,
+        "limits": {
+          "maxRecords": 1000000,
+          "maxBytes": 536870912,
+          "maxRequestBytes": 4194304,
+          "maxConcurrentRequests": 8
+        },
+        "exporterLoss": "Unavailable: SDK queue overflow, transport failures before receipt, and process crashes cannot be counted by this receiver"
+      },
+      "stages": {
+        "append.state_lock": {
+          "count": 36524,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "append.publish": {
+          "count": 36524,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "append.blocking_queue": {
+          "count": 36524,
+          "sumSeconds": 2.317730601,
+          "meanMs": 0.06345774288139307
+        },
+        "append.commit": {
+          "count": 36524,
+          "sumSeconds": 512.997477991,
+          "meanMs": 14.045490033703866
+        },
+        "append.write": {
+          "count": 36524,
+          "sumSeconds": 3.4484766310000006,
+          "meanMs": 0.09441672957507394
+        },
+        "append.io_queue": {
+          "count": 36524,
+          "sumSeconds": 13.106086209000013,
+          "meanMs": 0.3588349087996937
+        },
+        "append.prepare": {
+          "count": 36524,
+          "sumSeconds": 0.06368210100000003,
+          "meanMs": 0.0017435686397984896
+        },
+        "append.encode": {
+          "count": 36524,
+          "sumSeconds": 1.457875414,
+          "meanMs": 0.03991554632570365
+        },
+        "append.begin": {
+          "count": 36524,
+          "sumSeconds": 0.13136704700000004,
+          "meanMs": 0.0035967322034826427
+        },
+        "build_snapshot.prepare": {
+          "count": 109,
+          "sumSeconds": 48.790931089,
+          "meanMs": 447.623221
+        },
+        "build_snapshot.commit": {
+          "count": 109,
+          "sumSeconds": 28.646972084,
+          "meanMs": 262.81625765137613
+        },
+        "build_snapshot.begin": {
+          "count": 109,
+          "sumSeconds": 0.002949297,
+          "meanMs": 0.027057770642201835
+        },
+        "build_snapshot.write": {
+          "count": 109,
+          "sumSeconds": 1.8933954110000002,
+          "meanMs": 17.370600100917432
+        },
+        "build_snapshot.publish": {
+          "count": 109,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "build_snapshot.state_lock": {
+          "count": 109,
+          "sumSeconds": 0.0007454110000000002,
+          "meanMs": 0.006838633027522937
+        },
+        "build_snapshot.encode": {
+          "count": 109,
+          "sumSeconds": 48.790598171999996,
+          "meanMs": 447.6201667155963
+        },
+        "build_snapshot.blocking_queue": {
+          "count": 109,
+          "sumSeconds": 0.016923294000000005,
+          "meanMs": 0.15525957798165144
+        },
+        "build_snapshot.io_queue": {
+          "count": 109,
+          "sumSeconds": 0.493363286,
+          "meanMs": 4.526268678899083
+        }
+      },
+      "counters": {},
+      "note": "Instrumented diagnostic, not a capacity result. Trace sampling and bounded retention can bias distributions. Spans must fit entirely inside load; they include server and worker traffic, not only primary customer calls. Nested and concurrent spans overlap and must not be summed as elapsed time or CPU use. Metrics are unsampled but bounded by export/capture limits. Cumulative metrics are differenced between consecutive exports entirely inside load and within one process/instrument epoch; edge intervals and resets are excluded. Histogram percentiles are bucket upper bounds, not exact quantiles. Crashes can lose unexported spans and metrics, which the local collector cannot count."
+    },
+    {
+      "label": "compressed-otel",
+      "passed": true,
+      "benchmark": {
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/compressed",
+          "sha256": "d823cf696a78b226a6d82cfdcd03c90a0998fdb3c905e7aff6e4b51a11cca457",
+          "bytes": 44848576,
+          "modifiedAt": "2026-09-24T23:46:17.772Z"
+        },
+        "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+        "environment": {
+          "node": "v26.10.0",
+          "os": "darwin 27.2.0",
+          "arch": "arm64",
+          "cpu": "Apple M5 Pro",
+          "logicalCpus": 18,
+          "colocatedNodes": 24,
+          "replicasPerGroup": 3,
+          "colocatedDrivers": 16,
+          "colocatedControllers": 8,
+          "colocatedNativeDrivers": 8
+        },
+        "runtime": {
+          "engine": "quickjs",
+          "settings": {
+            "TOKIO_WORKER_THREADS": "2",
+            "FLOWER_WRITER_BATCH_MODE": "adaptive",
+            "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+            "FLOWER_QUERY_WORKERS": "16",
+            "FLOWER_PREPARATION_WORKERS": "16",
+            "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+            "FLOWER_WRITER_BATCH_MS": "50",
+            "FLOWER_OTEL_ENABLED": "1",
+            "OTEL_SDK_DISABLED": "false",
+            "OTEL_TRACES_SAMPLER": "parentbased_traceidratio",
+            "OTEL_TRACES_SAMPLER_ARG": "0.01",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+            "OTEL_METRIC_EXPORT_INTERVAL": "1000",
+            "OTEL_BSP_SCHEDULE_DELAY": "1000"
+          }
+        },
+        "goodputRps": 61689.101287667596,
+        "loadStartedAt": "2026-09-24T23:53:05.916Z",
+        "loadEndedAt": "2026-09-24T23:54:06.180Z"
+      },
+      "window": {
+        "start": 1790293985916,
+        "end": 1790294046180,
+        "durationMs": 60264
+      },
+      "capture": {
+        "startedAt": "2026-09-24T23:53:01.905Z",
+        "requests": 3007,
+        "receivedBytes": 1328438135,
+        "acceptedSpans": 270590,
+        "acceptedMetricPoints": 245820,
+        "retainedBytes": 389632536,
+        "droppedSpans": 0,
+        "droppedMetricPoints": 0,
+        "malformedRequests": 0,
+        "oversizedRequests": 0,
+        "rejectedRequests": 0,
+        "abortedRequests": 0,
+        "invalidRecords": 0,
+        "foreignRecords": 0,
+        "unsupportedMetrics": 0,
+        "omittedSpanEvents": 12144,
+        "locallyDroppedLinks": 0,
+        "sdkDroppedAttributes": 0,
+        "sdkDroppedLinks": 1229,
+        "sdkDroppedEvents": 0,
+        "limits": {
+          "maxRecords": 1000000,
+          "maxBytes": 536870912,
+          "maxRequestBytes": 4194304,
+          "maxConcurrentRequests": 8
+        },
+        "exporterLoss": "Unavailable: SDK queue overflow, transport failures before receipt, and process crashes cannot be counted by this receiver"
+      },
+      "stages": {
+        "append.commit": {
+          "count": 36742,
+          "sumSeconds": 545.6357773210002,
+          "meanMs": 14.850464790185624
+        },
+        "append.encode": {
+          "count": 36742,
+          "sumSeconds": 1.528903651,
+          "meanMs": 0.04161187880354907
+        },
+        "append.write": {
+          "count": 36742,
+          "sumSeconds": 3.4375774490000013,
+          "meanMs": 0.09355988920037019
+        },
+        "append.prepare": {
+          "count": 36742,
+          "sumSeconds": 0.0739526880000001,
+          "meanMs": 0.002012756191824073
+        },
+        "append.io_queue": {
+          "count": 36742,
+          "sumSeconds": 8.129425331999995,
+          "meanMs": 0.22125701736432407
+        },
+        "append.publish": {
+          "count": 36742,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "append.state_lock": {
+          "count": 36742,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "append.blocking_queue": {
+          "count": 36742,
+          "sumSeconds": 2.748748458,
+          "meanMs": 0.07481216204888139
+        },
+        "append.begin": {
+          "count": 36742,
+          "sumSeconds": 0.132391169,
+          "meanMs": 0.0036032651733710736
+        },
+        "build_snapshot.encode": {
+          "count": 99,
+          "sumSeconds": 36.182056166,
+          "meanMs": 365.47531480808084
+        },
+        "build_snapshot.blocking_queue": {
+          "count": 99,
+          "sumSeconds": 0.011635122000000001,
+          "meanMs": 0.11752648484848485
+        },
+        "build_snapshot.compress": {
+          "count": 99,
+          "sumSeconds": 1.274655817,
+          "meanMs": 12.875311282828283
+        },
+        "build_snapshot.prepare": {
+          "count": 99,
+          "sumSeconds": 36.182739667999996,
+          "meanMs": 365.4822188686868
+        },
+        "build_snapshot.io_queue": {
+          "count": 99,
+          "sumSeconds": 0.40531770699999997,
+          "meanMs": 4.094118252525252
+        },
+        "build_snapshot.publish": {
+          "count": 99,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "build_snapshot.state_lock": {
+          "count": 99,
+          "sumSeconds": 0.0006235020000000117,
+          "meanMs": 0.006298000000000118
+        },
+        "build_snapshot.commit": {
+          "count": 99,
+          "sumSeconds": 14.547527375999996,
+          "meanMs": 146.94472096969693
+        },
+        "build_snapshot.write": {
+          "count": 99,
+          "sumSeconds": 2.4264857929999994,
+          "meanMs": 24.509957505050497
+        },
+        "build_snapshot.begin": {
+          "count": 99,
+          "sumSeconds": 0.0022901669999999996,
+          "meanMs": 0.023132999999999997
+        }
+      },
+      "counters": {
+        "build_snapshot.input": 1493294230,
+        "build_snapshot.stored": 738333124
+      },
+      "note": "Instrumented diagnostic, not a capacity result. Trace sampling and bounded retention can bias distributions. Spans must fit entirely inside load; they include server and worker traffic, not only primary customer calls. Nested and concurrent spans overlap and must not be summed as elapsed time or CPU use. Metrics are unsampled but bounded by export/capture limits. Cumulative metrics are differenced between consecutive exports entirely inside load and within one process/instrument epoch; edge intervals and resets are excluded. Histogram percentiles are bucket upper bounds, not exact quantiles. Crashes can lose unexported spans and metrics, which the local collector cannot count."
+    },
+    {
+      "label": "redb-otel",
+      "passed": true,
+      "benchmark": {
+        "binary": {
+          "path": "/tmp/flower-latency-20260924/bin/redb",
+          "sha256": "f9272bd6ccd6b252f6b16cb7e0582878fbc2d8d8936fb5a0fce8c2871a32292e",
+          "bytes": 44817360,
+          "modifiedAt": "2026-09-25T00:12:44.063Z"
+        },
+        "bundleHash": "264f2718f2336ea92b850ec939282695609e4ac929a73006455bf212872473b0",
+        "environment": {
+          "node": "v26.10.0",
+          "os": "darwin 27.2.0",
+          "arch": "arm64",
+          "cpu": "Apple M5 Pro",
+          "logicalCpus": 18,
+          "colocatedNodes": 24,
+          "replicasPerGroup": 3,
+          "colocatedDrivers": 16,
+          "colocatedControllers": 8,
+          "colocatedNativeDrivers": 8
+        },
+        "runtime": {
+          "engine": "quickjs",
+          "settings": {
+            "TOKIO_WORKER_THREADS": "2",
+            "FLOWER_WRITER_BATCH_MODE": "adaptive",
+            "FLOWER_WRITER_QUEUE_CAPACITY": "1024",
+            "FLOWER_QUERY_WORKERS": "16",
+            "FLOWER_PREPARATION_WORKERS": "16",
+            "FLOWER_WRITER_PREPARATION_WORKERS": "1",
+            "FLOWER_WRITER_BATCH_MS": "50",
+            "FLOWER_OTEL_ENABLED": "1",
+            "OTEL_SDK_DISABLED": "false",
+            "OTEL_TRACES_SAMPLER": "parentbased_traceidratio",
+            "OTEL_TRACES_SAMPLER_ARG": "0.01",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+            "OTEL_METRIC_EXPORT_INTERVAL": "1000",
+            "OTEL_BSP_SCHEDULE_DELAY": "1000"
+          }
+        },
+        "goodputRps": 52702.213647778866,
+        "loadStartedAt": "2026-09-25T00:18:58.830Z",
+        "loadEndedAt": "2026-09-25T00:19:58.957Z"
+      },
+      "window": {
+        "start": 1790295538830,
+        "end": 1790295598957,
+        "durationMs": 60127
+      },
+      "capture": {
+        "startedAt": "2026-09-25T00:18:54.909Z",
+        "requests": 2948,
+        "receivedBytes": 1232637856,
+        "acceptedSpans": 234007,
+        "acceptedMetricPoints": 249470,
+        "retainedBytes": 364795708,
+        "droppedSpans": 0,
+        "droppedMetricPoints": 0,
+        "malformedRequests": 0,
+        "oversizedRequests": 0,
+        "rejectedRequests": 0,
+        "abortedRequests": 0,
+        "invalidRecords": 0,
+        "foreignRecords": 0,
+        "unsupportedMetrics": 0,
+        "omittedSpanEvents": 10381,
+        "locallyDroppedLinks": 0,
+        "sdkDroppedAttributes": 0,
+        "sdkDroppedLinks": 1115,
+        "sdkDroppedEvents": 0,
+        "limits": {
+          "maxRecords": 1000000,
+          "maxBytes": 536870912,
+          "maxRequestBytes": 4194304,
+          "maxConcurrentRequests": 8
+        },
+        "exporterLoss": "Unavailable: SDK queue overflow, transport failures before receipt, and process crashes cannot be counted by this receiver"
+      },
+      "stages": {
+        "append.encode": {
+          "count": 34355,
+          "sumSeconds": 1.2525368949999998,
+          "meanMs": 0.03645864925047299
+        },
+        "append.prepare": {
+          "count": 34355,
+          "sumSeconds": 0.060105367000000014,
+          "meanMs": 0.0017495376801047887
+        },
+        "append.io_queue": {
+          "count": 34355,
+          "sumSeconds": 0.9411382739999998,
+          "meanMs": 0.027394506592926787
+        },
+        "append.begin": {
+          "count": 34355,
+          "sumSeconds": 0.11925119500000002,
+          "meanMs": 0.0034711452481443754
+        },
+        "append.publish": {
+          "count": 34355,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "append.commit": {
+          "count": 34355,
+          "sumSeconds": 546.1216212700002,
+          "meanMs": 15.896423265026932
+        },
+        "append.state_lock": {
+          "count": 34355,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "append.write": {
+          "count": 34355,
+          "sumSeconds": 3.3346427620000005,
+          "meanMs": 0.09706426319313056
+        },
+        "append.blocking_queue": {
+          "count": 34355,
+          "sumSeconds": 2.023666232,
+          "meanMs": 0.05890456213069422
+        },
+        "build_snapshot.prepare": {
+          "count": 80,
+          "sumSeconds": 0,
+          "meanMs": 0
+        },
+        "build_snapshot.begin": {
+          "count": 80,
+          "sumSeconds": 0.00117409,
+          "meanMs": 0.014676125000000002
+        },
+        "build_snapshot.commit": {
+          "count": 80,
+          "sumSeconds": 2.057997625,
+          "meanMs": 25.724970312499998
+        },
+        "build_snapshot.io_queue": {
+          "count": 80,
+          "sumSeconds": 0.00001520699999999999,
+          "meanMs": 0.00019008749999999987
+        },
+        "build_snapshot.blocking_queue": {
+          "count": 80,
+          "sumSeconds": 0.0033738320000000002,
+          "meanMs": 0.0421729
+        },
+        "build_snapshot.state_lock": {
+          "count": 80,
+          "sumSeconds": 0.0006997059999999999,
+          "meanMs": 0.008746325
+        },
+        "build_snapshot.write": {
+          "count": 80,
+          "sumSeconds": 0.0012275399999999996,
+          "meanMs": 0.015344249999999995
+        },
+        "build_snapshot.encode": {
+          "count": 80,
+          "sumSeconds": 0.00021466700000000006,
+          "meanMs": 0.0026833375000000007
+        },
+        "build_snapshot.publish": {
+          "count": 80,
+          "sumSeconds": 0,
+          "meanMs": 0
+        }
+      },
+      "counters": {},
+      "note": "Instrumented diagnostic, not a capacity result. Trace sampling and bounded retention can bias distributions. Spans must fit entirely inside load; they include server and worker traffic, not only primary customer calls. Nested and concurrent spans overlap and must not be summed as elapsed time or CPU use. Metrics are unsampled but bounded by export/capture limits. Cumulative metrics are differenced between consecutive exports entirely inside load and within one process/instrument epoch; edge intervals and resets are excluded. Histogram percentiles are bucket upper bounds, not exact quantiles. Crashes can lose unexported spans and metrics, which the local collector cannot count."
+    }
+  ]
+}

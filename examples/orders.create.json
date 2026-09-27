@@ -1,0 +1,8 @@
+{
+  "orderId": "order-42",
+  "shippingCents": 500,
+  "lines": [
+    { "id": "line-1", "quantity": 2, "unitCents": 1250 },
+    { "id": "line-2", "quantity": 1, "unitCents": 700 }
+  ]
+}

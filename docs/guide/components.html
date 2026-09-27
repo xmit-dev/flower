@@ -1,0 +1,85 @@
+<p>Most of Flower's helpers are components: the scheduler, work queues, expiring collections and external values. You can write your own the same way, and <code>define</code> puts every part where it belongs.</p>
+<section id="component">
+<h2>Package parts together</h2>
+<p>This component keeps shopping carts. A task deletes carts a day after they open, and a trigger deletes a cart's lines whenever the cart goes, whoever deleted it.</p>
+<div class="code-block"><div class="code-head"><span>carts.ts</span><button type="button" class="copy-button" aria-label="Copy carts.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, component, define, mutation, query, task, trigger, v } from "@flower-js/sdk";
+
+const DAY = 86_400_000;
+const carts = collection("carts", v.object({ openedAt: v.int() })).index("byOpened", ["openedAt"]);
+const lines = collection("cartLines", v.object({ quantity: v.int({ min: 1 }) }))
+  .key(v.tuple([v.string(), v.string()])); // [cart, sku]
+
+const expire = task("carts.expire", {
+  due: (ctx) =&gt; {
+    const oldest = ctx.range(carts.by("byOpened").range({ limit: 1 })).rows[0];
+    return oldest ? oldest.value.openedAt + DAY : null;
+  },
+  run: (ctx) =&gt; {
+    const stale = ctx.range(carts.by("byOpened").range({ lte: ctx.now() - DAY, limit: 64 })).rows;
+    for (const cart of stale) ctx.delete(carts, cart.key);
+    return { expired: stale.length };
+  },
+});
+
+const cascade = trigger("carts.cascade", carts, (ctx, { key, after }) =&gt; {
+  if (after === null) for (const line of ctx.scan(lines, { prefix: [key] })) ctx.delete(lines, line.key);
+});
+
+export const shoppingCarts = component({ collections: [carts, lines], tasks: [expire], triggers: [cascade] });
+
+const add = mutation("cart.add", {
+  args: v.object({ cart: v.string({ min: 1 }), sku: v.string({ min: 1 }), quantity: v.int({ min: 1 }) }),
+}, (ctx, { cart, sku, quantity }) =&gt; {
+  if (!ctx.get(carts, cart)) ctx.set(carts, cart, { openedAt: ctx.now() });
+  ctx.set(lines, [cart, sku], { quantity });
+  return null;
+});
+const view = query("cart.view", { args: v.string({ min: 1 }) }, (ctx, cart) =&gt;
+  ctx.scan(lines, { prefix: [cart] }).map(({ key, value }) =&gt; ({ sku: key[1], ...value })));
+
+const app = define({ uses: [shoppingCarts], http: { "cart.add": add, "cart.view": view } });
+export default app;</code></pre></div>
+<ul>
+<li><code>component({ uses, collections, definitions, tasks, triggers, keys })</code> takes the same parts as <code>define</code>, except <code>http</code> and <code>auth</code>.</li>
+<li><code>define({ uses })</code> gathers every component it reaches, including nested <code>uses</code>. A component reached twice is included once.</li>
+<li>Components never add public methods. Choose what to expose in <code>http</code>, where helpers such as <code>jobs.http("jobs")</code> can be spread.</li>
+<li>Names are global: two different definitions or two tasks with the same name are rejected, and so are two triggers with one name on the same collection, or one collection declared with different indexes. Names starting with <code>$flower.</code> are reserved.</li>
+</ul>
+</section>
+<section id="tasks">
+<h2>Run work in the background</h2>
+<p>A task says when it next has work, and does one bounded piece of it:</p>
+<ul>
+<li><code>due(ctx)</code> returns the earliest time the task has work, or <code>null</code>. It reads the database like a query, so it can depend only on data and time.</li>
+<li><code>run(ctx)</code> does one unit of work as a mutation and returns JSON. The task stays eligible while <code>due</code> is in the past, so handle a page, such as 64 rows, and return.</li>
+<li><code>onError(ctx, { error, failedAt })</code> is optional. It runs in place of a failed run, against the same snapshot, and its writes commit instead.</li>
+</ul>
+<p><code>define</code> combines every task (yours, your components', and those behind <code>materialize</code>) into one maintenance handler. You never write that handler yourself.</p>
+<ul>
+<li>Each maintenance run picks the task whose due time is earliest and runs it in its own commit.</li>
+<li>The leader runs maintenance when a task is due, and keeps going while work is due, for up to 50 ms at a time. It starts at most one run every 250 ms. Both are <a href="../operate/capacity.html#budgets">operator settings</a>.</li>
+<li>If a run fails and the task has no <code>onError</code>, that task alone backs off: 1 s, doubling up to 60 s. Other tasks keep running, and the next success clears the backoff.</li>
+<li><code>error.code</code> is the real failure: your <code>fail()</code> code, <code>COMPUTE_ERROR</code> for a plain throw, or <code>EVALUATION_BUDGET</code>.</li>
+<li>A run can be evaluated more than once before it commits. Send external side effects through a <a href="leases.html">queue</a>.</li>
+</ul>
+</section>
+<section id="triggers">
+<h2>React to changed rows</h2>
+<p>A trigger runs inside every mutation that changed a row of its collection, once per changed key, just before the commit. It gets <code>{ key, before, after }</code>; <code>before</code> is <code>null</code> for a new row and <code>after</code> is <code>null</code> for a deleted one.</p>
+<ul>
+<li>It fires for every writer: methods, tasks, scheduled handlers and transaction participants. Its writes commit with the change.</li>
+<li>A row changed and then changed back within one mutation doesn't fire.</li>
+<li>Triggers may write other rows and fire other triggers. After 32 rounds the mutation fails with <code>TRIGGER_LOOP</code>.</li>
+<li>A trigger's collection is declared for you.</li>
+</ul>
+</section>
+<section id="built-in">
+<h2>Built-in components</h2>
+<div class="table-wrap"><table><caption class="sr-only">Components included in the SDK</caption><thead><tr><th>Helper</th><th>What it adds to <code>define({ uses })</code></th></tr></thead><tbody>
+<tr><td><a href="timers.html"><code>scheduler(name, handlers)</code></a></td><td>A timer collection and a task that runs due handlers, with retries.</td></tr>
+<tr><td><a href="leases.html"><code>queue(name, options)</code></a></td><td>A job collection, fencing counters and a task that reclaims expired leases.</td></tr>
+<tr><td><a href="leases.html#expiry-is-a-read-rule"><code>expiringCollection(name)</code></a></td><td>A collection and a task that deletes expired records.</td></tr>
+<tr><td><a href="workers.html#reconcile"><code>external(name, options)</code></a></td><td>Result collections, derived values and, with <code>each</code>, a trigger that tracks stale rows.</td></tr>
+</tbody></table></div>
+<p>Pass them straight to <code>uses</code>: <code>define({ uses: [timers, jobs, digest] })</code>. Materialization policies are added by <code>define</code> itself.</p>
+</section>

@@ -1,0 +1,114 @@
+<section id="choose">
+<h2>Pick a pattern</h2>
+<p class="section-intro">A worker is your own process that does slow or external work. A live query tells it what to do; a mutation decides whether to accept the result. Nothing new runs inside the database.</p>
+<div class="table-wrap"><table><caption class="sr-only">Two external worker contracts</caption><thead><tr><th>Keep a result current</th><th>Complete every action</th></tr></thead><tbody><tr><td>Previews, embeddings, search documents, enrichment.</td><td>Receipts, deliveries, webhooks, exports.</td></tr><tr><td><code>external()</code> derives the input; workers publish results tagged with it.</td><td><code>queue()</code> takes a job in the mutation that creates the obligation.</td></tr><tr><td>New inputs replace old work. In-between versions may be skipped.</td><td>Every job stays pending, leased, completed or failed until you resolve it.</td></tr><tr><td>A result is kept only if its input is still current.</td><td>A result is kept only from the current, unexpired lease.</td></tr><tr><td><code>reconcile()</code> runs the worker loop.</td><td><code>runQueueWorker()</code> runs the worker loop.</td></tr></tbody></table></div>
+<p>Both loops come from <code>@flower-js/sdk/worker</code> and run in Node or a browser. Results land in ordinary collections. To run and scale queue workers, see <a href="worker-pools.html">Worker pools</a>.</p>
+</section>
+<section id="reconcile">
+<h2>Keep a result current</h2>
+<p class="section-intro">An external value stores each result with the exact input that produced it. When the input changes, the old result stops counting immediately.</p>
+<p>This app keeps a SHA-256 digest of every document. <a href="../reactive-worker.ts" download>Download reactive-worker.ts</a>.</p>
+<div class="code-block"><div class="code-head"><span>docs/reactive-worker.ts</span><button class="copy-button" type="button" aria-label="Copy docs/reactive-worker.ts">Copy</button></div><pre tabindex="0"><code class="language-ts" data-src="../reactive-worker.ts"></code></pre></div>
+<ul>
+<li><code>input(ctx, args)</code> returns everything that affects the result: source values, recipe, model and prompt versions, locale, configuration. <code>null</code> means there is nothing to compute. Don't use a global database revision.</li>
+<li><code>ctx.get(digest, id)</code> is <code>{ status: "pending" }</code>, <code>{ status: "ready", value }</code>, or <code>null</code> when there is no input. Read it like any derived value; it stays current.</li>
+<li><code>digest.http("digest")</code> exposes <code>digest.pending</code> (the work for one key, or <code>null</code>) and <code>digest.publish</code>. With <code>each</code>, it adds methods for worker pools: <code>digest.next</code> lists stale keys oldest first, and <code>digest.claim</code>, <code>renew</code> and <code>release</code> lease them.</li>
+<li><code>publish</code> stores a result only if its key still names the current input, and returns <code>{ accepted }</code>. Among racing workers, the first result wins. A <code>result</code> schema checks every value.</li>
+<li>The input must not depend on its own result. If it goes A → B → A, the stored A result counts again.</li>
+</ul>
+<h3>Run the worker</h3>
+<div class="code-block"><div class="code-head"><span>docs/reactive-worker-client.ts</span><button class="copy-button" type="button" aria-label="Copy docs/reactive-worker-client.ts">Copy</button></div><pre tabindex="0"><code class="language-ts" data-src="../reactive-worker-client.ts"></code></pre></div>
+<ul>
+<li>With <code>args</code>, <code>reconcile</code> keeps one key current by watching <code>digest.pending</code>. Without, it drains every stale key. This client passes <code>lease: true</code>, so copies of it lease keys and share the work; see <a href="#shard">Shard the work</a>. <code>concurrency</code> runs several computations at once.</li>
+<li><code>compute</code> may run more than once for the same input. Failures back off per key, and publications retry with one request ID.</li>
+<li><strong>Pools notice a key only when its row in the <code>each</code> collection is written.</strong> If the input also reads other records, a change there makes the value pending, and <code>digest.pending</code> reports it, but <code>next</code> and <code>claim</code> won't find it until that row changes. Keep pool inputs to the row itself, or run a per-key worker.</li>
+</ul>
+</section>
+<section id="try-reconciler">
+<h2>Try it: keep a digest current</h2>
+<p class="section-intro">Run the document reconciler against a fresh local app. It needs Node.js and no API keys.</p>
+<p><a href="./">Start a local node</a>, then run from the checkout:</p>
+<div class="code-block"><div class="code-head"><span>Terminal 1 · deploy and write a document</span><button class="copy-button" type="button" aria-label="Copy Terminal 1 · deploy and write a document">Copy</button></div><pre tabindex="0"><code class="language-sh">npm run build
+node sdk/cli.ts deploy docs/reactive-worker.ts
+node sdk/cli.ts call document.put '{"id":"notes","text":"Hello, garden."}' --request-id notes-v1
+node sdk/cli.ts watch document.get '"notes"'</code></pre></div><div class="code-block"><div class="code-head"><span>Terminal 2 · start a worker</span><button class="copy-button" type="button" aria-label="Copy Terminal 2 · start a worker">Copy</button></div><pre tabindex="0"><code class="language-sh">node docs/reactive-worker-client.ts
+# FLOWER_URL defaults to http://127.0.0.1:7101. Pass a document ID to follow just one.
+# Start the same command in another terminal: the two lease documents between them.</code></pre></div><div class="code-block"><div class="code-head"><span>Terminal 3 · change the input</span><button class="copy-button" type="button" aria-label="Copy Terminal 3 · change the input">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts call document.put '{"id":"notes","text":"The garden has changed."}' --request-id notes-v2</code></pre></div>
+<p>The view shows a digest only for the current text. Stop all workers, edit, and restart one: it catches up on its own. Download the <a href="../reactive-worker.ts" download>application</a> and <a href="../reactive-worker-client.ts" download>client</a>.</p>
+<p>To run a pool of queue workers instead, see <a href="worker-pools.html#try">Worker pools</a>.</p>
+</section>
+<section id="queue">
+<h2>Complete every action</h2>
+<p class="section-intro">When every action matters, create a job in the same mutation as the business change. Workers lease jobs, do the work, and record the outcome.</p>
+<p>For example, the mutation that marks an invoice paid also calls <code>receipts.enqueue(ctx, id, payload)</code>, so a paid invoice always has its receipt job. Put everything the worker needs in the payload. <a href="leases.html">Queues &amp; expiry</a> has the full example.</p>
+<ol class="steps"><li><strong>Wait and claim.</strong> <code>runQueueWorker</code> holds one watch on the queue's <code>ready</code> query for the whole process, and claims only while it has room.</li><li><strong>Do the work.</strong> Your <code>work(job, signal)</code> runs while the lease is renewed, with every lease the process holds in one call; the signal aborts shortly before the lease would end.</li><li><strong>Report through Flower.</strong> The worker completes or fails the job with the lease exactly as claimed, retrying lost replies under one request ID.</li><li><strong>Drain, then wait again.</strong> The worker claims until a claim comes back short, then goes back to watching. How many jobs it runs at once follows the backlog and the process's load.</li></ol>
+<ul>
+<li><strong>Idempotency:</strong> use the business operation's ID across retries and leases; the job ID is a good one. A lease token identifies one attempt, not the operation. Lease expiry can't stop a paused process, so the receiving service must deduplicate or fence. If it fences, keep enforcing after a <a href="../reference/access.html#retention">disaster restore</a>.</li>
+<li><strong>Retries:</strong> the queue's <code>retry</code> policy requeues failed jobs with backoff. Look up an unknown outcome by business ID before calling it failed.</li>
+<li><strong>The same mutation can update business records</strong> when you complete jobs yourself with <code>jobs.complete(ctx, lease, result)</code>.</li>
+</ul>
+</section>
+<section id="shard">
+<h2>Shard the work</h2>
+<p class="section-intro">Queue workers share work on their own: each claim leases a job to one process. Reconcile pools need to be told how. Every pool lists the same stale keys, so two pools that read <code>next</code> compute every key twice. Lease the keys, or split them by hash.</p>
+<div class="table-wrap"><table><caption class="sr-only">Ways to split work between worker processes</caption><thead><tr><th>Split</th><th>Extra writes</th><th>When a process stops</th><th>To add or remove processes</th></tr></thead><tbody><tr><td>Lease keys: <code>reconcile</code> with <code>lease: true</code></td><td>A claim per batch, and one renewal per process every quarter lease</td><td>Others take its keys when the leases end, or at once on a clean stop.</td><td>Start or stop them at any time.</td></tr><tr><td>Hash shards: <code>reconcile</code> with <code>shard: [index, count]</code></td><td>None</td><td>Its keys wait for a process with the same index.</td><td>Restart every process with the new count.</td></tr><tr><td>Queue jobs: <code>runQueueWorker</code></td><td>A claim per batch of jobs, a report per job, and one renewal per process about every eighth of a lease</td><td>Others take its jobs when the leases end.</td><td>Start or stop them at any time.</td></tr></tbody></table></div>
+<h3>Lease keys</h3>
+<div class="code-block"><div class="code-head"><span>Any number of copies</span><button class="copy-button" type="button" aria-label="Copy any number of copies">Copy</button></div><pre tabindex="0"><code class="language-ts">// Start as many copies as you like; they split the stale keys between them.
+await reconcile(client, {
+  external: "digest",
+  lease: true,
+  leaseMs: 30_000,
+  concurrency: 8,
+  signal,
+  compute,
+});</code></pre></div>
+<ul>
+<li>A process claims at most one key per free computation, oldest first, so none hoards work, and the pool evens out as processes come and go. The <a href="#try-reconciler">demo worker</a> leases: start it in two terminals and they share the documents.</li>
+<li>For a number of computations that follows the work, pass bounds, such as <code>concurrency: { min: 1, max: 32 }</code>. As with queue workers, a process computes more keys at once while keys wait and fewer once its event loop or memory falls behind, reporting each change as a <code>limit</code> event.</li>
+<li>A process renews all of its leases in one call, every third of <code>leaseMs</code> − <code>marginMs</code>. With 30 s leases, that is one renewal every 8 s per process, however many keys it holds.</li>
+<li><strong>Leases spread the work; <code>publish</code> still decides.</strong> It keeps any result for the current input, leased or not, so a process that wakes after its lease can't store a stale result.</li>
+<li>If a process dies, its keys wait out their leases, then go back in line. A clean stop hands them back at once. Waiting processes wake the moment a lease or retry delay ends: <code>ready</code> tells Flower when, so nothing polls. Keep leases at 10–30 s: long enough to ride out a leader election, short enough to limit the wait.</li>
+<li>An edit to a key being computed voids its lease. The new input can be claimed at once, and the old computation's signal aborts at the next renewal.</li>
+<li>A failed computation hands its key back with a backoff that every process honors, so a bad input isn't retried everywhere at once. The claim's <code>attempt</code> counts tries across processes.</li>
+<li>Watch <code>digest.stats</code> like a queue's: if the oldest ready key keeps waiting longer, add processes.</li>
+</ul>
+<h3>Split keys by hash</h3>
+<p>Hash shards cost no writes beyond publishing, but each key's process is fixed. Use them when computations are so cheap that a claim per batch matters.</p>
+<div class="code-block"><div class="code-head"><span>One shard of four</span><button class="copy-button" type="button" aria-label="Copy one shard of four">Copy</button></div><pre tabindex="0"><code class="language-ts">// Start SHARD=0 through SHARD=3, each with SHARDS=4.
+await reconcile(client, {
+  external: "digest",
+  shard: [Number(process.env.SHARD), Number(process.env.SHARDS)],
+  concurrency: 8,
+  signal,
+  compute,
+});</code></pre></div>
+<ul>
+<li>A key's shard depends only on the key and <code>count</code>. Processes agree without talking to each other, and no two shards share a key.</li>
+<li>Run one process per index, from 0 to <code>count</code> − 1, usually one per machine. <code>concurrency</code> runs computations in parallel inside each.</li>
+<li><strong>Nothing takes over a missing shard.</strong> Restart it with the same index; a Kubernetes StatefulSet's pod ordinals make good indexes. Or run two processes per index: both compute its keys, and the first result is kept.</li>
+<li>To change <code>count</code>, restart every process with the new value. Nothing is stored per shard, so nothing moves. While old and new counts overlap, some keys are computed twice and others wait. <code>publish</code> still stores only results for current inputs.</li>
+<li>Each shard's <code>next</code> reads the one list of stale keys and skips the other shards' keys, so more shards mean more reading for every call. Raise <code>concurrency</code> before adding shards.</li>
+</ul>
+<h3>Split a queue into scopes</h3>
+<p>One queue serves any number of workers; <a href="worker-pools.html">Worker pools</a> shows how to run them. For a tenant that mustn't hold up the others, or urgent jobs that should go first, you don't need to split it: give jobs a <code>group</code> or a <code>priority</code> (see <a href="leases.html#order">Order the work</a>). Split it only when some jobs need their own workers: reserved capacity, or a particular machine.</p>
+<div class="code-block"><div class="code-head"><span>Scoped queue</span><button class="copy-button" type="button" aria-label="Copy scoped queue">Copy</button></div><pre tabindex="0"><code class="language-ts">// In the app: enqueue into a scope, and expose the scope as an argument.
+jobs.scope(tenant).enqueue(ctx, id, payload);
+define({ uses: [jobs], http: { ...jobs.http("jobs", { scope: "argument" }) } });
+
+// In each worker: claim only from one scope.
+await runQueueWorker(client, { queue: "jobs", scope: "tenant-a", work, signal, concurrency: 4 });</code></pre></div>
+<ul>
+<li>Each scope has its own order, line, fencing tokens and <code>jobs.stats</code> (pass <code>{ scope }</code>). To serve several scopes from one process, call <code>runQueueWorker</code> once per scope.</li>
+<li>With <code>scope: "argument"</code>, any caller can name any scope. To pick the scope from the authenticated caller instead, pass a function; its workers leave <code>scope</code> out. See <a href="leases.html#leases">Leases, retries and fencing</a>.</li>
+</ul>
+<h3>Spread the writes across groups</h3>
+<p>Leases, shards and scopes split the workers, not the database. Every claim, renewal, report and publish is a mutation on one Raft group's leader. A busy queue worker renews all of its leases in one call about every eighth of a lease, so 100 processes on 10 s leases send about 75 renewals a second however many jobs they hold, before any claims or reports. With <code>batch</code>, one claim takes several jobs. With <code>wait: true</code>, a job that reaches an idle queue wakes the process first in line rather than every idle one.</p>
+<p>When one group can't keep up, give each shard its own <a href="../reference/partitions.html">partition</a> and <a href="../operate/groups.html">spread the partitions across groups</a>. Deploy the app to every partition; each is a separate database with its own queues and external values. Jobs land in the partition whose mutation enqueued them, so point each partition's workers at it:</p>
+<div class="code-block"><div class="code-head"><span>Workers for one partition</span><button class="copy-button" type="button" aria-label="Copy workers for one partition">Copy</button></div><pre tabindex="0"><code class="language-ts">const client = new FlowerClient("http://flower-1:7101").partition("orders-3");
+await runQueueWorker(client, { queue: "jobs", work, signal, batch: 8, wait: true });</code></pre></div>
+<ul>
+<li>Partition along a line the app already splits on, such as tenant or region, so each mutation stays in one partition. Crossing partitions takes a <a href="../reference/partitions.html#transactions">transaction</a>.</li>
+<li>Choose partitions when you create the database: data in the default database can't become a partition later.</li>
+<li>Workers ride out partition moves. Their watches end, and they reconnect with backoff, reporting <code>waiting</code>.</li>
+</ul>
+</section>

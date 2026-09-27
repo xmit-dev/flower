@@ -1,0 +1,97 @@
+<p><code>@flower-js/sdk/testing</code> runs an application on Flower's reference engine inside your test process. Calls behave like HTTP calls, with the same checks, receipts and errors, and time moves only when you say so. It needs Node.</p>
+<section id="start">
+<h2>Start a test database</h2>
+<div class="code-block"><div class="code-head"><span>counter.test.ts</span><button type="button" class="copy-button" aria-label="Copy counter.test.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import assert from "node:assert/strict";
+import test from "node:test";
+import { FlowerError } from "@flower-js/sdk";
+import { testDatabase } from "@flower-js/sdk/testing";
+import app from "./counter.ts";
+
+test("increments, doubles and rejects bad input", async () =&gt; {
+  const db = await testDatabase(app);
+  assert.equal(db.mutate("counter.increment", { id: "visits", by: 2 }), 4);
+  assert.deepEqual(db.query("counter.get", "visits"), { count: 2, doubled: 4 });
+  assert.throws(() =&gt; db.mutate("counter.increment", { id: "visits", by: 0 }),
+    (error) =&gt; error instanceof FlowerError &amp;&amp; error.failure?.code === "INVALID_ARGUMENT");
+});</code></pre></div>
+<div class="code-block"><div class="code-head"><span>Run it</span><button type="button" class="copy-button" aria-label="Copy Run it">Copy</button></div><pre tabindex="0"><code class="language-sh">node --test counter.test.ts</code></pre></div>
+<ul>
+<li><code>query</code>, <code>mutate</code> and <code>call</code> are synchronous and return the value. They check arguments and access and keep receipts like HTTP calls, and throw a <code>FlowerError</code> with the same status, code and <code>failure</code>.</li>
+<li>Pass options last: <code>{ credentials, requestId }</code>. Reusing a request ID replays the first result.</li>
+<li>Pass the imported module to run it directly, or a path, <code>testDatabase&lt;typeof app&gt;("counter.ts")</code>, to bundle it and run it in an isolated context as the server does.</li>
+<li><code>testDatabase(app, { now, credentials, partitions })</code> sets the starting clock (1,000,000 ms by default), default credentials, and named partitions.</li>
+</ul>
+</section>
+<section id="time">
+<h2>Control time and maintenance</h2>
+<p><code>db.now</code> is the server clock that <code>ctx.now()</code> and <code>ctx.clock()</code> read. Nothing moves it but you.</p>
+<div class="code-block"><div class="code-head"><span>invoices.test.ts</span><button type="button" class="copy-button" aria-label="Copy invoices.test.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import assert from "node:assert/strict";
+import test from "node:test";
+import { testDatabase } from "@flower-js/sdk/testing";
+import invoices from "./invoices.ts";
+
+test("an invoice is ready five seconds after its last update", async () =&gt; {
+  const db = await testDatabase(invoices);
+  db.mutate("invoice.update", { id: "inv-1", total: 2400 });
+  db.advance(4_999);
+  assert.equal(db.query("invoice.get", "inv-1")?.status, "draft");
+  db.advance(1);
+  assert.equal(db.query("invoice.get", "inv-1")?.status, "ready");
+});</code></pre></div>
+<ul>
+<li><code>db.advance(ms)</code> moves the clock, then runs due maintenance in every partition, like the leader would. It returns the number of committed runs.</li>
+<li><code>db.maintain()</code> runs due maintenance without moving the clock: background materialization, for example.</li>
+<li>Maintenance never runs on its own, so a test sees exactly the state it arranged.</li>
+</ul>
+</section>
+<section id="client">
+<h2>Drive the real client</h2>
+<p><code>db.client</code> is a <code>FlowerClient&lt;typeof app&gt;</code> wired to the test database. <code>query</code>, <code>mutate</code>, <code>call</code>, <code>watch</code>, <code>subscribe</code> and <code>waitUntil</code> all work, live updates included, so worker code runs unchanged:</p>
+<div class="code-block"><div class="code-head"><span>reactive-worker.test.ts</span><button type="button" class="copy-button" aria-label="Copy reactive-worker.test.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import assert from "node:assert/strict";
+import test from "node:test";
+import { testDatabase } from "@flower-js/sdk/testing";
+import app from "./reactive-worker.ts";
+import { runWorker } from "./reactive-worker-client.ts";
+
+test("a worker keeps the digest current", async () =&gt; {
+  const db = await testDatabase(app);
+  const stop = new AbortController();
+  const worker = runWorker(db.client, stop.signal);
+  db.mutate("document.put", { id: "notes", text: "Hello, garden." });
+  const { value } = await db.client.waitUntil("document.get", "notes",
+    (document) =&gt; document?.digest?.status === "ready");
+  assert.equal(value?.text, "Hello, garden.");
+  stop.abort();
+  await worker;
+});</code></pre></div>
+</section>
+<section id="partitions">
+<h2>Partitions and transactions</h2>
+<p>Name partitions up front. Each has its own data, revision and receipts, and they share the clock. Transactions across them commit together or not at all, in-process.</p>
+<div class="code-block"><div class="code-head"><span>bank.test.ts</span><button type="button" class="copy-button" aria-label="Copy bank.test.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import assert from "node:assert/strict";
+import test from "node:test";
+import { FlowerError } from "@flower-js/sdk";
+import { testDatabase } from "@flower-js/sdk/testing";
+import bank from "./bank.ts";
+
+test("transfers move money between partitions atomically", async () =&gt; {
+  const db = await testDatabase(bank, { partitions: ["west", "east"] });
+  const west = db.partition("west");
+  west.mutate("credit", { id: "alice", cents: 500 });
+  assert.deepEqual(db.call("transfer", { from: "alice", to: "bob", cents: 200 }).results, [300, 200]);
+  assert.throws(() =&gt; db.call("transfer", { from: "alice", to: "bob", cents: 900 }),
+    (error) =&gt; error instanceof FlowerError &amp;&amp; error.failure?.code === "INSUFFICIENT_FUNDS");
+  assert.equal(west.mutate("debit", { id: "alice", cents: 300 }), 0); // The failed transfer moved nothing.
+});</code></pre></div>
+<p><code>db.partition(name)</code> has <code>query</code>, <code>mutate</code>, <code>call</code>, <code>maintain</code> and its own <code>client</code>. As on a server, if the app has access checks, a principal's tenant must match the partition.</p>
+</section>
+<section id="limits">
+<h2>What differs from a server</h2>
+<ul>
+<li><strong>No native crypto.</strong> NaCl, JWT, managed keys and <code>jwtBearer</code> fail inside the test database. Test access rules with your own <code>authenticate</code> function.</li>
+<li><strong>Undeclared indexes fail.</strong> <code>ctx.range</code>, <code>ctx.query</code> and <code>ctx.scan({ index })</code> fail with <code>UNDECLARED_INDEX</code> when the index isn't declared through <code>define({ collections })</code> or a component, because the server would quietly scan the whole collection. A forgotten declaration shows up in tests instead of as a slowdown in production.</li>
+<li>One process, no replication: replica lag, budgets, deployment steps and retry sessions aren't simulated.</li>
+<li>Watches send full snapshots rather than patches.</li>
+<li><code>db.data</code> is a copy of the raw state for debugging. Its format isn't stable.</li>
+</ul>
+</section>

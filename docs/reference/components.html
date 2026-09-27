@@ -1,0 +1,55 @@
+<section id="components" data-toc="Components">
+<h2>Components</h2>
+<p>A component packages parts for <code>define({ uses })</code>. The <a href="../guide/components.html">components guide</a> walks through a complete one.</p>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th scope="row"><code data-api-symbol="component">component(parts?: ComponentParts): Component</code></th><td>Freezes the parts into a component. Every field is optional and must be an array; unknown fields are rejected.</td></tr>
+<tr><th scope="row"><code data-api-symbol="ComponentParts">ComponentParts</code></th><td>Optional <code>uses</code> (nested components), <code>collections</code>, <code>definitions</code>, <code>tasks</code>, <code>triggers</code> and <code>keys</code>.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Component">Component</code></th><td>Readonly <code>kind: "component"</code> and each part as a frozen array.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Usable">Usable</code></th><td>What <code>uses</code> accepts: a <code>Component</code>, or an object with a <code>component</code> property, such as an <a href="workers.html#external">external value</a>.</td></tr>
+</tbody></table></div>
+<div class="code-block"><div class="code-head"><span>A helper that is also a component</span><button class="copy-button" type="button" aria-label="Copy A helper that is also a component">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, component, v, type MutationContext } from "@flower-js/sdk";
+
+export function tally(name: string) {
+  const counts = collection(name, v.int({ min: 0 }));
+  return {
+    ...component({ collections: [counts] }),
+    add: (ctx: MutationContext, key: string) =&gt; ctx.set(counts, key, (ctx.get(counts, key) ?? 0) + 1),
+  };
+}
+// const votes = tally("votes"); define({ uses: [votes], ... }); votes.add(ctx, "yes");</code></pre></div>
+<ul>
+<li><code>define</code> visits nested <code>uses</code> first and includes each component once, however many times it is reached.</li>
+<li>Names are global across components: two different definitions or two tasks with the same name are rejected, and so is one collection declared with different indexes.</li>
+<li>Components never add public methods; spread generated ones, like <code>jobs.http("jobs")</code>, into <code>http</code>.</li>
+</ul>
+</section>
+<section id="tasks" data-toc="Tasks">
+<h2>Tasks</h2>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th scope="row"><code data-api-symbol="task">task(name, { due, run, onError? }): Task</code></th><td>Background work for the maintenance handler. Names must be unique in the app.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Task">Task</code></th><td>Readonly <code>kind: "task"</code>, <code>name</code>, <code>due</code>, <code>run</code> and optional <code>onError</code>.</td></tr>
+<tr><th scope="row"><code>due(ctx: QueryContext): number | null</code></th><td>The earliest time the task has work, or <code>null</code> when idle. Must depend only on data and time, and return a finite number.</td></tr>
+<tr><th scope="row"><code>run(ctx: MutationContext): Json</code></th><td>One bounded unit of work, committed on its own. The task stays eligible while <code>due</code> is in the past.</td></tr>
+<tr><th scope="row"><code>onError(ctx, failure: TaskFailure): Json</code></th><td>Runs in place of a failed <code>run</code>, against the failed invocation’s snapshot and time; its writes commit instead. Without it, the task backs off.</td></tr>
+<tr><th scope="row"><code data-api-symbol="TaskFailure">TaskFailure</code></th><td><code>error: Failure</code>, with the real code (yours, <code>COMPUTE_ERROR</code>, <code>EVALUATION_BUDGET</code>…), and <code>failedAt</code> in milliseconds.</td></tr>
+</tbody></table></div>
+<p><code>define</code> compiles every task, including those of components and of <code>materialize</code> policies, into one maintenance handler pair, <code>$flower.maintenance</code> and <code>$flower.maintenance.error</code>, named in <code>FlowerModule.maintenance</code>.</p>
+<ul>
+<li>Each run picks the task with the earliest due time and runs it in its own commit. The handler reports when the next task is due, and the leader runs maintenance then, or after a write or leadership change, starting at most one run every <code>FLOWER_MAINTENANCE_INTERVAL_MS</code> (250 ms), in bursts of up to <code>FLOWER_MAINTENANCE_BURST_MS</code> (50 ms) while work remains.</li>
+<li>A failure without <code>onError</code> delays only that task: 1 s after the first failure, doubling up to 60 s. The next success clears it. Backoff state lives in the <code>$flower.tasks</code> collection.</li>
+<li>A run may be evaluated more than once before it commits. Keep external side effects out of tasks.</li>
+</ul>
+</section>
+<section id="triggers" data-toc="Triggers">
+<h2>Triggers</h2>
+<div class="table-wrap"><table><thead><tr><th>API</th><th>Contract</th></tr></thead><tbody>
+<tr><th scope="row"><code data-api-symbol="trigger">trigger(name, source, run): Trigger</code></th><td>Runs <code>run(ctx, change)</code> inside every mutation that changed a row of <code>source</code>, once per changed key, before the commit. The source collection is declared for you.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Trigger">Trigger&lt;T, K&gt;</code></th><td>Readonly <code>kind: "trigger"</code>, <code>name</code>, <code>source</code> and <code>run</code>.</td></tr>
+<tr><th scope="row"><code data-api-symbol="Change">Change&lt;T, K&gt;</code></th><td><code>key</code> (decoded for typed-key collections), <code>before</code> and <code>after</code>; <code>null</code> means the row didn’t exist.</td></tr>
+</tbody></table></div>
+<ul>
+<li>Triggers see and join the mutation’s writes. A row that ends where it started doesn’t fire.</li>
+<li>Writes made by triggers can fire more triggers. After 32 rounds the mutation fails with <code>TRIGGER_LOOP</code>.</li>
+<li>Trigger names must be unique per collection.</li>
+</ul>
+</section>

@@ -1,0 +1,73 @@
+[package]
+name = "flower"
+default-run = "flower"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "A Raft-backed database of reactive values"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+aws-lc-rs = "1.18.1"
+base64 = "0.23.1"
+crypto_secretbox = { version = "0.1.1", default-features = false, features = ["salsa20"] }
+ed25519-dalek = "3.0.0"
+getrandom = "0.4.3"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa", "pem", "precomputed-tables"] }
+pem = "3.0.6"
+subtle = "2.6.1"
+x25519-dalek = "3.0.0"
+zeroize = "1.9.0"
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "matched-path", "tokio", "tracing"] }
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-executor = { version = "0.3", default-features = false, features = ["std"] }
+hyper-util = { version = "0.1", features = ["server-auto", "server-graceful", "service", "tokio"] }
+im = "15.1"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+openraft = { version = "0.9", features = ["serde", "storage-v2"] }
+opentelemetry = { version = "0.33", default-features = false, features = ["trace", "metrics", "experimental_metrics_bound_instruments"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "http-json", "reqwest-blocking-client", "reqwest-rustls", "trace", "metrics", "internal-logs"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "metrics", "internal-logs", "experimental_metrics_bound_instruments"] }
+redb = "4.3"
+reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value", "unbounded_depth"] }
+ryu-js = "1"
+rustc-hash = "2.1"
+mimalloc = { version = "0.1", default-features = false }
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "io-util", "fs"] }
+tokio-rustls = { version = "0.26.5", default-features = false, features = ["aws-lc-rs", "tls12"] }
+tracing = "0.1"
+tracing-opentelemetry = { version = "0.34", default-features = false }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tempfile = "3"
+wasmtime = { version = "=49.0.0", default-features = false, features = ["std", "runtime", "cranelift", "pooling-allocator", "incremental-cache", "anyhow"] }
+wasmtime-wizer = { version = "=49.0.0", default-features = false }
+wasm-encoder = { version = "0.259", default-features = false, features = ["std", "wasmparser"] }
+wasmparser = { version = "0.259", default-features = false, features = ["std", "simd", "features", "validate"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = "0.2"
+
+# Guest modules build separately for wasm32-unknown-unknown; plain cargo
+# commands at the root still select only the server.
+[workspace]
+members = ["crates/flower-sdk", "examples/goblin-pizza-rs"]
+
+[profile.release]
+lto = "thin"
+
+[profile.release.package.goblin-pizza]
+codegen-units = 1
+strip = true
+
+[profile.release.package.flower-sdk]
+codegen-units = 1
+
+# The leader's own log append does not block replication. See vendor/openraft/FLOWER.md.
+[patch.crates-io]
+openraft = { path = "vendor/openraft" }

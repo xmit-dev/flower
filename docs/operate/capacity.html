@@ -1,0 +1,57 @@
+<p>All settings are environment variables, read once at startup. Set them the same on every node, then restart to apply. The <a href="https://github.com/xmit-dev/flower/blob/main/bench/LIMITS.md">full settings reference</a> lists every option and its validation rules.</p>
+<section id="capacity">
+<h2>Workers and queues</h2>
+<p>Match these to your CPUs and memory. Bigger queues hold more waiting work; they don't add CPU. When a queue is full, requests get a 503.</p>
+<div class="table-wrap"><table><caption class="sr-only">Worker and queue settings</caption><thead><tr><th>Setting</th><th>Default</th><th>What it does</th></tr></thead><tbody>
+<tr><td><code>FLOWER_QUERY_WORKERS</code></td><td>CPU count</td><td>Slots for cache lookups and authorization callbacks.</td></tr>
+<tr><td><code>FLOWER_PREPARATION_WORKERS</code></td><td><code>FLOWER_QUERY_WORKERS</code></td><td>Shared slots per node for queries, writes, authorization and watch updates.</td></tr>
+<tr><td><code>FLOWER_WRITER_PREPARATION_WORKERS</code></td><td><code>FLOWER_PREPARATION_WORKERS</code></td><td>How many writes can be prepared in parallel before being committed in order. Set <code>1</code> for workloads where most writes conflict.</td></tr>
+<tr><td><code>FLOWER_PREPARATION_MEMORY_BYTES</code></td><td>workers × (guest + Rust memory)</td><td>Total memory reserved for running evaluations.</td></tr>
+<tr><td><code>FLOWER_QUEUED_INPUT_BYTES</code></td><td>64 MiB</td><td>Memory for waiting requests, cached responses in flight and connected watches' current values. Slow clients hold on to this memory.</td></tr>
+<tr><td><code>FLOWER_READ_QUEUE_CAPACITY</code></td><td>64 × CPUs</td><td>Fresh reads waiting for a quorum check.</td></tr>
+<tr><td><code>FLOWER_READ_TIMEOUT_MS</code></td><td>10,000 ms</td><td>Deadline for a fresh read, including queueing.</td></tr>
+<tr><td><code>FLOWER_WRITER_QUEUE_CAPACITY</code></td><td>128 × CPUs; 2 × batch size if set; 128 in fixed mode</td><td>Mutations waiting to be written.</td></tr>
+<tr><td><code>FLOWER_WRITER_BATCH_MODE</code></td><td>adaptive</td><td>Adaptive sizes write batches from measured cost. Set <code>fixed</code> for count-based batches.</td></tr>
+<tr><td><code>FLOWER_WRITER_BATCH_SIZE</code></td><td>unset (64 in fixed mode)</td><td>Optional cap on mutations per batch.</td></tr>
+<tr><td><code>FLOWER_HTTP2_MAX_STREAMS</code></td><td>unset (no limit)</td><td>Concurrent HTTP/2 streams per connection.</td></tr>
+</tbody></table></div>
+<p>Watches have no fixed count limit. Connections, memory and CPU set the real limit, so measure with your own queries and update rate.</p>
+</section>
+<section id="budgets">
+<h2>Per-request limits</h2>
+<p>These cap each evaluation and request. Raising one costs memory or waiting time; it never weakens isolation, quorum or durability.</p>
+<div class="table-wrap"><table><caption class="sr-only">Evaluation and size limits</caption><thead><tr><th>Setting</th><th>Default</th><th>What it does</th></tr></thead><tbody>
+<tr><td><code>FLOWER_EVALUATION_TIMEOUT_MS</code></td><td>10,000 ms</td><td>Deadline for one evaluation, including nested callbacks.</td></tr>
+<tr><td><code>FLOWER_BUNDLE_MAX_BYTES</code></td><td>2 MiB</td><td>Size of deployed application code.</td></tr>
+<tr><td><code>FLOWER_RESULT_MAX_BYTES</code></td><td>16 MiB</td><td>Size of a value returned by an evaluation.</td></tr>
+<tr><td><code>FLOWER_GUEST_MEMORY_BYTES</code></td><td>128 MiB</td><td>JavaScript memory for one evaluation.</td></tr>
+<tr><td><code>FLOWER_RUST_MEMORY_BYTES</code></td><td>128 MiB</td><td>Host memory for one evaluation's pending changes, including derived values it adds. Stored data and the existing graph aren't counted.</td></tr>
+<tr><td><code>FLOWER_INDEX_MEMORY_BYTES</code></td><td>16 MiB</td><td>Cache for lookups on undeclared indexes. Declared indexes are stored and don't use it.</td></tr>
+<tr><td><code>FLOWER_WASM_POOL_SLOTS</code></td><td>256</td><td>Sandbox instances per process. Nested callbacks each need one.</td></tr>
+<tr><td><code>FLOWER_WASM_RECYCLE_BYTES</code></td><td>96 MiB</td><td>Memory kept for reusing idle sandboxes. <code>0</code> keeps none.</td></tr>
+<tr><td><code>FLOWER_HTTP_MAX_BODY_BYTES</code></td><td>8 MiB</td><td>Incoming HTTP request body.</td></tr>
+<tr><td><code>FLOWER_TRANSACTION_MAX_BYTES</code></td><td>32 MiB</td><td>One replicated command.</td></tr>
+<tr><td><code>FLOWER_RPC_MAX_BYTES</code></td><td>64 MiB</td><td>One node-to-node message.</td></tr>
+</tbody></table></div>
+<p>To accept bigger payloads, raise the HTTP body, result, transaction, RPC and client limits together. HTTP headers have their own limits: <code>FLOWER_HTTP1_MAX_HEADERS</code> (100), <code>FLOWER_HTTP1_MAX_BUFFER_BYTES</code> (408 KiB) and <code>FLOWER_HTTP2_MAX_HEADER_LIST_BYTES</code> (16 KiB).</p>
+<div class="table-wrap"><table><caption class="sr-only">Timing and watch settings</caption><thead><tr><th>Setting</th><th>Default</th><th>What it does</th></tr></thead><tbody>
+<tr><td><code>FLOWER_WRITER_BATCH_MS</code></td><td>50 ms</td><td>Longest time spent filling a write batch. Adaptive mode often uses less.</td></tr>
+<tr><td><code>FLOWER_WRITER_WINDOW_MS</code></td><td>250 ms</td><td>How often writes pause so deployments and maintenance can run.</td></tr>
+<tr><td><code>FLOWER_DEPLOYMENT_PAGE_MS</code></td><td>200 ms</td><td>Target time per page of a staged rebuild. Lower means shorter write stalls; higher means faster rebuilds.</td></tr>
+<tr><td><code>FLOWER_MAINTENANCE_INTERVAL_MS</code></td><td>250 ms</td><td>The shortest gap between maintenance runs. They start when a timer or task is due, or after a write, not on a timer.</td></tr>
+<tr><td><code>FLOWER_MAINTENANCE_BURST_MS</code></td><td>50 ms</td><td>Time allowed per maintenance catch-up round.</td></tr>
+<tr><td><code>FLOWER_WATCH_REFRESH_MS</code></td><td>250 ms</td><td>How often a watch re-evaluates a query or access check that reads <code>ctx.now()</code>. Other idle watches have no timer.</td></tr>
+<tr><td><code>FLOWER_WATCH_KEEPALIVE_MS</code></td><td>15,000 ms</td><td>Interval between watch-stream keepalives.</td></tr>
+<tr><td><code>FLOWER_WATCH_SEND_TIMEOUT_MS</code></td><td>5,000 ms</td><td>How long a slow watch client can fall behind before it is disconnected.</td></tr>
+</tbody></table></div>
+<details><summary>Memory use and sandbox reuse</summary><div class="details-body"><p>These limits are not a cap on process memory. Stored data, compiled code, caches and thread stacks cost extra. On 64-bit hosts each sandbox reserves 4 GiB of virtual address space; that isn't physical RAM.</p><p>Sandboxes are reset and reused between calls to save setup time. Every call still starts from clean state. <code>FLOWER_WASM_RECYCLE=0</code> turns reuse off; <code>FLOWER_WASM_DIRTY_PAGES=0</code> copies all memory on reset instead of only changed pages. See the <a href="https://github.com/xmit-dev/flower/blob/main/bench/LIMITS.md">limits reference</a> for platform details.</p></div></details>
+</section>
+<section id="storage">
+<h2>Stored data and caches</h2>
+<p>Records and retry results are served from the database file, so stored data isn't limited by memory. Memory holds the writes still queued for disk and two caches. Reads that miss both wait on the disk, so size the caches to your working set.</p>
+<div class="table-wrap"><table><caption class="sr-only">Storage cache settings</caption><thead><tr><th>Setting</th><th>Default</th><th>What it does</th></tr></thead><tbody>
+<tr><td><code>FLOWER_VALUE_CACHE_BYTES</code></td><td>256 MiB</td><td>Parsed stored values shared by every reader in the process. Parsed values take several times their stored size.</td></tr>
+<tr><td><code>FLOWER_REDB_CACHE_BYTES</code></td><td>1 GiB</td><td>The database's own cache of file pages, and its buffer for pages being written.</td></tr>
+</tbody></table></div>
+<p>A few structures still grow with the data: the scan windows of derived values that scan ranges, and a deployment that changes the bundle without staging, which walks every materialized value at once. Receiving a Raft snapshot writes it to a temporary file next to the database first, so leave free disk space for a second copy of the state.</p>
+</section>

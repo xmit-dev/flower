@@ -1,0 +1,90 @@
+<p>A queue gives each job to one worker at a time, retries failures with backoff, and rejects results from workers that lost their lease. An expiring collection hides records after a deadline. Both are <a href="components.html">components</a>. For worker design, see <a href="workers.html">External workers</a>.</p>
+<section id="claim-work-complete-or-fail" data-toc="Queue jobs">
+<h2>Queue jobs in the same commit</h2>
+<p>Enqueue in the mutation that creates the obligation. Here, a paid invoice always has its receipt job, because both commit together.</p>
+<div class="code-block"><div class="code-head"><span>receipts.ts</span><button type="button" class="copy-button" aria-label="Copy receipts.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, fail, mutation, v } from "@flower-js/sdk";
+import { queue } from "@flower-js/sdk/temporal";
+
+const invoices = collection("invoices", v.object({ email: v.string(), paid: v.boolean() }));
+const receipts = queue("receipts", {
+  payload: v.object({ invoice: v.string(), email: v.string() }),
+  lease: { defaultMs: 10_000, maxMs: 60_000 },
+  retry: { maxAttempts: 5, initialDelayMs: 1_000, maxDelayMs: 60_000 },
+});
+
+const pay = mutation("invoice.pay", { args: v.string({ min: 1 }) }, (ctx, id) =&gt; {
+  const invoice = ctx.get(invoices, id) ?? fail("INVOICE_NOT_FOUND", `No invoice ${id}`);
+  if (invoice.paid) return null;
+  ctx.set(invoices, id, { ...invoice, paid: true });
+  receipts.enqueue(ctx, `receipt:${id}`, { invoice: id, email: invoice.email });
+  return null;
+});
+
+const app = define({
+  uses: [receipts],
+  http: { "invoice.pay": pay, ...receipts.http("receipts") },
+});
+export default app;</code></pre></div>
+<div class="code-block"><div class="code-head"><span>A worker process</span><button type="button" class="copy-button" aria-label="Copy A worker process">Copy</button></div><pre tabindex="0"><code class="language-ts">await runQueueWorker&lt;{ invoice: string; email: string }&gt;(client, {
+  queue: "receipts",
+  signal: shutdown.signal,
+  work: async (job, signal) =&gt; {
+    await mailer.send(job.payload.email, { idempotencyKey: job.id, signal });
+    return { sent: true };
+  },
+});</code></pre></div>
+<ul>
+<li><code>receipts.http("receipts")</code> exposes what workers need: <code>receipts.claim</code>, <code>.renew</code>, <code>.complete</code>, <code>.fail</code>, <code>.release</code>, <code>.get</code>, <code>.ready</code> and <code>.stats</code>. List <code>methods</code> to add <code>enqueue</code>, <code>retry</code> or <code>cancel</code>, and pass <code>access</code> to protect them.</li>
+<li><code>runQueueWorker</code> waits for work, claims, renews leases while your code runs, and reports each outcome. <a href="worker-pools.html">Worker pools</a> runs it for real.</li>
+<li>A payload schema checks every enqueue. <code>enqueue</code> fails with <code>JOB_EXISTS</code> while a job with that ID is pending or leased; <code>replace: true</code> replaces a finished one.</li>
+<li><code>delayMs</code> or <code>at</code> hold a job back. Jobs are claimed oldest first, unless you <a href="#order">order the work</a>.</li>
+</ul>
+</section>
+<section id="leases" data-toc="Leases &amp; retries">
+<h2>Leases, retries and fencing</h2>
+<ul>
+<li><code>claim</code> returns <code>{ scope, id, payload, owner, token, expiresAt, attempt, history? }</code>, or <code>null</code> when nothing is ready. <code>token</code> increases with every claim in the queue. Over HTTP, <code>max</code> takes up to 64 jobs at once: the first comes back carrying the others in <code>more</code>.</li>
+<li><code>renew</code>, <code>complete</code> and <code>fail</code> need the current owner and token before the lease ends, or fail with <code>LEASE_LOST</code>. <code>renew</code> keeps the token. Over HTTP, <code>renew</code> takes <code>{ leases }</code> and returns each new expiry, or <code>null</code> for a lease that was lost.</li>
+<li>An expired lease counts as a failed attempt, and the job can be claimed again at once.</li>
+<li><code>fail</code> requeues the job after 1 s, doubling up to 60 s, for up to five attempts in all. Pass <code>retry: false</code> to the queue, or to one <code>fail</code> call, to make failure final.</li>
+<li>Failed jobs stay until <code>retry</code> requeues them with a fresh attempt count. Completed jobs stay too: clean them up yourself.</li>
+<li>Claims use <code>lease.defaultMs</code> (30 s unless set), and <code>leaseMs</code> may ask for up to <code>lease.maxMs</code> (5 minutes unless set). Longer requests fail with <code>LEASE_TOO_LONG</code>.</li>
+<li><code>receipts.scope("tenant-a")</code> is the same queue API for one namespace, with its own tokens. <code>http(prefix, { scope })</code> takes the scope from an argument or from the caller. Scopes are not access control.</li>
+</ul>
+<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p><strong>Expiry does not stop the old worker.</strong> A paused worker can wake up after its lease and still act. The receiving service should take idempotency keys, such as the job ID, or check fencing tokens.</p></div>
+</section>
+<section id="order" data-toc="Priorities &amp; turns">
+<h2>Order the work</h2>
+<p>Jobs are claimed oldest first. Two options of <code>enqueue</code> change that:</p>
+<div class="code-block"><div class="code-head"><span>Priorities and groups</span><button type="button" class="copy-button" aria-label="Copy Priorities and groups">Copy</button></div><pre tabindex="0"><code class="language-ts">// Someone is waiting on this receipt: it goes before every priority-0 job.
+receipts.enqueue(ctx, `receipt:${id}`, payload, { priority: -1 });
+// A tenant's burst of 500 exports takes turns with other tenants' jobs.
+exports.enqueue(ctx, `export:${tenant}:${n}`, payload, { group: tenant });</code></pre></div>
+<ul>
+<li><code>priority</code> is strict: lower goes first, and a job waits while any ready job has a lower priority. A few levels are enough, such as people waiting (−1), ordinary work (0) and batch work (1).</li>
+<li>Within a priority, groups take turns: each ready group's next job goes before any group's second. Group by tenant, user or parent job, so one burst can't hold up everyone else. A job without a group takes the next turn on its own.</li>
+<li>A job gets its turn when it is enqueued and keeps it through failed attempts, so a retry goes before work that came after it. A group that goes quiet builds up no credit: when it comes back, it joins at the current turn.</li>
+<li>Scopes don't share an order: each takes turns on its own.</li>
+</ul>
+</section>
+<section id="expiry-is-a-read-rule">
+<h2>Let records expire</h2>
+<div class="code-block"><div class="code-head"><span>sessions.ts</span><button type="button" class="copy-button" aria-label="Copy sessions.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { define, mutation, v } from "@flower-js/sdk";
+import { expiringCollection } from "@flower-js/sdk/temporal";
+
+const sessions = expiringCollection("sessions", {
+  expiration: { afterUpdateMs: 60_000 },
+  value: v.object({ user: v.string() }),
+});
+const touch = mutation("session.touch", { args: v.string({ min: 1 }) }, (ctx, id) =&gt;
+  sessions.set(ctx, id, sessions.get(ctx, id) ?? { user: "guest" }));
+
+export default define({ uses: [sessions], http: { "session.touch": touch } });</code></pre></div>
+<p>A record is hidden once <code>ctx.now() &gt;= expiresAt</code>, and a maintenance task deletes it soon after. <code>entry</code> returns the value with its timestamps.</p>
+<div class="table-wrap"><table><caption class="sr-only">Expiration policies</caption><thead><tr><th>Policy passed to <code>set</code></th><th>Meaning</th></tr></thead><tbody><tr><td><code>{ afterCreationMs: 10_000 }</code></td><td>Expires from its original live creation time.</td></tr><tr><td><code>{ afterUpdateMs: 60_000 }</code></td><td>Restarts the lifetime on each update.</td></tr><tr><td><code>{ at: epochMilliseconds }</code></td><td>Uses an absolute deadline chosen by your code.</td></tr><tr><td><code>null</code></td><td>Does not expire.</td></tr></tbody></table></div>
+<ul>
+<li>Updates keep the creation time; writing over an expired record starts fresh.</li>
+<li>Reads never extend a lifetime; rewrite in a mutation to refresh. For logic on expiry, use a <a href="timers.html">timer</a>.</li>
+<li>Keep node clocks in sync. <code>ctx.now()</code> is fixed per evaluation, and commit time counts against leases and lifetimes.</li>
+</ul>
+</section>

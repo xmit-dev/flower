@@ -1,0 +1,52 @@
+<p>Each database has one writer; reads run in parallel. A write is acknowledged once a quorum has stored and applied it. When queues are full, Flower returns 503. Treat that as backpressure and slow down.</p>
+<section id="budgets" data-toc="Execution budgets">
+<h2>Execution budgets</h2>
+<div class="table-wrap"><table><thead><tr><th>Budget</th><th>Default</th></tr></thead><tbody>
+<tr><th scope="row">Evaluation deadline</th><td>10 seconds</td></tr>
+<tr><th scope="row">Source bundle</th><td>2 MiB</td></tr>
+<tr><th scope="row">Result / exchange size</th><td>16 MiB</td></tr>
+<tr><th scope="row">QuickJS/Wasm memory (all live callbacks)</th><td>128 MiB</td></tr>
+<tr><th scope="row">Rust bookkeeping memory</th><td>128 MiB</td></tr>
+</tbody></table></div>
+<p>All are set at node startup. They bound Flower's own accounting, not total process memory.</p>
+</section>
+<section id="admission" data-toc="Admission and overload">
+<h2>Admission and overload</h2>
+<ul>
+<li>Heavy queries, calls and watch refreshes wait for shared node capacity. Partitions take turns fairly. Operator work has its own reserve.</li>
+<li>When capacity or queued bytes run out, requests fail with 503 <code>ADMISSION_OVERLOADED</code>.</li>
+<li><code>FLOWER_PREPARATION_WORKERS</code> sets the shared worker pool. <code>FLOWER_QUERY_WORKERS</code> sets authorization and cache-lookup workers, and is the default for the preparation pool.</li>
+<li><code>GET /admin/resources</code> (admin token) shows active and queued work, bytes, oldest wait and rejection counts.</li>
+<li>Cached query results are served without taking a worker slot. Apps with an access check or managed keys skip this shortcut.</li>
+<li>Wasm instances are reused but every callback starts from a clean state. <code>FLOWER_WASM_RECYCLE=0</code> turns reuse off; <code>FLOWER_WASM_RECYCLE_BYTES</code> (default 96 MiB) caps idle memory. Each instance reserves 4 GiB of virtual address space, not RAM.</li>
+</ul>
+</section>
+<section id="durability" data-toc="Durability and history">
+<h2>Durability and history</h2>
+<ul>
+<li>Data is stored in redb. After a crash, nodes rebuild from the Raft log without rerunning your code.</li>
+<li>Backups must keep node identity and data, for every group involved.</li>
+<li>Retry results, finished jobs, timer failures and transaction records grow until you clean them up (see <a href="access.html#retention">retry retention</a>). Don't delete this metadata by hand; that breaks guarantees.</li>
+</ul>
+</section>
+<section id="security" data-toc="Security">
+<h2>Security</h2>
+<ul>
+<li>Only deployed aliases are public. Use <code>define({ auth })</code> and per-method <code>access</code> to identify and admit callers; Flower has no identity provider.</li>
+<li><code>FLOWER_ADMIN_TOKEN</code> protects operator routes. <code>FLOWER_PEER_TOKEN</code> protects internal routes (defaults to the admin token).</li>
+<li>Traffic is unencrypted h2c by default. Set <code>FLOWER_TLS_CERT_FILE</code>, <code>FLOWER_TLS_KEY_FILE</code> and <code>FLOWER_TLS_CA_FILE</code> together for TLS. See the <a href="https://github.com/xmit-dev/flower/blob/main/TLS.md">TLS operating contract</a>.</li>
+<li>Any trusted peer has full cluster authority.</li>
+</ul>
+</section>
+<section id="operations" data-toc="Upgrades and shutdown">
+<h2>Upgrades and shutdown</h2>
+<ul>
+<li>New members join as learners and vote once caught up.</li>
+<li>Compatible builds can be upgraded one node at a time. Incompatible builds need a coordinated upgrade. Downgrading a data directory is not supported.</li>
+<li>Restart with the same node ID and directory. Don't initialize again.</li>
+<li>After a restart, reads may wait until the node confirms it has caught up with a quorum.</li>
+<li>SIGINT/SIGTERM stop new requests and drain for a bounded time. <strong>Interrupted calls may still have committed</strong>; retry with the same request ID.</li>
+<li>Benchmarks run all replicas on one host. They are not a capacity promise for your application.</li>
+</ul>
+<p>More detail: <a href="https://github.com/xmit-dev/flower/blob/main/bench/LIMITS.md">all operator settings</a>, <a href="../operate/">operating walkthrough</a>, <a href="https://github.com/xmit-dev/flower/blob/main/MEMBERSHIP.md">membership and rolling upgrades</a>, <a href="https://github.com/xmit-dev/flower/blob/main/PROTOCOL.md">HTTP/storage protocol</a>, <a href="../bench/latest.html">latest benchmark report</a>.</p>
+</section>

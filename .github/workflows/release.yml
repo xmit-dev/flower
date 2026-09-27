@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: '1.98.1'
+  NODE_VERSION: '26.10.0'
+  CARGO_BUILD_JOBS: '2'
+
+jobs:
+  sdk:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - id: version
+        run: node scripts/check-release.mjs
+      - run: npm ci
+      - run: npm run check
+      - run: node --test scripts/publish-sdk.test.mjs
+      - run: npm run check:package
+      - name: Pack the tested SDK
+        run: |
+          mkdir -p artifacts
+          npm pack --ignore-scripts --pack-destination artifacts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdk
+          path: artifacts/*.tgz
+          if-no-files-found: error
+
+  binaries:
+    needs: sdk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Reuse Rust build dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: flower-${{ matrix.target }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            flower-${{ matrix.target }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}-
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          rustc -vV | grep -Fx "host: $RELEASE_TARGET"
+      - name: Test and build the native server
+        run: |
+          cargo test --release --locked --all-targets -- --test-threads=2
+          cargo build --release --locked --bin flower
+          target/release/flower --version
+      - uses: actions/setup-node@v7
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Verify gateways, partition recovery and native HTTP/2 driver
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          E2E_FLOWER_BIN: target/release/flower
+        run: |
+          npm ci
+          cargo build --release --locked --bin flower-bench-driver
+          node tests/e2e-http2.mjs
+          node tests/e2e-watch.mjs
+          node tests/e2e-replica-reads.mjs
+          node tests/e2e-tls.mjs
+          node tests/e2e-crypto.mjs
+          node tests/e2e-managed-keys.mjs
+          node tests/e2e-managed-migration.mjs
+          node tests/e2e-retention.mjs
+          node tests/e2e-transactions.mjs
+          node tests/e2e-partition-transactions.mjs
+          node tests/e2e-precopy.mjs
+          node tests/e2e-staged-deployment.mjs
+          node tests/e2e-partition-leader.mjs
+          node tests/e2e-partitions.mjs
+          node tests/e2e-rust-driver.mjs
+          E2E_OFFERED_RATE=100000 node tests/e2e-rust-driver.mjs
+      - name: Package binary and guest notices
+        env:
+          RELEASE_VERSION: ${{ needs.sdk.outputs.version }}
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          archive="flower-${RELEASE_VERSION}-${RELEASE_TARGET}"
+          mkdir -p "artifacts/$archive/third-party"
+          cp target/release/flower LICENSE-MIT "artifacts/$archive/"
+          python3 scripts/third-party-notices.py "$RELEASE_TARGET" "artifacts/$archive/third-party/rust"
+          cp vendor/quickjs-ng/upstream/LICENSE "artifacts/$archive/third-party/quickjs-ng-LICENSE"
+          cp vendor/quickjs-ng/SOURCES.json "artifacts/$archive/third-party/quickjs-ng-SOURCES.json"
+          cp -R vendor/quickjs-ng/licenses/. "artifacts/$archive/third-party/"
+          tar -C artifacts -czf "artifacts/$archive.tar.gz" "$archive"
+          cd artifacts
+          shasum -a 256 "$archive.tar.gz" > "$archive.tar.gz.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flower-${{ matrix.target }}
+          path: |
+            artifacts/*.tar.gz
+            artifacts/*.sha256
+          if-no-files-found: error
+
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [sdk, binaries]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.sdk.outputs.version }}
+        run: |
+          flags=()
+          if [[ "$RELEASE_VERSION" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" artifacts/* --verify-tag \
+            --title "Flower $RELEASE_TAG" --generate-notes "${flags[@]}"
+
+  npm:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [sdk, binaries]
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: sdk
+          path: artifacts
+      - name: Publish new SDK versions with npm trusted publishing
+        env:
+          RELEASE_VERSION: ${{ needs.sdk.outputs.version }}
+        run: node scripts/publish-sdk.mjs artifacts/*.tgz

@@ -1,0 +1,94 @@
+<p>Declare the key your code needs. An operator creates the real key and binds it to that declaration. Your TypeScript only gets a handle; private bytes stay in the server.</p>
+<section id="declare-and-bind">
+<h2>Declare, create, bind</h2>
+<div class="code-block"><div class="code-head"><span>sessions.ts · declaration and methods</span><button class="copy-button" type="button" aria-label="Copy sessions.ts · declaration and methods">Copy</button></div><pre tabindex="0"><code class="language-ts">import { define, key, mutation, query, v } from "@flower-js/sdk";
+import { jwt } from "@flower-js/sdk/crypto";
+
+const sessions = key("sessions", {
+  algorithm: "Ed25519", usages: ["sign", "verify"],
+});
+const issue = mutation("session.issue", { args: v.string({ min: 1 }) }, (ctx, user) =&gt;
+  jwt.sign({ sub: user, iss: "shop", aud: "shop-api",
+    exp: Math.floor(ctx.now() / 1000) + 900 }, sessions));
+const check = query("session.check", { args: v.string() }, (_ctx, token) =&gt;
+  jwt.verify(token, sessions, { issuer: "shop", audience: ["shop-api"] }).claims);
+
+export default define({ keys: [sessions], http: { issue, check } });</code></pre></div>
+<ul>
+<li>This example doesn’t authenticate callers: anyone could get a token for any user. Put <code>issue</code> behind your own sign-in check before exposing it.</li>
+<li>To accept these tokens on every call, pass <code>jwtBearer({ key: sessions, issuer: "shop", audience: ["shop-api"] })</code> to <code>define({ auth })</code>. See <a href="access.html">Access control</a>.</li>
+<li>A declaration grants nothing on its own. An operation needs both the deployed declaration and an operator’s binding.</li>
+<li><code>jwt.verify</code> checks the key version, expiry, issuer and audience.</li>
+</ul>
+<p>An operator sets up the key:</p>
+<div class="code-block"><div class="code-head"><span>Provision; then bind the declaration</span><button class="copy-button" type="button" aria-label="Copy Provision; then bind the declaration">Copy</button></div><pre tabindex="0"><code class="language-sh"># Install the same protected wrapping file on every authorized server.
+umask 077
+openssl rand 32 &gt; /secure/flower-wrapping.key
+# Start each server with FLOWER_KEYRING_FILE=/secure/flower-wrapping.key.
+
+# SDK CLI: supply FLOWER_URL and FLOWER_ADMIN_TOKEN for your cluster.
+flower key generate session-signing --algorithm Ed25519 --request-id create-session-key
+flower key bind sessions session-signing --usages sign,verify --request-id bind-sessions
+flower deploy sessions.ts --request-id deploy-sessions
+flower key rotate session-signing --request-id rotate-sessions-2
+flower key list
+flower key cache</code></pre></div>
+<ul>
+<li>Every authorized server needs the same 32-byte wrapping file. Back it up separately.</li>
+<li>The default listener is unencrypted h2c. Enable native TLS to protect operator tokens.</li>
+<li>For a tenant database, add <code>--partition north</code> to deploy and key commands, or use <code>admin.partition("north")</code>.</li>
+</ul>
+<p>To import an existing key, seal it locally first. Only the encrypted envelope is sent:</p>
+<div class="code-block"><div class="code-head"><span>Import only when an existing identity is needed</span><button class="copy-button" type="button" aria-label="Copy Import only when an existing identity is needed">Copy</button></div><pre tabindex="0"><code class="language-sh"># Native runtime executable: plaintext stays on this local machine.
+/path/to/native/flower key seal --wrapping-key-file /secure/flower-wrapping.key \
+  --format pem &lt; private.pem &gt; sealed.json
+# SDK CLI sends only the authenticated encrypted envelope.
+flower key import imported-signing sealed.json --algorithm Ed25519 \
+  --request-id import-signing</code></pre></div>
+</section>
+<section id="use-the-same-api-keep">
+<h2>What each key can do</h2>
+<div class="table-wrap"><table><caption class="sr-only">Managed key algorithms</caption><thead><tr><th>Algorithm</th><th>Use it for</th></tr></thead><tbody><tr><td>Ed25519</td><td>JWT and NaCl signing and verification</td></tr><tr><td>P256, RSA, HS256</td><td>JWT</td></tr><tr><td>A256GCM</td><td>Encrypted JWT</td></tr><tr><td>XSalsa20Poly1305, X25519</td><td>Matching NaCl operations</td></tr></tbody></table></div>
+<ul>
+<li><code>publicKey(handle)</code> needs a <code>publicKey</code> grant.</li>
+<li><code>nacl.box.before(peerPublic, privateHandle)</code> returns a shared key you can use only inside that callback. It needs the derive and encrypt/decrypt grants.</li>
+<li>Raw <code>Uint8Array</code> keys still work for interoperability.</li>
+</ul>
+<p>Randomness:</p>
+<ul>
+<li>Native randomness and automatic JWT nonces need a mutation. In a query, pass explicit unique nonces: 24 bytes for NaCl, 12 for AES-GCM.</li>
+<li><code>nacl.setPRNG</code> only affects NaCl calls in your code, not key generation or JWT nonces. Each callback starts fresh, so a custom stateful generator can repeat outputs.</li>
+</ul>
+</section>
+<section id="rotate-the-key-keep-the">
+<h2>Rotate and revoke</h2>
+<ul>
+<li><strong>Rotate</strong> makes a new version for signing and encryption. JWTs carry their version in <code>kid</code>, so old tokens still verify until that version is revoked.</li>
+<li><strong>NaCl has no <code>kid</code>.</strong> Save <code>keyVersion(key).version</code> next to each ciphertext, and decrypt with <code>keyVersion(key, savedVersion)</code>. That handle can’t sign or encrypt.</li>
+<li><strong>Revoke</strong> one version with <code>flower key revoke NAME --version N</code>, or all versions by leaving out <code>--version</code>. After revoking the active version, rotate before new operations can run.</li>
+<li><strong>Retire</strong> keeps verification and decryption. <strong>Destroy</strong> removes the current encrypted material and leaves a tombstone. It does not erase backups.</li>
+</ul>
+<ul>
+<li>Declaring managed keys makes aliases marked replica-local read from the quorum too, as access checks do. Other reads already do.</li>
+<li>Watches that use a managed key wake on writes, on key changes and when a verified or decrypted JWT expires, as with a raw key. They don't poll, even when a materialized value uses the key.</li>
+<li>Revocation doesn’t cancel work that has already started. Results that depend on a revoked or locked key fail rather than go stale.</li>
+<li>Old versions stay stored (encrypted) until you garbage-collect them. Plan disk space.</li>
+<li>Private bytes never enter collections, bundles, responses or the Raft log.</li>
+</ul>
+</section>
+<section id="reuse-the-expensive-parts">
+<h2>Key cache and wrapping key</h2>
+<ul>
+<li><code>FLOWER_KEY_CACHE_BYTES</code> sets the cache for prepared keys. Default 16 MiB; 0 disables it.</li>
+<li><code>FLOWER_KEY_CACHE_TTL_MS</code> reloads cached keys after this age. Default 0 (never). It is not a guarantee that key material leaves memory by then.</li>
+<li><code>flower key cache</code> shows the cache on the node you connect to.</li>
+</ul>
+<p>The wrapping file is read at startup; changes need a restart. To rotate it:</p>
+<ol class="steps"><li>Set the new file in <code>FLOWER_KEYRING_FILE</code> and list the old ones in <code>FLOWER_KEYRING_PREVIOUS_FILES</code> (a JSON array). Restart.</li><li>Run <code>flower key rewrap NAME</code> for every key, in every logical database.</li><li>Remove the old files and restart again.</li></ol>
+<ul>
+<li>When a partition moves, the destination must unlock every unrevoked version. A missing or wrong wrapping key pauses the move until fixed.</li>
+<li>Not supported yet: KMS/HSM backends and general exportable secrets.</li>
+<li>Your JS never sees private material, but the server holds it in memory.</li>
+</ul>
+<p>See the <a href="../reference/keys.html">managed-key reference</a> for every method, import format, permission and limit, and the <a href="../reference/crypto.html">NaCl and JWT reference</a> for all functions.</p>
+</section>
