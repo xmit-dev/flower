@@ -1,0 +1,9 @@
+[package]
+name = "flower-client"
+description = "A client for Flower: queries, mutations, watches, queue workers and the admin API"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+
+[dependencies]
