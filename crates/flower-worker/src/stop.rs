@@ -130,6 +130,8 @@ impl JobControl {
 
 impl fmt::Debug for JobControl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JobControl").field("key", &self.key).finish()
+        f.debug_struct("JobControl")
+            .field("key", &self.key)
+            .finish()
     }
 }

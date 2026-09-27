@@ -12,10 +12,13 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flower_client::{BundleOptions, DeployOptions, FlowerAdmin, FlowerClient, MutationOptions, RequestOptions, build_bundle};
+use flower_client::{
+    BundleOptions, DeployOptions, FlowerAdmin, FlowerClient, MutationOptions, RequestOptions,
+    build_bundle,
+};
 use flower_worker::{
-    Claim, Concurrency, ExternalWork, QueueWorkerEvent, QueueWorkerOptions, ReconcileEvent, ReconcileOptions, WorkError,
-    reconcile, run_queue_worker,
+    Claim, Concurrency, ExternalWork, QueueWorkerEvent, QueueWorkerOptions, ReconcileEvent,
+    ReconcileOptions, WorkError, reconcile, run_queue_worker,
 };
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -66,23 +69,40 @@ fn sdk() -> Option<PathBuf> {
     ]
     .into_iter()
     .flatten()
-    .find(|sdk| sdk.join("bundle.ts").is_file() && sdk.join("../node_modules/esbuild/package.json").is_file())
+    .find(|sdk| {
+        sdk.join("bundle.ts").is_file()
+            && sdk.join("../node_modules/esbuild/package.json").is_file()
+    })
     .map(|sdk| std::fs::canonicalize(sdk).unwrap())
 }
 
 fn node() -> bool {
-    Command::new("node").arg("--version").output().is_ok_and(|output| output.status.success())
+    Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 fn start(binary: &Path) -> Flower {
     let data = tempfile::tempdir().unwrap();
     let keyring = data.path().join("keyring");
     let mut file = std::fs::File::create(&keyring).unwrap();
-    file.write_all(&(0..32).map(|_| fastrand::u8(..)).collect::<Vec<_>>()).unwrap();
-    std::fs::set_permissions(&keyring, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    file.write_all(&(0..32).map(|_| fastrand::u8(..)).collect::<Vec<_>>())
+        .unwrap();
+    std::fs::set_permissions(
+        &keyring,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let address = format!("127.0.0.1:{port}");
-    let token: String = (0..16).map(|_| format!("{:02x}", fastrand::u8(..))).collect();
+    let token: String = (0..16)
+        .map(|_| format!("{:02x}", fastrand::u8(..)))
+        .collect();
     let log = data.path().join("flower.log");
     let output = std::fs::File::create(&log).unwrap();
     let mut command = Command::new(binary);
@@ -147,7 +167,11 @@ export default define({
 });
 "#;
 
-async fn until<T, F: Future<Output = Option<T>>>(label: &str, flower: &Flower, mut probe: impl FnMut() -> F) -> T {
+async fn until<T, F: Future<Output = Option<T>>>(
+    label: &str,
+    flower: &Flower,
+    mut probe: impl FnMut() -> F,
+) -> T {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         if let Some(value) = probe().await {
@@ -159,7 +183,10 @@ async fn until<T, F: Future<Output = Option<T>>>(label: &str, flower: &Flower, m
 }
 
 fn sha(text: &str) -> String {
-    Sha256::digest(text.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -174,7 +201,11 @@ struct Input {
 
 async fn put(client: &FlowerClient, id: &str, text: &str) {
     client
-        .mutate::<_, Value>("document.put", &json!({ "id": id, "text": text }), MutationOptions::retrying())
+        .mutate::<_, Value>(
+            "document.put",
+            &json!({ "id": id, "text": text }),
+            MutationOptions::retrying(),
+        )
         .await
         .unwrap();
 }
@@ -191,17 +222,28 @@ async fn digest_ready(client: &FlowerClient, id: &str, text: &str) -> bool {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workers_against_the_real_server() {
     let (Some(binary), Some(sdk), true) = (binary(), sdk(), node()) else {
-        eprintln!("skipping: needs $FLOWER_BIN (or ~/src/flower/target/release/flower), node and an SDK with esbuild");
+        eprintln!(
+            "skipping: needs $FLOWER_BIN (or ~/src/flower/target/release/flower), node and an SDK with esbuild"
+        );
         return;
     };
     let flower = start(&binary);
-    let admin = FlowerAdmin::builder(&flower.url).admin_token(&flower.token).build().unwrap();
-    until("metrics", &flower, || async { admin.raft_metrics().await.ok() }).await;
+    let admin = FlowerAdmin::builder(&flower.url)
+        .admin_token(&flower.token)
+        .build()
+        .unwrap();
+    until("metrics", &flower, || async {
+        admin.raft_metrics().await.ok()
+    })
+    .await;
     admin
         .initialize(&BTreeMap::from([("1".to_owned(), flower.address.clone())]))
         .await
         .unwrap();
-    admin.wait_for_leader(Duration::from_secs(30), Duration::from_millis(100)).await.unwrap();
+    admin
+        .wait_for_leader(Duration::from_secs(30), Duration::from_millis(100))
+        .await
+        .unwrap();
     let build = tempfile::tempdir().unwrap();
     let entry = build.path().join("entry.ts");
     std::fs::write(&entry, APP.replace("SDK", &sdk.display().to_string())).unwrap();
@@ -227,7 +269,10 @@ async fn workers_against_the_real_server() {
     ids.push("flaky".into());
     for (n, id) in ids.iter().enumerate() {
         let args = json!({ "id": id, "payload": { "n": n } });
-        client.mutate::<_, Value>("jobs.enqueue", &args, MutationOptions::retrying()).await.unwrap();
+        client
+            .mutate::<_, Value>("jobs.enqueue", &args, MutationOptions::retrying())
+            .await
+            .unwrap();
     }
     let events = Arc::new(Mutex::new(Vec::<QueueWorkerEvent>::new()));
     let recorded = events.clone();
@@ -247,14 +292,24 @@ async fn workers_against_the_real_server() {
         ..QueueWorkerOptions::new("jobs", stop.clone())
     }
     .on_event(move |event| recorded.lock().push(event));
-    let worker = tokio::spawn(run_queue_worker(client.clone(), options, |job: Claim<Payload>, _, _| async move {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        if job.id == "flaky" && job.attempt == 1 {
-            return Err(WorkError::new("flaky"));
-        }
-        Ok(json!({ "double": job.payload.n * 2 }))
-    }));
-    let completed = || events.lock().iter().filter(|event| event.kind() == "completed").count();
+    let worker = tokio::spawn(run_queue_worker(
+        client.clone(),
+        options,
+        |job: Claim<Payload>, _, _| async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if job.id == "flaky" && job.attempt == 1 {
+                return Err(WorkError::new("flaky"));
+            }
+            Ok(json!({ "double": job.payload.n * 2 }))
+        },
+    ));
+    let completed = || {
+        events
+            .lock()
+            .iter()
+            .filter(|event| event.kind() == "completed")
+            .count()
+    };
     until("the backlog", &flower, || {
         let done = completed() == ids.len();
         async move { done.then_some(()) }
@@ -262,7 +317,10 @@ async fn workers_against_the_real_server() {
     .await;
     // Idle in line, the worker wakes for new work.
     let args = json!({ "id": "late", "payload": { "n": 100 } });
-    client.mutate::<_, Value>("jobs.enqueue", &args, MutationOptions::retrying()).await.unwrap();
+    client
+        .mutate::<_, Value>("jobs.enqueue", &args, MutationOptions::retrying())
+        .await
+        .unwrap();
     until("the late job", &flower, || {
         let done = completed() == ids.len() + 1;
         async move { done.then_some(()) }
@@ -276,18 +334,30 @@ async fn workers_against_the_real_server() {
             .await
             .unwrap()
             .value;
-        assert_eq!((&job["state"], &job["result"]), (&json!("completed"), &json!({ "double": n * 2 })), "{job}");
-        assert_eq!(job["attempts"], json!(if id == "flaky" { 2 } else { 1 }), "{job}");
+        assert_eq!(
+            (&job["state"], &job["result"]),
+            (&json!("completed"), &json!({ "double": n * 2 })),
+            "{job}"
+        );
+        assert_eq!(
+            job["attempts"],
+            json!(if id == "flaky" { 2 } else { 1 }),
+            "{job}"
+        );
     }
     let events = events.lock().clone();
     assert!(events.iter().any(|event| matches!(event, QueueWorkerEvent::Failed { id, error } if id == "flaky" && error == "flaky")));
     assert!(
-        !events.iter().any(|event| matches!(event.kind(), "lost" | "unreported" | "waiting")),
+        !events
+            .iter()
+            .any(|event| matches!(event.kind(), "lost" | "unreported" | "waiting")),
         "{events:?}"
     );
 
     // Leased reconcile pools keep every digest current.
-    let documents: Vec<(String, String)> = (0..6).map(|n| (format!("doc-{n}"), format!("text {n}"))).collect();
+    let documents: Vec<(String, String)> = (0..6)
+        .map(|n| (format!("doc-{n}"), format!("text {n}")))
+        .collect();
     for (id, text) in &documents {
         put(&client, id, text).await;
     }
@@ -298,20 +368,36 @@ async fn workers_against_the_real_server() {
         lease: true,
         owner: Some("rust-reconciler".into()),
         concurrency: Some(Concurrency::Fixed(3)),
-        ..ReconcileOptions::new("digest", stop.clone()).on_event(move |event| recorded.lock().push(event))
+        ..ReconcileOptions::new("digest", stop.clone())
+            .on_event(move |event| recorded.lock().push(event))
     };
-    let pool = tokio::spawn(reconcile(client.clone(), options, |input: Input, _: ExternalWork<String, Input>, _| async move {
-        Ok(sha(&input.text))
-    }));
+    let pool = tokio::spawn(reconcile(
+        client.clone(),
+        options,
+        |input: Input, _: ExternalWork<String, Input>, _| async move { Ok(sha(&input.text)) },
+    ));
     for (id, text) in &documents {
-        until("a digest", &flower, || digest_ready(&client, id, text).then(|ready| ready.then_some(()))).await;
+        until("a digest", &flower, || {
+            digest_ready(&client, id, text).then(|ready| ready.then_some(()))
+        })
+        .await;
     }
     put(&client, "doc-0", "edited").await;
-    until("the edited digest", &flower, || digest_ready(&client, "doc-0", "edited").then(|ready| ready.then_some(()))).await;
+    until("the edited digest", &flower, || {
+        digest_ready(&client, "doc-0", "edited").then(|ready| ready.then_some(()))
+    })
+    .await;
     stop.cancel();
     pool.await.unwrap().unwrap();
     let published = published.lock().clone();
-    assert_eq!(published.iter().filter(|event| event.kind() == "published").count(), documents.len() + 1, "{published:?}");
+    assert_eq!(
+        published
+            .iter()
+            .filter(|event| event.kind() == "published")
+            .count(),
+        documents.len() + 1,
+        "{published:?}"
+    );
 }
 
 trait Then: Future + Sized {

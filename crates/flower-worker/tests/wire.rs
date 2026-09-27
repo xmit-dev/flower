@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use flower_worker::testing::{FakeClient, FakeFlower, QueueConfig};
 use flower_worker::{
-    Claim, Clock, Concurrency, ExternalWork, JobStop, Load, QueueWorkerEvent, QueueWorkerOptions, ReconcileEvent,
-    ReconcileOptions, WorkError, reconcile, run_queue_worker,
+    Claim, Clock, Concurrency, ExternalWork, JobStop, Load, QueueWorkerEvent, QueueWorkerOptions,
+    ReconcileEvent, ReconcileOptions, WorkError, reconcile, run_queue_worker,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -42,9 +42,14 @@ fn summary(client: &FakeClient) -> Summary {
 }
 
 fn check(name: &str, client: &FakeClient) {
-    let expected = golden().remove(name).unwrap_or_else(|| panic!("no golden for {name}"));
+    let expected = golden()
+        .remove(name)
+        .unwrap_or_else(|| panic!("no golden for {name}"));
     let actual = summary(client);
-    assert_eq!(actual, expected, "{name}: the Rust worker's calls differ from the TS worker's");
+    assert_eq!(
+        actual, expected,
+        "{name}: the Rust worker's calls differ from the TS worker's"
+    );
 }
 
 #[derive(Deserialize)]
@@ -112,7 +117,10 @@ fn options(flower: &FakeFlower, queue: &str, signal: &CancellationToken) -> Queu
 async fn a_scoped_worker_in_line_chaining_claims_into_reports() {
     let flower = scoped();
     for id in ["a", "b", "c"] {
-        flower.mutate("sjobs.enqueue", json!({ "scope": "s1", "id": id, "payload": { "id": id } }));
+        flower.mutate(
+            "sjobs.enqueue",
+            json!({ "scope": "s1", "id": id, "payload": { "id": id } }),
+        );
     }
     let client = flower.client();
     let stop = CancellationToken::new();
@@ -128,15 +136,23 @@ async fn a_scoped_worker_in_line_chaining_claims_into_reports() {
         ..options(&flower, "sjobs", &stop)
     }
     .on_event(record);
-    let done = tokio::spawn(run_queue_worker(client.clone(), options, |job: Claim<Payload>, _, _| async move {
-        match job.payload.id.as_str() {
-            "b" => Err(WorkError::new("boom")),
-            "c" => Ok(Outcome::Tricky(TRICKY)),
-            id => Ok(Outcome::Done { done: id.to_owned() }),
-        }
-    }));
+    let done = tokio::spawn(run_queue_worker(
+        client.clone(),
+        options,
+        |job: Claim<Payload>, _, _| async move {
+            match job.payload.id.as_str() {
+                "b" => Err(WorkError::new("boom")),
+                "c" => Ok(Outcome::Tricky(TRICKY)),
+                id => Ok(Outcome::Done {
+                    done: id.to_owned(),
+                }),
+            }
+        },
+    ));
     until(|| {
-        seen.lock().iter().any(|event| matches!(event, QueueWorkerEvent::Completed { id } if id == "c"))
+        seen.lock()
+            .iter()
+            .any(|event| matches!(event, QueueWorkerEvent::Completed { id } if id == "c"))
             && client.calls().iter().any(|call| call.watch)
     })
     .await;
@@ -159,13 +175,17 @@ async fn short_leases_renewed_and_a_drain_that_releases_the_job_still_running() 
         release: true,
         ..options(&flower, "jobs", &stop)
     };
-    let done = tokio::spawn(run_queue_worker(client.clone(), options, |job: Claim<Payload>, stop: JobStop, _| async move {
-        if job.payload.id == "quick" {
-            return Ok(TRICKY);
-        }
-        stop.stopped().await;
-        Err(WorkError::new(stop.reason().unwrap_or_default()))
-    }));
+    let done = tokio::spawn(run_queue_worker(
+        client.clone(),
+        options,
+        |job: Claim<Payload>, stop: JobStop, _| async move {
+            if job.payload.id == "quick" {
+                return Ok(TRICKY);
+            }
+            stop.stopped().await;
+            Err(WorkError::new(stop.reason().unwrap_or_default()))
+        },
+    ));
     until(|| !client.calls_to("jobs.renew").is_empty()).await;
     stop.cancel();
     done.await.unwrap().unwrap();
@@ -175,7 +195,10 @@ async fn short_leases_renewed_and_a_drain_that_releases_the_job_still_running() 
 #[tokio::test(start_paused = true)]
 async fn a_scoped_worker_outside_any_line_claiming_one_job_per_call() {
     let flower = scoped();
-    flower.mutate("sjobs.enqueue", json!({ "scope": "s3", "id": "x", "payload": { "id": "x" } }));
+    flower.mutate(
+        "sjobs.enqueue",
+        json!({ "scope": "s3", "id": "x", "payload": { "id": "x" } }),
+    );
     let client = flower.client();
     let stop = CancellationToken::new();
     let (seen, record) = events::<QueueWorkerEvent>();
@@ -185,9 +208,14 @@ async fn a_scoped_worker_outside_any_line_claiming_one_job_per_call() {
         ..options(&flower, "sjobs", &stop)
     }
     .on_event(record);
-    let done = tokio::spawn(run_queue_worker(client.clone(), options, |_: Claim<Value>, _, _| async { Ok(()) }));
+    let done = tokio::spawn(run_queue_worker(
+        client.clone(),
+        options,
+        |_: Claim<Value>, _, _| async { Ok(()) },
+    ));
     until(|| {
-        seen.lock().iter().any(|event| event.kind() == "completed") && client.calls().iter().filter(|call| call.watch).count() >= 2
+        seen.lock().iter().any(|event| event.kind() == "completed")
+            && client.calls().iter().filter(|call| call.watch).count() >= 2
     })
     .await;
     stop.cancel();
@@ -201,7 +229,10 @@ struct Input {
 }
 
 fn sha(text: &str) -> String {
-    Sha256::digest(text.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn reactive(documents: &[(&str, &str)]) -> FakeFlower {
@@ -224,11 +255,15 @@ async fn reconcile_one_key() {
     let (seen, record) = events::<ReconcileEvent>();
     let options = ReconcileOptions {
         clock: flower.clock().clone(),
-        ..ReconcileOptions::new("digest", stop.clone()).with_args("one").on_event(record)
+        ..ReconcileOptions::new("digest", stop.clone())
+            .with_args("one")
+            .on_event(record)
     };
-    let done = tokio::spawn(reconcile(client.clone(), options, |input: Input, _: ExternalWork<Value, Input>, _| async move {
-        Ok(sha(&input.text))
-    }));
+    let done = tokio::spawn(reconcile(
+        client.clone(),
+        options,
+        |input: Input, _: ExternalWork<Value, Input>, _| async move { Ok(sha(&input.text)) },
+    ));
     until(|| published(&seen)).await;
     stop.cancel();
     done.await.unwrap().unwrap();
@@ -247,9 +282,11 @@ async fn reconcile_a_sharded_pool() {
         batch: Some(2),
         ..ReconcileOptions::new("digest", stop.clone()).on_event(record)
     };
-    let done = tokio::spawn(reconcile(client.clone(), options, |input: Input, _: ExternalWork<Value, Input>, _| async move {
-        Ok(sha(&input.text))
-    }));
+    let done = tokio::spawn(reconcile(
+        client.clone(),
+        options,
+        |input: Input, _: ExternalWork<Value, Input>, _| async move { Ok(sha(&input.text)) },
+    ));
     until(|| published(&seen)).await;
     stop.cancel();
     done.await.unwrap().unwrap();

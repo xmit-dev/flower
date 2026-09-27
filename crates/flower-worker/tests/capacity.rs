@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flower_worker::{
-    Adaptive, Concurrency, HealthLimits, Limiter, LimitChange, Load, idle_health, process_health,
+    Adaptive, Concurrency, HealthLimits, LimitChange, Limiter, Load, idle_health, process_health,
 };
 use parking_lot::Mutex;
 
@@ -20,7 +20,8 @@ fn adaptive(min: Option<u64>, initial: Option<u64>, max: Option<u64>) -> Concurr
 }
 
 #[test]
-fn a_limit_doubles_while_work_waits_then_grows_by_a_sixteenth_after_a_cut_and_shrinks_when_behind() {
+fn a_limit_doubles_while_work_waits_then_grows_by_a_sixteenth_after_a_cut_and_shrinks_when_behind()
+{
     let now = Arc::new(Mutex::new(0.0_f64));
     let load = Arc::new(Mutex::new(Load::new(0.1, "event loop 9% busy")));
     let health = {
@@ -32,7 +33,12 @@ fn a_limit_doubles_while_work_waits_then_grows_by_a_sixteenth_after_a_cut_and_sh
         move || *now.lock()
     };
     let advance = |ms: f64| *now.lock() += ms;
-    let mut limiter = Limiter::with_now(adaptive(Some(2), Some(4), Some(40)), Arc::new(health), clock).unwrap();
+    let mut limiter = Limiter::with_now(
+        adaptive(Some(2), Some(4), Some(40)),
+        Arc::new(health),
+        clock,
+    )
+    .unwrap();
     assert_eq!(limiter.adjust(), None, "no demand, no growth");
     limiter.want();
     assert_eq!(limiter.adjust(), change(8, "more work is waiting"));
@@ -51,7 +57,11 @@ fn a_limit_doubles_while_work_waits_then_grows_by_a_sixteenth_after_a_cut_and_sh
     advance(1_000.0);
     limiter.want();
     limiter.adjust();
-    assert_eq!(limiter.limit(), 23, "right after a cut the limit grows by a sixteenth, at least one");
+    assert_eq!(
+        limiter.limit(),
+        23,
+        "right after a cut the limit grows by a sixteenth, at least one"
+    );
     advance(5_000.0);
     limiter.want();
     limiter.adjust();
@@ -61,7 +71,11 @@ fn a_limit_doubles_while_work_waits_then_grows_by_a_sixteenth_after_a_cut_and_sh
     advance(29_000.0);
     limiter.want();
     limiter.adjust();
-    assert_eq!(limiter.limit(), 21, "under a provider's limit it settles for longer");
+    assert_eq!(
+        limiter.limit(),
+        21,
+        "under a provider's limit it settles for longer"
+    );
     advance(1_000.0);
     limiter.want();
     limiter.adjust();
@@ -91,15 +105,32 @@ fn a_provider_pushing_back_halves_the_limit_and_pauses_claims_even_a_fixed_ones(
         let now = now.clone();
         move || *now.lock()
     };
-    let mut limiter = Limiter::with_now(adaptive(Some(1), Some(32), Some(64)), idle_health(), clock()).unwrap();
-    assert_eq!(limiter.throttle(5_000, "RATE_LIMITED"), change(16, "RATE_LIMITED"));
+    let mut limiter = Limiter::with_now(
+        adaptive(Some(1), Some(32), Some(64)),
+        idle_health(),
+        clock(),
+    )
+    .unwrap();
+    assert_eq!(
+        limiter.throttle(5_000, "RATE_LIMITED"),
+        change(16, "RATE_LIMITED")
+    );
     assert_eq!(limiter.pause(), 5_000);
-    assert_eq!(limiter.throttle(1_000, "RATE_LIMITED"), None, "a burst of refusals cuts once");
+    assert_eq!(
+        limiter.throttle(1_000, "RATE_LIMITED"),
+        None,
+        "a burst of refusals cuts once"
+    );
     limiter.want();
     assert_eq!(limiter.adjust(), None, "no growth while paused");
     *now.lock() += 5_000.0;
     assert_eq!(limiter.pause(), 0);
-    let mut fixed = Limiter::with_now(Concurrency::Fixed(8), Arc::new(|| Load::new(3.0, "heap 99% full")), clock()).unwrap();
+    let mut fixed = Limiter::with_now(
+        Concurrency::Fixed(8),
+        Arc::new(|| Load::new(3.0, "heap 99% full")),
+        clock(),
+    )
+    .unwrap();
     assert_eq!(fixed.throttle(2_000, "OVERLOADED"), None);
     assert_eq!(fixed.pause(), 2_000);
     fixed.want();
@@ -111,7 +142,12 @@ fn a_provider_pushing_back_halves_the_limit_and_pauses_claims_even_a_fixed_ones(
 fn bounds_default_to_1_to_16_starting_at_min_and_must_be_whole_and_ordered() {
     let limiter = Limiter::new(adaptive(None, None, None), idle_health()).unwrap();
     assert_eq!([limiter.min, limiter.limit(), limiter.max], [1, 1, 16]);
-    assert_eq!(Limiter::new(adaptive(Some(32), None, None), idle_health()).unwrap().max, 32);
+    assert_eq!(
+        Limiter::new(adaptive(Some(32), None, None), idle_health())
+            .unwrap()
+            .max,
+        32
+    );
     // `{ max: 1.5 }` cannot be written: the bounds are whole numbers by type.
     let too_big = 1_u64 << 53; // Number.MAX_SAFE_INTEGER + 1
     for bad in [
@@ -138,7 +174,8 @@ fn matches_percent(reason: &str, prefix: &str, suffix: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn the_processes_health_reads_its_runtime_and_memory_since_the_last_read_and_names_what_loads_it_most() {
+async fn the_processes_health_reads_its_runtime_and_memory_since_the_last_read_and_names_what_loads_it_most()
+ {
     tokio::time::sleep(Duration::from_millis(1)).await;
     let health = process_health(HealthLimits::default()).unwrap();
     // Spin on a runtime worker thread, as the TS spins its event loop.
@@ -151,8 +188,14 @@ async fn the_processes_health_reads_its_runtime_and_memory_since_the_last_read_a
     // A worker thread hands in its busy time when it next parks, not as each task ends.
     tokio::time::sleep(Duration::from_millis(5)).await;
     let busy = flower_worker::Health::load(&health);
-    assert!(busy.load > 0.5, "a spinning runtime reads as busy: {busy:?}");
-    assert!(matches_percent(&busy.reason, "event loop ", "% busy"), "{busy:?}");
+    assert!(
+        busy.load > 0.5,
+        "a spinning runtime reads as busy: {busy:?}"
+    );
+    assert!(
+        matches_percent(&busy.reason, "event loop ", "% busy"),
+        "{busy:?}"
+    );
     let full = process_health(HealthLimits {
         busy: 1e9,
         memory: 1e-9,

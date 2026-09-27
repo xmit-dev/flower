@@ -59,7 +59,9 @@ impl Digest {
     }
 
     fn state(&self, args: &Value) -> Value {
-        let Some((key, _)) = self.desired(args) else { return Value::Null };
+        let Some((key, _)) = self.desired(args) else {
+            return Value::Null;
+        };
         match self.results.get(&row_key(args)) {
             Some((stored, value)) if *stored == key => json!({ "status": "ready", "value": value }),
             _ => json!({ "status": "pending" }),
@@ -68,7 +70,11 @@ impl Digest {
 
     fn pending(&self, args: &Value) -> Option<Value> {
         let (key, input) = self.desired(args)?;
-        if self.results.get(&row_key(args)).is_some_and(|(stored, _)| *stored == key) {
+        if self
+            .results
+            .get(&row_key(args))
+            .is_some_and(|(stored, _)| *stored == key)
+        {
             return None;
         }
         Some(json!({ "args": args, "key": key, "input": input }))
@@ -107,7 +113,11 @@ impl Digest {
 
     /// Stale rows by `since`, then key: the `since` index.
     fn by_since(&self) -> Vec<(String, Stale)> {
-        let mut rows: Vec<(String, Stale)> = self.stale.iter().map(|(key, row)| (key.clone(), row.clone())).collect();
+        let mut rows: Vec<(String, Stale)> = self
+            .stale
+            .iter()
+            .map(|(key, row)| (key.clone(), row.clone()))
+            .collect();
         rows.sort_by(|a, b| (a.1.since, &a.0).cmp(&(b.1.since, &b.0)));
         rows
     }
@@ -115,7 +125,10 @@ impl Digest {
     fn lease_length(&self, value: Option<i64>) -> Result<i64, FakeError> {
         let lease_ms = value.unwrap_or(self.lease_default_ms);
         if lease_ms > self.lease_max_ms {
-            return Err(FakeError::failure("LEASE_TOO_LONG", &format!("Leases last at most {} ms", self.lease_max_ms)));
+            return Err(FakeError::failure(
+                "LEASE_TOO_LONG",
+                &format!("Leases last at most {} ms", self.lease_max_ms),
+            ));
         }
         Ok(lease_ms)
     }
@@ -128,13 +141,21 @@ impl Digest {
         let attempt = int(lease, "attempt", 1, i64::MAX)? as u64;
         let id = row_key(&args);
         let held = self.stale.get(&id).is_some_and(|row| {
-            row.owner.as_deref() == Some(owner) && row.key.as_deref() == Some(key) && row.attempt == Some(attempt) && now < row.since
+            row.owner.as_deref() == Some(owner)
+                && row.key.as_deref() == Some(key)
+                && row.attempt == Some(attempt)
+                && now < row.since
         });
         Ok(held.then_some(id))
     }
 
     /// Run a method by name; `None` when this app has no such method.
-    pub(crate) fn call(&mut self, name: &str, args: &Value, now: i64) -> Option<Result<Value, FakeError>> {
+    pub(crate) fn call(
+        &mut self,
+        name: &str,
+        args: &Value,
+        now: i64,
+    ) -> Option<Result<Value, FakeError>> {
         Some(match name {
             "document.put" => (|| {
                 let args = object(args, &["id", "text"], "args")?;
@@ -161,7 +182,9 @@ impl Digest {
             },
             "digest.pending" => match args {
                 // The external's argument schema: `documentId`, a string of 1 to 256.
-                Value::String(id) if (1..=256).contains(&id.encode_utf16().count()) => Ok(self.pending(args).unwrap_or(Value::Null)),
+                Value::String(id) if (1..=256).contains(&id.encode_utf16().count()) => {
+                    Ok(self.pending(args).unwrap_or(Value::Null))
+                }
                 _ => Err(FakeError::invalid("args must be a string of 1 to 256")),
             },
             "digest.publish" => (|| {
@@ -169,18 +192,27 @@ impl Digest {
                 let args = work.get("args").cloned().unwrap_or(Value::Null);
                 let key = string(work, "key", 0)?;
                 let value = work.get("value").cloned().unwrap_or(Value::Null);
-                let valid = value
-                    .as_str()
-                    .is_some_and(|text| text.len() == 64 && text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
+                let valid = value.as_str().is_some_and(|text| {
+                    text.len() == 64
+                        && text
+                            .bytes()
+                            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+                });
                 if !valid {
                     return Err(FakeError::invalid("value must match /^[0-9a-f]{64}$/"));
                 }
-                let Some((wanted, _)) = self.desired(&args) else { return Ok(json!({ "accepted": false })) };
+                let Some((wanted, _)) = self.desired(&args) else {
+                    return Ok(json!({ "accepted": false }));
+                };
                 if wanted != key {
                     return Ok(json!({ "accepted": false }));
                 }
                 let id = row_key(&args);
-                if self.results.get(&id).is_none_or(|(stored, _)| stored != key) {
+                if self
+                    .results
+                    .get(&id)
+                    .is_none_or(|(stored, _)| stored != key)
+                {
                     self.results.insert(id.clone(), (key.to_owned(), value));
                 }
                 self.stale.remove(&id);
@@ -196,8 +228,14 @@ impl Digest {
                     None => None,
                     Some(shard) => match shard.as_array().map(|pair| (pair.len(), pair)) {
                         Some((2, pair)) => match (pair[0].as_u64(), pair[1].as_u64()) {
-                            (Some(index), Some(count)) if count >= 1 && index < count => Some((index as u32, count as u32)),
-                            _ => return Err(FakeError::invalid("shard must be [index, count] with index < count")),
+                            (Some(index), Some(count)) if count >= 1 && index < count => {
+                                Some((index as u32, count as u32))
+                            }
+                            _ => {
+                                return Err(FakeError::invalid(
+                                    "shard must be [index, count] with index < count",
+                                ));
+                            }
                         },
                         _ => return Err(FakeError::invalid("shard must be [index, count]")),
                     },
@@ -223,14 +261,23 @@ impl Digest {
                 let lease_ms = self.lease_length(optional_int(options, "leaseMs", 1, i64::MAX)?)?;
                 let mut claims = Vec::new();
                 // Every row read is claimed or dropped, so each claim makes progress.
-                let rows: Vec<(String, Stale)> = self.by_since().into_iter().filter(|(_, row)| row.since <= now).take(limit).collect();
+                let rows: Vec<(String, Stale)> = self
+                    .by_since()
+                    .into_iter()
+                    .filter(|(_, row)| row.since <= now)
+                    .take(limit)
+                    .collect();
                 for (id, row) in rows {
                     let Some(found) = self.pending(&row.args) else {
                         self.stale.remove(&id);
                         continue;
                     };
                     let found_key = found["key"].as_str().unwrap_or_default().to_owned();
-                    let attempt = if row.key.as_deref() == Some(&found_key) { row.attempt.unwrap_or(0) } else { 0 } + 1;
+                    let attempt = if row.key.as_deref() == Some(&found_key) {
+                        row.attempt.unwrap_or(0)
+                    } else {
+                        0
+                    } + 1;
                     let expires_at = now + lease_ms;
                     self.stale.insert(
                         id,
@@ -254,7 +301,11 @@ impl Digest {
                 let options = object(args, &["leases", "leaseMs"], "args")?;
                 let leases = match options.get("leases") {
                     Some(Value::Array(leases)) if leases.len() <= 1_024 => leases.clone(),
-                    _ => return Err(FakeError::invalid("leases must be an array of at most 1024")),
+                    _ => {
+                        return Err(FakeError::invalid(
+                            "leases must be an array of at most 1024",
+                        ));
+                    }
                 };
                 let lease_ms = self.lease_length(optional_int(options, "leaseMs", 1, i64::MAX)?)?;
                 let mut expiries = Vec::new();
@@ -273,9 +324,15 @@ impl Digest {
                 Ok(Value::Array(expiries))
             })(),
             "digest.release" => (|| {
-                let lease = object(args, &["args", "key", "owner", "attempt", "delayMs"], "args")?;
+                let lease = object(
+                    args,
+                    &["args", "key", "owner", "attempt", "delayMs"],
+                    "args",
+                )?;
                 let delay_ms = optional_int(lease, "delayMs", 0, i64::MAX)?.unwrap_or(0);
-                let Some(id) = self.held(lease, now)? else { return Ok(json!(false)) };
+                let Some(id) = self.held(lease, now)? else {
+                    return Ok(json!(false));
+                };
                 if let Some(row) = self.stale.get_mut(&id) {
                     row.owner = None;
                     row.since = now + delay_ms;
@@ -289,9 +346,17 @@ impl Digest {
             "digest.stats" => (|| {
                 nullable(args, &[], "args")?;
                 let rows = self.by_since();
-                let oldest = rows.iter().find(|(_, row)| row.since <= now).map(|(_, row)| row.since);
-                let next = rows.iter().find(|(_, row)| row.since > now).map(|(_, row)| row.since);
-                Ok(json!({ "ready": oldest.is_some(), "oldestReadyAt": oldest, "nextAvailableAt": next }))
+                let oldest = rows
+                    .iter()
+                    .find(|(_, row)| row.since <= now)
+                    .map(|(_, row)| row.since);
+                let next = rows
+                    .iter()
+                    .find(|(_, row)| row.since > now)
+                    .map(|(_, row)| row.since);
+                Ok(
+                    json!({ "ready": oldest.is_some(), "oldestReadyAt": oldest, "nextAvailableAt": next }),
+                )
             })(),
             _ => return None,
         })

@@ -184,7 +184,11 @@ impl World {
                 return value;
             }
         }
-        Err(FakeError::http(404, "METHOD_NOT_FOUND", &format!("No method {name}")))
+        Err(FakeError::http(
+            404,
+            "METHOD_NOT_FOUND",
+            &format!("No method {name}"),
+        ))
     }
 }
 
@@ -233,7 +237,10 @@ impl FakeFlower {
     }
 
     pub fn add_queue(&self, prefix: &str, config: QueueConfig) {
-        self.world.lock().queues.insert(prefix.to_owned(), FakeQueue::new(config));
+        self.world
+            .lock()
+            .queues
+            .insert(prefix.to_owned(), FakeQueue::new(config));
     }
 
     /// Leases carry this history and reports must present it (retry retention initialized).
@@ -383,7 +390,10 @@ impl FakeClient {
     }
 
     /// Replace an attempt's answer once Flower ran it (a lost reply, say).
-    pub fn after(self, hook: impl Fn(&Call, &Result<Value, FakeError>) -> Option<FakeError> + Send + Sync + 'static) -> Self {
+    pub fn after(
+        self,
+        hook: impl Fn(&Call, &Result<Value, FakeError>) -> Option<FakeError> + Send + Sync + 'static,
+    ) -> Self {
         *self.inner.after.lock() = Some(Arc::new(hook));
         self
     }
@@ -415,10 +425,11 @@ impl FakeClient {
         if let Some(error) = self.record(call) {
             return Err(error);
         }
-        let result = self
-            .inner
-            .flower
-            .mutate_once(&call.name, args, call.request_id.as_deref().unwrap_or_default());
+        let result = self.inner.flower.mutate_once(
+            &call.name,
+            args,
+            call.request_id.as_deref().unwrap_or_default(),
+        );
         let after = self.inner.after.lock().clone();
         match after.and_then(|hook| hook(call, &result)) {
             Some(error) => Err(error),
@@ -430,8 +441,16 @@ impl FakeClient {
 impl QueueClient for FakeClient {
     type Error = FakeError;
 
-    async fn mutate(&self, name: &str, args: Box<RawValue>, retry: RetryPolicy) -> Result<Value, FakeError> {
-        let request_id = format!("request-{}", self.inner.flower.requests.fetch_add(1, Ordering::Relaxed) + 1);
+    async fn mutate(
+        &self,
+        name: &str,
+        args: Box<RawValue>,
+        retry: RetryPolicy,
+    ) -> Result<Value, FakeError> {
+        let request_id = format!(
+            "request-{}",
+            self.inner.flower.requests.fetch_add(1, Ordering::Relaxed) + 1
+        );
         let call = Call {
             name: name.to_owned(),
             args: args.get().to_owned(),
@@ -453,10 +472,9 @@ impl QueueClient for FakeClient {
                         return Err(error);
                     }
                     let delay = backoff(attempt, initial, max);
-                    if retry
-                        .until
-                        .is_some_and(|until| self.inner.flower.clock.now_ms() + delay as i64 >= until)
-                    {
+                    if retry.until.is_some_and(|until| {
+                        self.inner.flower.clock.now_ms() + delay as i64 >= until
+                    }) {
                         return Err(error);
                     }
                     tokio::time::sleep(Duration::from_millis(delay)).await;
@@ -466,7 +484,12 @@ impl QueueClient for FakeClient {
         }
     }
 
-    async fn wait_until(&self, name: &str, args: Box<RawValue>, predicate: Predicate) -> Result<Value, FakeError> {
+    async fn wait_until(
+        &self,
+        name: &str,
+        args: Box<RawValue>,
+        predicate: Predicate,
+    ) -> Result<Value, FakeError> {
         let call = Call {
             name: name.to_owned(),
             args: args.get().to_owned(),
@@ -520,18 +543,28 @@ impl QueueClient for FakeClient {
 
 pub(crate) type Obj = Map<String, Value>;
 
-pub(crate) fn object<'a>(args: &'a Value, allowed: &[&str], label: &str) -> Result<&'a Obj, FakeError> {
+pub(crate) fn object<'a>(
+    args: &'a Value,
+    allowed: &[&str],
+    label: &str,
+) -> Result<&'a Obj, FakeError> {
     let Some(object) = args.as_object() else {
         return Err(FakeError::invalid(format!("{label} must be an object")));
     };
     if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(FakeError::invalid(format!("{label} has unexpected property {key:?}")));
+        return Err(FakeError::invalid(format!(
+            "{label} has unexpected property {key:?}"
+        )));
     }
     Ok(object)
 }
 
 /// `null`, or a strict object.
-pub(crate) fn nullable<'a>(args: &'a Value, allowed: &[&str], label: &str) -> Result<Option<&'a Obj>, FakeError> {
+pub(crate) fn nullable<'a>(
+    args: &'a Value,
+    allowed: &[&str],
+    label: &str,
+) -> Result<Option<&'a Obj>, FakeError> {
     if args.is_null() {
         Ok(None)
     } else {
@@ -542,23 +575,39 @@ pub(crate) fn nullable<'a>(args: &'a Value, allowed: &[&str], label: &str) -> Re
 pub(crate) fn string<'a>(object: &'a Obj, key: &str, min: usize) -> Result<&'a str, FakeError> {
     match object.get(key) {
         Some(Value::String(text)) if text.encode_utf16().count() >= min => Ok(text),
-        Some(_) => Err(FakeError::invalid(format!("{key} must be a string of at least {min}"))),
+        Some(_) => Err(FakeError::invalid(format!(
+            "{key} must be a string of at least {min}"
+        ))),
         None => Err(FakeError::invalid(format!("is missing {key:?}"))),
     }
 }
 
-pub(crate) fn optional_int(object: &Obj, key: &str, min: i64, max: i64) -> Result<Option<i64>, FakeError> {
+pub(crate) fn optional_int(
+    object: &Obj,
+    key: &str,
+    min: i64,
+    max: i64,
+) -> Result<Option<i64>, FakeError> {
     match object.get(key) {
         None => Ok(None),
         Some(value) => match value.as_i64() {
-            Some(n) if n >= min && n <= max && n.unsigned_abs() <= crate::capacity::MAX_SAFE_INTEGER => Ok(Some(n)),
-            _ => Err(FakeError::invalid(format!("{key} must be an integer from {min} to {max}"))),
+            Some(n)
+                if n >= min
+                    && n <= max
+                    && n.unsigned_abs() <= crate::capacity::MAX_SAFE_INTEGER =>
+            {
+                Ok(Some(n))
+            }
+            _ => Err(FakeError::invalid(format!(
+                "{key} must be an integer from {min} to {max}"
+            ))),
         },
     }
 }
 
 pub(crate) fn int(object: &Obj, key: &str, min: i64, max: i64) -> Result<i64, FakeError> {
-    optional_int(object, key, min, max)?.ok_or_else(|| FakeError::invalid(format!("is missing {key:?}")))
+    optional_int(object, key, min, max)?
+        .ok_or_else(|| FakeError::invalid(format!("is missing {key:?}")))
 }
 
 pub(crate) fn optional_bool(object: &Obj, key: &str) -> Result<Option<bool>, FakeError> {

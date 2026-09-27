@@ -13,7 +13,10 @@ pub(crate) fn raw<T: Serialize + ?Sized>(value: &T) -> Box<RawValue> {
 /// bytes a worker sends equal the TS SDK's. Keys keep the order they serialize in.
 pub fn to_js_raw<T: Serialize + ?Sized>(value: &T) -> Result<Box<RawValue>, serde_json::Error> {
     let mut out = Vec::with_capacity(128);
-    value.serialize(&mut serde_json::Serializer::with_formatter(&mut out, JsFormatter))?;
+    value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut out,
+        JsFormatter,
+    ))?;
     let text = String::from_utf8(out).expect("serde_json writes UTF-8");
     RawValue::from_string(text)
 }
@@ -22,7 +25,11 @@ pub fn to_js_raw<T: Serialize + ?Sized>(value: &T) -> Result<Box<RawValue>, serd
 struct JsFormatter;
 
 impl serde_json::ser::Formatter for JsFormatter {
-    fn write_f64<W: ?Sized + std::io::Write>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()> {
+    fn write_f64<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: f64,
+    ) -> std::io::Result<()> {
         if !value.is_finite() {
             return writer.write_all(b"null");
         }
@@ -32,7 +39,11 @@ impl serde_json::ser::Formatter for JsFormatter {
         writer.write_all(ryu_js::Buffer::new().format_finite(value).as_bytes())
     }
 
-    fn write_f32<W: ?Sized + std::io::Write>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()> {
+    fn write_f32<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: f32,
+    ) -> std::io::Result<()> {
         if !value.is_finite() {
             return writer.write_all(b"null");
         }
@@ -87,11 +98,17 @@ struct Check {
 
 impl Check {
     fn at(self) -> Result<(), Invalid> {
-        if self.depth > 128 { Err(Invalid(NESTING.into())) } else { Ok(()) }
+        if self.depth > 128 {
+            Err(Invalid(NESTING.into()))
+        } else {
+            Ok(())
+        }
     }
 
     fn child(self) -> Check {
-        Check { depth: self.depth + 1 }
+        Check {
+            depth: self.depth + 1,
+        }
     }
 
     /// An enum variant's content sits inside `{"Variant": …}`.
@@ -152,7 +169,11 @@ impl ser::Serializer for Check {
     }
     fn serialize_f64(self, value: f64) -> Result<(), Invalid> {
         self.at()?;
-        if value.is_finite() { Ok(()) } else { Err(Invalid(FINITE.into())) }
+        if value.is_finite() {
+            Ok(())
+        } else {
+            Err(Invalid(FINITE.into()))
+        }
     }
     fn serialize_char(self, _: char) -> Result<(), Invalid> {
         self.at()
@@ -177,10 +198,19 @@ impl ser::Serializer for Check {
     fn serialize_unit_struct(self, _: &'static str) -> Result<(), Invalid> {
         self.at()
     }
-    fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<(), Invalid> {
+    fn serialize_unit_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+    ) -> Result<(), Invalid> {
         self.at()
     }
-    fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _: &'static str, value: &T) -> Result<(), Invalid> {
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        value: &T,
+    ) -> Result<(), Invalid> {
         value.serialize(self)
     }
     fn serialize_newtype_variant<T: Serialize + ?Sized>(
@@ -205,7 +235,13 @@ impl ser::Serializer for Check {
         self.at()?;
         Ok(self)
     }
-    fn serialize_tuple_variant(self, _: &'static str, _: u32, _: &'static str, _: usize) -> Result<Check, Invalid> {
+    fn serialize_tuple_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Check, Invalid> {
         self.variant()
     }
     fn serialize_map(self, _: Option<usize>) -> Result<Check, Invalid> {
@@ -216,7 +252,13 @@ impl ser::Serializer for Check {
         self.at()?;
         Ok(self)
     }
-    fn serialize_struct_variant(self, _: &'static str, _: u32, _: &'static str, _: usize) -> Result<Check, Invalid> {
+    fn serialize_struct_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Check, Invalid> {
         self.variant()
     }
 }
@@ -282,7 +324,11 @@ impl ser::SerializeMap for Check {
 impl ser::SerializeStruct for Check {
     type Ok = ();
     type Error = Invalid;
-    fn serialize_field<T: Serialize + ?Sized>(&mut self, _: &'static str, value: &T) -> Result<(), Invalid> {
+    fn serialize_field<T: Serialize + ?Sized>(
+        &mut self,
+        _: &'static str,
+        value: &T,
+    ) -> Result<(), Invalid> {
         value.serialize(self.child())
     }
     fn end(self) -> Result<(), Invalid> {
@@ -293,14 +339,17 @@ impl ser::SerializeStruct for Check {
 impl ser::SerializeStructVariant for Check {
     type Ok = ();
     type Error = Invalid;
-    fn serialize_field<T: Serialize + ?Sized>(&mut self, _: &'static str, value: &T) -> Result<(), Invalid> {
+    fn serialize_field<T: Serialize + ?Sized>(
+        &mut self,
+        _: &'static str,
+        value: &T,
+    ) -> Result<(), Invalid> {
         value.serialize(self.child())
     }
     fn end(self) -> Result<(), Invalid> {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -314,18 +363,41 @@ mod tests {
             zeta: u32,
             alpha: &'static str,
         }
-        let raw = storable(&Outcome { zeta: 1, alpha: "a" }).unwrap();
+        let raw = storable(&Outcome {
+            zeta: 1,
+            alpha: "a",
+        })
+        .unwrap();
         assert_eq!(raw.get(), r#"{"zeta":1,"alpha":"a"}"#);
-        assert_eq!(storable(&json!({"b": [1, 2.5, null]})).unwrap().get(), r#"{"b":[1,2.5,null]}"#);
+        assert_eq!(
+            storable(&json!({"b": [1, 2.5, null]})).unwrap().get(),
+            r#"{"b":[1,2.5,null]}"#
+        );
     }
 
     #[test]
     fn numbers_are_spelled_as_json_stringify_spells_them() {
-        let numbers = [1e21, 1e-7, -0.0, 0.1 + 0.2, 123456789012345680000.0, 5e-324, f64::MAX, 100.0, 1.5, 1e20, 0.000001, -2.5e-8];
+        let numbers = [
+            1e21,
+            1e-7,
+            -0.0,
+            0.1 + 0.2,
+            123456789012345680000.0,
+            5e-324,
+            f64::MAX,
+            100.0,
+            1.5,
+            1e20,
+            0.000001,
+            -2.5e-8,
+        ];
         // JSON.stringify of the same array, from Node.
         let expected = "[1e+21,1e-7,0,0.30000000000000004,123456789012345680000,5e-324,1.7976931348623157e+308,100,1.5,100000000000000000000,0.000001,-2.5e-8]";
         assert_eq!(raw(&numbers).get(), expected);
-        assert_eq!(raw(&json!({"n": 1e21, "i": -3, "u": u64::MAX})).get(), r#"{"i":-3,"n":1e+21,"u":18446744073709551615}"#);
+        assert_eq!(
+            raw(&json!({"n": 1e21, "i": -3, "u": u64::MAX})).get(),
+            r#"{"i":-3,"n":1e+21,"u":18446744073709551615}"#
+        );
     }
 
     #[test]
@@ -344,6 +416,9 @@ mod tests {
         }
         assert!(storable(&deep).is_ok(), "a value at depth 128 is stored");
         let deeper = json!([deep]);
-        assert_eq!(storable(&deeper).unwrap_err(), "The result cannot be stored: Flower JSON nesting exceeds 128");
+        assert_eq!(
+            storable(&deeper).unwrap_err(),
+            "The result cannot be stored: Flower JSON nesting exceeds 128"
+        );
     }
 }

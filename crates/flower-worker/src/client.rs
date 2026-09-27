@@ -89,7 +89,8 @@ pub fn non_empty_array(value: &Value) -> bool {
 /// `backoff(attempt, initialDelayMs, maxDelayMs)`: jittered exponential backoff between half and
 /// all of `initial·2^attempt`, capped (equal jitter).
 pub fn backoff(attempt: u32, initial_delay_ms: u64, max_delay_ms: u64) -> u64 {
-    let ceiling = (initial_delay_ms as f64 * 2f64.powi(attempt.min(30) as i32)).min(max_delay_ms as f64);
+    let ceiling =
+        (initial_delay_ms as f64 * 2f64.powi(attempt.min(30) as i32)).min(max_delay_ms as f64);
     js_round(ceiling / 2.0 + fastrand::f64() * ceiling / 2.0) as u64
 }
 

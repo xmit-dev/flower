@@ -24,8 +24,12 @@ use tokio::sync::Notify;
 use tokio::time::{MissedTickBehavior, interval_at, sleep};
 use tokio_util::sync::CancellationToken;
 
-use crate::capacity::{Concurrency, Health, Limiter, MAX_SAFE_INTEGER, default_process_health, idle_health};
-use crate::client::{ClientError, QueueClient, RetryPolicy, default_backoff, non_empty_array, truthy};
+use crate::capacity::{
+    Concurrency, Health, Limiter, MAX_SAFE_INTEGER, default_process_health, idle_health,
+};
+use crate::client::{
+    ClientError, QueueClient, RetryPolicy, default_backoff, non_empty_array, truthy,
+};
 use crate::clock::Clock;
 use crate::json::{checked_raw, raw};
 use crate::queue::EventHandler;
@@ -120,7 +124,11 @@ struct Item {
 }
 
 /// `(input, work, stop)` → the value to publish, type-erased.
-type ErasedCompute = Arc<dyn Fn(Value, Item, JobStop) -> BoxFuture<'static, Result<Box<RawValue>, Computed>> + Send + Sync>;
+type ErasedCompute = Arc<
+    dyn Fn(Value, Item, JobStop) -> BoxFuture<'static, Result<Box<RawValue>, Computed>>
+        + Send
+        + Sync,
+>;
 
 /// A computation that did not produce a publishable value.
 enum Computed {
@@ -134,7 +142,11 @@ enum Computed {
 /// through the pool's `next`, or with `lease`, through leases shared by every process.
 ///
 /// `compute(input, work, stop)` may run more than once for the same input.
-pub async fn reconcile<C, A, I, R, F, Fut>(client: C, options: ReconcileOptions, compute: F) -> Result<(), WorkerError<C::Error>>
+pub async fn reconcile<C, A, I, R, F, Fut>(
+    client: C,
+    options: ReconcileOptions,
+    compute: F,
+) -> Result<(), WorkerError<C::Error>>
 where
     C: QueueClient,
     A: DeserializeOwned + Send + 'static,
@@ -173,7 +185,7 @@ where
     let invalid = |message: &str| Err(WorkerError::Invalid(message.to_owned()));
     let concurrency = options.concurrency.unwrap_or(Concurrency::Fixed(1));
     if let Concurrency::Fixed(n) = concurrency
-        && (n > MAX_SAFE_INTEGER || n < 1)
+        && !(1..=MAX_SAFE_INTEGER).contains(&n)
     {
         return invalid("concurrency must be a positive safe integer");
     }
@@ -181,7 +193,9 @@ where
         if options.args.is_some() || options.shard.is_some() {
             return invalid("Lease mode spreads the whole pool: omit args and shard");
         }
-        return LeasedPool::new(client, options, concurrency, compute)?.run().await;
+        return LeasedPool::new(client, options, concurrency, compute)?
+            .run()
+            .await;
     }
     let Concurrency::Fixed(concurrency) = concurrency else {
         return invalid("Adaptive concurrency needs lease: true");
@@ -258,15 +272,26 @@ impl<C: QueueClient> Unleased<C> {
             failures.insert(key.to_owned(), count);
             count
         };
-        (self.on_event)(ReconcileEvent::Failed { key: key.to_owned(), error });
+        (self.on_event)(ReconcileEvent::Failed {
+            key: key.to_owned(),
+            error,
+        });
         pause(default_backoff(count - 1), stop).await;
     }
 
-    async fn settle(&self, work: Item, stop: &CancellationToken) -> Result<(), WorkerFail<C::Error>> {
-        let computed = AssertUnwindSafe((self.compute)(work.input.clone(), work.clone(), JobStop::child_of(stop)))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|panic| Err(Computed::Failed(panic_message(&*panic))));
+    async fn settle(
+        &self,
+        work: Item,
+        stop: &CancellationToken,
+    ) -> Result<(), WorkerFail<C::Error>> {
+        let computed = AssertUnwindSafe((self.compute)(
+            work.input.clone(),
+            work.clone(),
+            JobStop::child_of(stop),
+        ))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|panic| Err(Computed::Failed(panic_message(&*panic))));
         let value = match computed {
             Ok(value) => value,
             Err(Computed::Failed(error)) => {
@@ -378,7 +403,9 @@ impl<C: QueueClient> Unleased<C> {
                     if !error.is_transient() {
                         return Err(WorkerError::Client(error));
                     }
-                    (self.on_event)(ReconcileEvent::Waiting { error: error.describe() });
+                    (self.on_event)(ReconcileEvent::Waiting {
+                        error: error.describe(),
+                    });
                     pause(default_backoff(attempt), signal).await;
                     attempt += 1;
                 }
@@ -504,23 +531,32 @@ struct LeasedPool<C: QueueClient> {
 }
 
 impl<C: QueueClient> LeasedPool<C> {
-    fn new(client: C, options: ReconcileOptions, concurrency: Concurrency, compute: ErasedCompute) -> Result<Arc<Self>, WorkerError<C::Error>> {
+    fn new(
+        client: C,
+        options: ReconcileOptions,
+        concurrency: Concurrency,
+        compute: ErasedCompute,
+    ) -> Result<Arc<Self>, WorkerError<C::Error>> {
         let invalid = |message: &str| WorkerError::Invalid(message.to_owned());
-        let owner = options.owner.clone().unwrap_or_else(|| format!("reconciler-{}", new_uuid()));
+        let owner = options
+            .owner
+            .clone()
+            .unwrap_or_else(|| format!("reconciler-{}", new_uuid()));
         let lease_ms = options.lease_ms.unwrap_or(30_000);
         let margin_ms = options.margin_ms.unwrap_or(lease_ms / 5);
         let batch = options.batch.unwrap_or(16);
         if lease_ms > MAX_SAFE_INTEGER || margin_ms > MAX_SAFE_INTEGER || lease_ms <= margin_ms {
             return Err(invalid("leaseMs must exceed marginMs"));
         }
-        if batch > MAX_SAFE_INTEGER || batch < 1 {
+        if !(1..=MAX_SAFE_INTEGER).contains(&batch) {
             return Err(invalid("batch must be a positive safe integer"));
         }
         let health = options.health.clone().unwrap_or_else(|| match concurrency {
             Concurrency::Fixed(_) => idle_health(),
             Concurrency::Adaptive(_) => default_process_health(),
         });
-        let limiter = Limiter::with_clock(concurrency, health, &options.clock).map_err(WorkerError::Invalid)?;
+        let limiter = Limiter::with_clock(concurrency, health, &options.clock)
+            .map_err(WorkerError::Invalid)?;
         if limiter.max > 1024 {
             return Err(invalid("Lease mode runs at most 1024 computations at once"));
         }
@@ -563,7 +599,12 @@ impl<C: QueueClient> LeasedPool<C> {
     }
 
     /// `send(method, args, until, abort?)`.
-    fn send(&self, method: &str, args: Box<RawValue>, until: i64) -> impl Future<Output = Result<Value, C::Error>> + Send + 'static {
+    fn send(
+        &self,
+        method: &str,
+        args: Box<RawValue>,
+        until: i64,
+    ) -> impl Future<Output = Result<Value, C::Error>> + Send + 'static {
         let client = self.client.clone();
         let name = format!("{}.{}", self.external, method);
         let retry = RetryPolicy {
@@ -637,7 +678,11 @@ impl<C: QueueClient> LeasedPool<C> {
                     Ready::Shown
                 }
                 failed => {
-                    if state.ready.as_ref().is_some_and(|ready| Arc::ptr_eq(ready, &watched)) {
+                    if state
+                        .ready
+                        .as_ref()
+                        .is_some_and(|ready| Arc::ptr_eq(ready, &watched))
+                    {
                         state.ready = None;
                     }
                     match failed {
@@ -657,7 +702,9 @@ impl<C: QueueClient> LeasedPool<C> {
         let sent = {
             let guard = self.enter();
             let state = guard.borrow();
-            let Some(entry) = state.held.get(&key) else { return };
+            let Some(entry) = state.held.get(&key) else {
+                return;
+            };
             let until = if self.signal.is_cancelled() {
                 self.now()
             } else {
@@ -669,7 +716,14 @@ impl<C: QueueClient> LeasedPool<C> {
         let _ = sent.await;
     }
 
-    fn start(self: &Arc<Self>, guard: &Guard<'_, C::Error>, item: Item, owner: String, attempt: u64, sent_at: i64) {
+    fn start(
+        self: &Arc<Self>,
+        guard: &Guard<'_, C::Error>,
+        item: Item,
+        owner: String,
+        attempt: u64,
+        sent_at: i64,
+    ) {
         let key = {
             let mut state = guard.borrow_mut();
             let key = state.next_key;
@@ -683,7 +737,11 @@ impl<C: QueueClient> LeasedPool<C> {
                 deadline: 0,
                 timer: CancellationToken::new(),
             };
-            self.arm(key, &mut entry, sent_at + (self.lease_ms - self.margin_ms) as i64);
+            self.arm(
+                key,
+                &mut entry,
+                sent_at + (self.lease_ms - self.margin_ms) as i64,
+            );
             state.held.insert(key, entry);
             key
         };
@@ -715,15 +773,26 @@ impl<C: QueueClient> LeasedPool<C> {
             let guard = self.enter();
             let state = guard.borrow();
             let entry = &state.held[&key];
-            (entry.item.clone(), entry.attempt, entry.stop.clone(), entry.lost.clone())
+            (
+                entry.item.clone(),
+                entry.attempt,
+                entry.stop.clone(),
+                entry.lost.clone(),
+            )
         };
-        let computed = AssertUnwindSafe((self.compute)(item.input.clone(), item.clone(), stop.clone()))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|panic| Err(Computed::Failed(panic_message(&*panic))));
+        let computed = AssertUnwindSafe((self.compute)(
+            item.input.clone(),
+            item.clone(),
+            stop.clone(),
+        ))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|panic| Err(Computed::Failed(panic_message(&*panic))));
         let value = match computed {
             Ok(value) if !stop.is_stopped() => value,
-            Err(Computed::Invalid(message)) if !stop.is_stopped() => return Err(WorkerError::Invalid(message)),
+            Err(Computed::Invalid(message)) if !stop.is_stopped() => {
+                return Err(WorkerError::Invalid(message));
+            }
             other => {
                 if lost.is_stopped() {
                     self.emit(ReconcileEvent::Lost { key: item.key });
@@ -739,10 +808,14 @@ impl<C: QueueClient> LeasedPool<C> {
                 };
                 {
                     let _guard = self.enter();
-                    self.emit(ReconcileEvent::Failed { key: item.key, error });
+                    self.emit(ReconcileEvent::Failed {
+                        key: item.key,
+                        error,
+                    });
                 }
                 // The delay applies to every process, and attempt counts across them.
-                self.release(key, default_backoff(attempt.saturating_sub(1) as u32)).await;
+                self.release(key, default_backoff(attempt.saturating_sub(1) as u32))
+                    .await;
                 return Ok(());
             }
         };
@@ -772,13 +845,16 @@ impl<C: QueueClient> LeasedPool<C> {
                         error: error.describe(),
                     });
                 }
-                self.release(key, default_backoff(attempt.saturating_sub(1) as u32)).await;
+                self.release(key, default_backoff(attempt.saturating_sub(1) as u32))
+                    .await;
                 return Ok(());
             }
             // Once the lease runs out, another process computes the key again.
             Some(Err(error)) if error.is_transient() => {
                 let _guard = self.enter();
-                self.emit(ReconcileEvent::Waiting { error: error.describe() });
+                self.emit(ReconcileEvent::Waiting {
+                    error: error.describe(),
+                });
                 return Ok(());
             }
             Some(Err(error)) => return Err(WorkerError::Client(error)),
@@ -787,7 +863,10 @@ impl<C: QueueClient> LeasedPool<C> {
         let accepted = accepted(&receipt);
         {
             let _guard = self.enter();
-            self.emit(ReconcileEvent::Published { key: item.key, accepted });
+            self.emit(ReconcileEvent::Published {
+                key: item.key,
+                accepted,
+            });
         }
         // A rejected result was computed for an older input: hand the key back for the current one.
         if !accepted {
@@ -816,8 +895,16 @@ impl<C: QueueClient> LeasedPool<C> {
                     leases: state.held.values().map(|entry| entry.lease(None)).collect(),
                     lease_ms: self.lease_ms,
                 });
-                let until = state.held.values().map(|entry| entry.deadline).min().unwrap_or(renewed_at);
-                ((state.held.keys().copied().collect::<Vec<_>>(), renewed_at), self.send("renew", args, until))
+                let until = state
+                    .held
+                    .values()
+                    .map(|entry| entry.deadline)
+                    .min()
+                    .unwrap_or(renewed_at);
+                (
+                    (state.held.keys().copied().collect::<Vec<_>>(), renewed_at),
+                    self.send("renew", args, until),
+                )
             };
             let pool = self.clone();
             tokio::spawn(async move {
@@ -831,14 +918,20 @@ impl<C: QueueClient> LeasedPool<C> {
                 let guard = pool.enter();
                 let mut state = guard.borrow_mut();
                 for (index, key) in keys.into_iter().enumerate() {
-                    let Some(entry) = state.held.get_mut(&key) else { continue };
+                    let Some(entry) = state.held.get_mut(&key) else {
+                        continue;
+                    };
                     if entry.lost.is_stopped() {
                         continue;
                     }
                     if expiries.get(index).is_some_and(Value::is_null) {
                         entry.lose("The lease was lost");
                     } else {
-                        pool.arm(key, entry, renewed_at + (pool.lease_ms - pool.margin_ms) as i64);
+                        pool.arm(
+                            key,
+                            entry,
+                            renewed_at + (pool.lease_ms - pool.margin_ms) as i64,
+                        );
                     }
                 }
             });
@@ -857,7 +950,10 @@ impl<C: QueueClient> LeasedPool<C> {
             let guard = self.enter();
             let (full, shown) = {
                 let state = guard.borrow();
-                (state.running.len() as u64 >= state.limiter.limit(), state.shown)
+                (
+                    state.running.len() as u64 >= state.limiter.limit(),
+                    state.shown,
+                )
             };
             if full {
                 if shown {
@@ -971,7 +1067,9 @@ impl<C: QueueClient> LeasedPool<C> {
             }
             {
                 let _guard = self.enter();
-                self.emit(ReconcileEvent::Waiting { error: error.describe() });
+                self.emit(ReconcileEvent::Waiting {
+                    error: error.describe(),
+                });
             }
             pause(default_backoff(attempt), &signal).await;
             attempt += 1;
@@ -1002,7 +1100,10 @@ fn claims(value: Value) -> Result<Vec<(Item, String, u64)>, String> {
     values
         .into_iter()
         .map(|value| {
-            let owner = value.get("owner").and_then(Value::as_str).map(str::to_owned);
+            let owner = value
+                .get("owner")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             let attempt = value.get("attempt").and_then(Value::as_u64);
             let item = item(value)?;
             match (owner, attempt) {

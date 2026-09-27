@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
-use super::{FakeError, Obj, canonical_json, int, nullable, object, optional_bool, optional_int, string};
+use super::{
+    FakeError, Obj, canonical_json, int, nullable, object, optional_bool, optional_int, string,
+};
 
 /// Automatic retries after fail() or an expired lease (`QueueRetry`).
 #[derive(Clone, Copy, Debug)]
@@ -115,7 +117,8 @@ impl Job {
 }
 
 fn lease_json(lease: &Lease) -> Value {
-    let mut value = json!({ "owner": lease.owner, "token": lease.token, "expiresAt": lease.expires_at });
+    let mut value =
+        json!({ "owner": lease.owner, "token": lease.token, "expiresAt": lease.expires_at });
     if let Some(history) = &lease.history {
         value["history"] = history.clone();
     }
@@ -144,7 +147,10 @@ pub struct FakeQueue {
 }
 
 fn lease_lost() -> FakeError {
-    FakeError::failure("LEASE_LOST", "Job lease is missing, expired, or held by another claim")
+    FakeError::failure(
+        "LEASE_LOST",
+        "Job lease is missing, expired, or held by another claim",
+    )
 }
 
 impl FakeQueue {
@@ -162,16 +168,25 @@ impl FakeQueue {
     fn backoff(&self, attempts: u64) -> i64 {
         let retry = self.config.retry.expect("backoff needs a retry policy");
         let exponent = (attempts as i64 - 1).clamp(0, 30) as u32;
-        retry.max_delay_ms.min(retry.initial_delay_ms.saturating_mul(1 << exponent))
+        retry
+            .max_delay_ms
+            .min(retry.initial_delay_ms.saturating_mul(1 << exponent))
     }
 
     /// `effective(job, now)`: a lease that ran out leaves its job pending, or failed on its last attempt.
     fn effective(&self, job: &Job, now: i64) -> Job {
-        let Some(lease) = job.lease.as_ref().filter(|lease| job.state == "leased" && now >= lease.expires_at) else {
+        let Some(lease) = job
+            .lease
+            .as_ref()
+            .filter(|lease| job.state == "leased" && now >= lease.expires_at)
+        else {
             return job.clone();
         };
         let expired_at = lease.expires_at;
-        let exhausted = self.config.retry.is_some_and(|retry| job.attempts >= retry.max_attempts);
+        let exhausted = self
+            .config
+            .retry
+            .is_some_and(|retry| job.attempts >= retry.max_attempts);
         Job {
             state: if exhausted { "failed" } else { "pending" },
             lease: None,
@@ -186,7 +201,9 @@ impl FakeQueue {
     fn lease_length(&self, value: Option<i64>) -> Result<i64, FakeError> {
         let lease_ms = value.unwrap_or(self.config.lease_default_ms);
         if lease_ms < 1 {
-            return Err(FakeError::invalid("Lease duration must be a safe integer at least 1"));
+            return Err(FakeError::invalid(
+                "Lease duration must be a safe integer at least 1",
+            ));
         }
         if lease_ms > self.config.lease_max_ms {
             return Err(FakeError::failure(
@@ -208,7 +225,13 @@ impl FakeQueue {
     fn expired_pending(&self, scope: &str, now: i64) -> Vec<Job> {
         let mut jobs: Vec<Job> = self
             .scoped(scope)
-            .filter(|job| job.state == "leased" && job.lease.as_ref().is_some_and(|lease| lease.expires_at <= now))
+            .filter(|job| {
+                job.state == "leased"
+                    && job
+                        .lease
+                        .as_ref()
+                        .is_some_and(|lease| lease.expires_at <= now)
+            })
             .map(|job| self.effective(job, now))
             .filter(|job| job.state == "pending")
             .collect();
@@ -224,7 +247,11 @@ impl FakeQueue {
             .filter_map(|job| job.available_at)
             .filter(|at| *at <= now)
             .min();
-        let expired = self.expired_pending(scope, now).iter().filter_map(|job| job.available_at).min();
+        let expired = self
+            .expired_pending(scope, now)
+            .iter()
+            .filter_map(|job| job.available_at)
+            .min();
         match (ready, expired) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -265,8 +292,15 @@ impl FakeQueue {
         // Delayed jobs whose time came join the turn order.
         let mut due: Vec<(i64, (String, String))> = self
             .scoped(scope)
-            .filter(|job| job.queued == Some("later") && job.available_at.is_some_and(|at| at <= now))
-            .map(|job| (job.available_at.unwrap_or_default(), (job.scope.clone(), job.id.clone())))
+            .filter(|job| {
+                job.queued == Some("later") && job.available_at.is_some_and(|at| at <= now)
+            })
+            .map(|job| {
+                (
+                    job.available_at.unwrap_or_default(),
+                    (job.scope.clone(), job.id.clone()),
+                )
+            })
             .collect();
         due.sort();
         for (_, key) in due.into_iter().take(64) {
@@ -280,14 +314,24 @@ impl FakeQueue {
             .min_by_key(|job| Self::order(job))
             .cloned();
         for job in self.expired_pending(scope, now) {
-            if selected.as_ref().is_none_or(|current| Self::order(&job) < Self::order(current)) {
+            if selected
+                .as_ref()
+                .is_none_or(|current| Self::order(&job) < Self::order(current))
+            {
                 selected = Some(job);
             }
         }
         selected
     }
 
-    fn lease(&mut self, scope: &str, owner: &str, lease_ms: i64, now: i64, history: Option<&Value>) -> Option<Value> {
+    fn lease(
+        &mut self,
+        scope: &str,
+        owner: &str,
+        lease_ms: i64,
+        now: i64,
+        history: Option<&Value>,
+    ) -> Option<Value> {
         let selected = self.next(scope, now)?;
         let token = self.fencing.get(scope).copied().unwrap_or(0) + 1;
         self.fencing.insert(scope.to_owned(), token);
@@ -322,7 +366,11 @@ impl FakeQueue {
 
     /// `place(ctx, priority, group)`: the next turn for a job of this priority and group.
     fn place(&mut self, scope: &str, priority: i64, group: Option<&str>) -> i64 {
-        let at = self.turns.get(&(scope.to_owned(), priority)).copied().unwrap_or(0);
+        let at = self
+            .turns
+            .get(&(scope.to_owned(), priority))
+            .copied()
+            .unwrap_or(0);
         let Some(group) = group else { return at };
         let key = (scope.to_owned(), priority, group.to_owned());
         let turn = at.max(self.group_turns.get(&key).copied().unwrap_or(0));
@@ -339,9 +387,14 @@ impl FakeQueue {
             .map(|(_, waiter)| waiter)
             .collect();
         waiting.sort_by(|a, b| (a.since, &a.owner).cmp(&(b.since, &b.owner)));
-        waiting.into_iter().find(|waiter| waiter.expires_at > now).cloned()
+        waiting
+            .into_iter()
+            .find(|waiter| waiter.expires_at > now)
+            .cloned()
     }
 
+    // The generated method's parameters, one for one.
+    #[allow(clippy::too_many_arguments)]
     fn claim_many(
         &mut self,
         scope: &str,
@@ -394,14 +447,24 @@ impl FakeQueue {
     }
 
     /// `holds(ctx, identity, now)`.
-    fn holds(&self, scope: &str, identity: &Obj, now: i64, history: Option<&Value>) -> Result<Option<Job>, FakeError> {
+    fn holds(
+        &self,
+        scope: &str,
+        identity: &Obj,
+        now: i64,
+        history: Option<&Value>,
+    ) -> Result<Option<Job>, FakeError> {
         let id = string(identity, "id", 1)?;
         let owner = string(identity, "owner", 1)?;
         let token = int(identity, "token", 1, i64::MAX)? as u64;
         let current = canonical_json(history.unwrap_or(&Value::Null));
         let presented = canonical_json(identity.get("history").unwrap_or(&Value::Null));
-        let Some(job) = self.jobs.get(&(scope.to_owned(), id.to_owned())) else { return Ok(None) };
-        let Some(lease) = &job.lease else { return Ok(None) };
+        let Some(job) = self.jobs.get(&(scope.to_owned(), id.to_owned())) else {
+            return Ok(None);
+        };
+        let Some(lease) = &job.lease else {
+            return Ok(None);
+        };
         let held = job.state == "leased"
             && lease.owner == owner
             && lease.token == token
@@ -411,8 +474,15 @@ impl FakeQueue {
         Ok(held.then(|| job.clone()))
     }
 
-    fn held(&self, scope: &str, identity: &Obj, now: i64, history: Option<&Value>) -> Result<Job, FakeError> {
-        self.holds(scope, identity, now, history)?.ok_or_else(lease_lost)
+    fn held(
+        &self,
+        scope: &str,
+        identity: &Obj,
+        now: i64,
+        history: Option<&Value>,
+    ) -> Result<Job, FakeError> {
+        self.holds(scope, identity, now, history)?
+            .ok_or_else(lease_lost)
     }
 
     fn store(&mut self, job: Job) -> Value {
@@ -424,7 +494,9 @@ impl FakeQueue {
     /// Several claims come back as the first, carrying the others in `more`.
     fn claimed(claims: Vec<Value>) -> Value {
         let mut claims = claims.into_iter();
-        let Some(mut first) = claims.next() else { return Value::Null };
+        let Some(mut first) = claims.next() else {
+            return Value::Null;
+        };
         let more: Vec<Value> = claims.collect();
         if !more.is_empty() {
             first["more"] = Value::Array(more);
@@ -441,7 +513,9 @@ impl FakeQueue {
         now: i64,
         history: Option<&Value>,
     ) -> Result<Value, FakeError> {
-        let Some(next) = args.get("next") else { return Ok(report) };
+        let Some(next) = args.get("next") else {
+            return Ok(report);
+        };
         let next = object(next, &["leaseMs", "max", "waitMs"], "next")?;
         let claims = self.claim_many(
             scope,
@@ -458,7 +532,13 @@ impl FakeQueue {
     }
 
     /// Run one generated method.
-    pub(crate) fn call(&mut self, method: &str, args: &Value, now: i64, history: Option<&Value>) -> Result<Value, FakeError> {
+    pub(crate) fn call(
+        &mut self,
+        method: &str,
+        args: &Value,
+        now: i64,
+        history: Option<&Value>,
+    ) -> Result<Value, FakeError> {
         let scoped = self.config.scope_argument;
         let with_scope = |keys: &[&'static str]| -> Vec<&'static str> {
             let mut keys = keys.to_vec();
@@ -479,10 +559,19 @@ impl FakeQueue {
         const LEASE: [&str; 4] = ["id", "owner", "token", "history"];
         match method {
             "enqueue" => {
-                let args = object(args, &with_scope(&["id", "payload", "delayMs", "at", "replace", "priority", "group"]), "args")?;
+                let args = object(
+                    args,
+                    &with_scope(&[
+                        "id", "payload", "delayMs", "at", "replace", "priority", "group",
+                    ]),
+                    "args",
+                )?;
                 let scope = scope_of(Some(args))?;
                 let id = string(args, "id", 1)?.to_owned();
-                let payload = args.get("payload").cloned().ok_or_else(|| FakeError::invalid("is missing \"payload\""))?;
+                let payload = args
+                    .get("payload")
+                    .cloned()
+                    .ok_or_else(|| FakeError::invalid("is missing \"payload\""))?;
                 let delay_ms = optional_int(args, "delayMs", 0, i64::MAX)?;
                 let at = optional_int(args, "at", 0, i64::MAX)?;
                 if delay_ms.is_some() && at.is_some() {
@@ -499,7 +588,10 @@ impl FakeQueue {
                 if let Some(stored) = self.jobs.get(&(scope.clone(), id.clone())) {
                     let previous = self.effective(stored, now);
                     if !replace || previous.state == "pending" || previous.state == "leased" {
-                        return Err(FakeError::failure("JOB_EXISTS", &format!("Job {id} already exists")));
+                        return Err(FakeError::failure(
+                            "JOB_EXISTS",
+                            &format!("Job {id} already exists"),
+                        ));
                     }
                 }
                 let turn = self.place(&scope, priority, group.as_deref());
@@ -522,7 +614,11 @@ impl FakeQueue {
                 }))
             }
             "claim" => {
-                let args = object(args, &with_scope(&["owner", "leaseMs", "max", "waitMs"]), "args")?;
+                let args = object(
+                    args,
+                    &with_scope(&["owner", "leaseMs", "max", "waitMs"]),
+                    "args",
+                )?;
                 let scope = scope_of(Some(args))?;
                 let owner = string(args, "owner", 1)?.to_owned();
                 let claims = self.claim_many(
@@ -541,7 +637,11 @@ impl FakeQueue {
                 let scope = scope_of(Some(args))?;
                 let leases = match args.get("leases") {
                     Some(Value::Array(leases)) if leases.len() <= 1_024 => leases,
-                    _ => return Err(FakeError::invalid("leases must be an array of at most 1024")),
+                    _ => {
+                        return Err(FakeError::invalid(
+                            "leases must be an array of at most 1024",
+                        ));
+                    }
                 };
                 let lease_ms = self.lease_length(optional_int(args, "leaseMs", 1, i64::MAX)?)?;
                 let identities = leases
@@ -564,9 +664,16 @@ impl FakeQueue {
                 Ok(Value::Array(expiries))
             }
             "complete" => {
-                let args = object(args, &with_scope(&["id", "owner", "token", "history", "result", "next"]), "args")?;
+                let args = object(
+                    args,
+                    &with_scope(&["id", "owner", "token", "history", "result", "next"]),
+                    "args",
+                )?;
                 let scope = scope_of(Some(args))?;
-                let result = args.get("result").cloned().ok_or_else(|| FakeError::invalid("is missing \"result\""))?;
+                let result = args
+                    .get("result")
+                    .cloned()
+                    .ok_or_else(|| FakeError::invalid("is missing \"result\""))?;
                 let job = self.held(&scope, args, now, history)?;
                 let report = self.store(Job {
                     state: "completed",
@@ -582,15 +689,28 @@ impl FakeQueue {
                 self.next_claim(&scope, args, &owner, report, now, history)
             }
             "fail" => {
-                let args = object(args, &with_scope(&["id", "owner", "token", "history", "error", "retry", "delayMs", "next"]), "args")?;
+                let args = object(
+                    args,
+                    &with_scope(&[
+                        "id", "owner", "token", "history", "error", "retry", "delayMs", "next",
+                    ]),
+                    "args",
+                )?;
                 let scope = scope_of(Some(args))?;
-                let error = args.get("error").cloned().ok_or_else(|| FakeError::invalid("is missing \"error\""))?;
+                let error = args
+                    .get("error")
+                    .cloned()
+                    .ok_or_else(|| FakeError::invalid("is missing \"error\""))?;
                 let retry = optional_bool(args, "retry")?;
                 let delay_ms = optional_int(args, "delayMs", 0, i64::MAX)?;
                 let job = self.held(&scope, args, now, history)?;
-                let last = self.config.retry.is_none_or(|policy| job.attempts >= policy.max_attempts);
+                let last = self
+                    .config
+                    .retry
+                    .is_none_or(|policy| job.attempts >= policy.max_attempts);
                 let last = last || retry == Some(false);
-                let available_at = (!last).then(|| now + delay_ms.unwrap_or_else(|| self.backoff(job.attempts)));
+                let available_at =
+                    (!last).then(|| now + delay_ms.unwrap_or_else(|| self.backoff(job.attempts)));
                 let report = self.store(Job {
                     state: if last { "failed" } else { "pending" },
                     lease: None,
@@ -604,7 +724,11 @@ impl FakeQueue {
                 self.next_claim(&scope, args, &owner, report, now, history)
             }
             "release" => {
-                let args = object(args, &with_scope(&["id", "owner", "token", "history", "delayMs"]), "args")?;
+                let args = object(
+                    args,
+                    &with_scope(&["id", "owner", "token", "history", "delayMs"]),
+                    "args",
+                )?;
                 let scope = scope_of(Some(args))?;
                 let delay_ms = optional_int(args, "delayMs", 0, i64::MAX)?.unwrap_or(0);
                 let job = self.held(&scope, args, now, history)?;
@@ -624,10 +748,18 @@ impl FakeQueue {
                 let delay_ms = optional_int(args, "delayMs", 0, i64::MAX)?.unwrap_or(0);
                 let job = match self.jobs.get(&(scope.clone(), id)) {
                     Some(stored) => self.effective(stored, now),
-                    None => return Err(FakeError::failure("JOB_NOT_FAILED", "Only failed jobs can be retried")),
+                    None => {
+                        return Err(FakeError::failure(
+                            "JOB_NOT_FAILED",
+                            "Only failed jobs can be retried",
+                        ));
+                    }
                 };
                 if job.state != "failed" {
-                    return Err(FakeError::failure("JOB_NOT_FAILED", "Only failed jobs can be retried"));
+                    return Err(FakeError::failure(
+                        "JOB_NOT_FAILED",
+                        "Only failed jobs can be retried",
+                    ));
                 }
                 let turn = self.place(&scope, job.priority, job.group.clone().as_deref());
                 Ok(self.store(Job {
@@ -664,14 +796,23 @@ impl FakeQueue {
                 };
                 let scope = scope_of(args)?;
                 let owner = match args.and_then(|args| args.get("owner")) {
-                    Some(_) => Some(string(args.expect("owner came from args"), "owner", 1)?.to_owned()),
+                    Some(_) => {
+                        Some(string(args.expect("owner came from args"), "owner", 1)?.to_owned())
+                    }
                     None => None,
                 };
-                let Some(since) = self.oldest_ready_at(&scope, now) else { return Ok(json!(false)) };
-                let Some(owner) = owner else { return Ok(json!(true)) };
+                let Some(since) = self.oldest_ready_at(&scope, now) else {
+                    return Ok(json!(false));
+                };
+                let Some(owner) = owner else {
+                    return Ok(json!(true));
+                };
                 // Whoever waits first in line has new work to itself for turnMs.
                 let first = self.head(&scope, now);
-                Ok(json!(first.is_none_or(|first| first.owner == owner) || now >= since + self.config.turn_ms))
+                Ok(json!(
+                    first.is_none_or(|first| first.owner == owner)
+                        || now >= since + self.config.turn_ms
+                ))
             }
             "stats" => {
                 let args = if scoped {
@@ -688,13 +829,22 @@ impl FakeQueue {
                 let jobs: Vec<&Job> = self.scoped(&scope).collect();
                 let pending = |ready: bool| {
                     jobs.iter()
-                        .filter(|job| job.state == "pending" && job.available_at.is_some_and(|at| (at <= now) == ready))
+                        .filter(|job| {
+                            job.state == "pending"
+                                && job.available_at.is_some_and(|at| (at <= now) == ready)
+                        })
                         .count()
                 };
                 let expired = self.expired_pending(&scope, now).len().min(count_up_to);
                 let leased = jobs
                     .iter()
-                    .filter(|job| job.state == "leased" && job.lease.as_ref().is_some_and(|lease| lease.expires_at > now))
+                    .filter(|job| {
+                        job.state == "leased"
+                            && job
+                                .lease
+                                .as_ref()
+                                .is_some_and(|lease| lease.expires_at > now)
+                    })
                     .count();
                 Ok(json!({
                     "ready": oldest.is_some(),
@@ -705,7 +855,11 @@ impl FakeQueue {
                     "delayedCount": pending(false).min(count_up_to),
                 }))
             }
-            _ => Err(FakeError::http(404, "METHOD_NOT_FOUND", &format!("No queue method {method}"))),
+            _ => Err(FakeError::http(
+                404,
+                "METHOD_NOT_FOUND",
+                &format!("No queue method {method}"),
+            )),
         }
     }
 }

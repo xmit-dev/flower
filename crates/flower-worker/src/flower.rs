@@ -2,7 +2,9 @@
 
 use std::time::{Duration, SystemTime};
 
-use flower_client::{ErrorKind, FlowerClient, FlowerError, MutationOptions, Retry, SubscribeOptions};
+use flower_client::{
+    ErrorKind, FlowerClient, FlowerError, MutationOptions, Retry, SubscribeOptions,
+};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
@@ -69,14 +71,31 @@ pub fn retry_policy(retry: &RetryPolicy) -> flower_client::RetryPolicy {
 impl QueueClient for FlowerClient {
     type Error = FlowerError;
 
-    async fn mutate(&self, name: &str, args: Box<RawValue>, retry: RetryPolicy) -> Result<Value, FlowerError> {
+    async fn mutate(
+        &self,
+        name: &str,
+        args: Box<RawValue>,
+        retry: RetryPolicy,
+    ) -> Result<Value, FlowerError> {
         let options = MutationOptions::new().retry(Retry::Policy(retry_policy(&retry)));
         let reply = FlowerClient::mutate::<RawValue, Value>(self, name, &args, options).await?;
         Ok(reply.value)
     }
 
-    async fn wait_until(&self, name: &str, args: Box<RawValue>, predicate: Predicate) -> Result<Value, FlowerError> {
-        let update = FlowerClient::wait_until::<RawValue, Value, _>(self, name, &args, predicate, SubscribeOptions::default()).await?;
+    async fn wait_until(
+        &self,
+        name: &str,
+        args: Box<RawValue>,
+        predicate: Predicate,
+    ) -> Result<Value, FlowerError> {
+        let update = FlowerClient::wait_until::<RawValue, Value, _>(
+            self,
+            name,
+            &args,
+            predicate,
+            SubscribeOptions::default(),
+        )
+        .await?;
         Ok(update.value)
     }
 }

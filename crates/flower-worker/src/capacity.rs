@@ -126,11 +126,16 @@ pub struct ProcessHealth {
 
 /// `processHealth(limits)`.
 pub fn process_health(limits: HealthLimits) -> Result<ProcessHealth, String> {
-    if !(limits.busy > 0.0) || !(limits.memory > 0.0) {
+    // NaN is not positive either.
+    if limits.busy.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+        || limits.memory.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+    {
         return Err("Health limits must be positive".into());
     }
     let runtime = tokio::runtime::Handle::try_current().ok();
-    let last = runtime.as_ref().map(|handle| (Instant::now(), busy_total(handle)));
+    let last = runtime
+        .as_ref()
+        .map(|handle| (Instant::now(), busy_total(handle)));
     Ok(ProcessHealth {
         limits,
         runtime,
@@ -158,7 +163,8 @@ impl Health for ProcessHealth {
             if let Some((at, busy)) = *last {
                 let now = Instant::now();
                 let total = busy_total(handle);
-                let wall = now.duration_since(at).as_secs_f64() * handle.metrics().num_workers().max(1) as f64;
+                let wall = now.duration_since(at).as_secs_f64()
+                    * handle.metrics().num_workers().max(1) as f64;
                 let share = if wall > 0.0 {
                     (total.saturating_sub(busy).as_secs_f64() / wall).clamp(0.0, 1.0)
                 } else {
@@ -223,7 +229,12 @@ mod memory {
     fn meminfo(field: &str) -> Option<u64> {
         let info = std::fs::read_to_string("/proc/meminfo").ok()?;
         let line = info.lines().find(|line| line.starts_with(field))?;
-        let kib: u64 = line[field.len()..].trim().trim_end_matches("kB").trim().parse().ok()?;
+        let kib: u64 = line[field.len()..]
+            .trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse()
+            .ok()?;
         Some(kib * 1024)
     }
 
@@ -335,7 +346,11 @@ impl Limiter {
         Self::with_clock(concurrency, health, &Clock::system())
     }
 
-    pub fn with_clock(concurrency: Concurrency, health: Arc<dyn Health>, clock: &Clock) -> Result<Self, String> {
+    pub fn with_clock(
+        concurrency: Concurrency,
+        health: Arc<dyn Health>,
+        clock: &Clock,
+    ) -> Result<Self, String> {
         let clock = clock.clone();
         Self::with_now(concurrency, health, move || clock.now_ms() as f64)
     }

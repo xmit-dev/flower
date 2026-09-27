@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 
 use flower_worker::testing::{FakeError, FakeFlower};
 use flower_worker::{
-    Adaptive, Claim, ClientError, Clock, Concurrency, Load, QueueWorkerEvent, QueueWorkerOptions, RetryPolicy, WorkError,
-    WorkerError, run_queue_worker,
+    Adaptive, Claim, ClientError, Clock, Concurrency, Load, QueueWorkerEvent, QueueWorkerOptions,
+    RetryPolicy, WorkError, WorkerError, run_queue_worker,
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -25,7 +25,10 @@ fn workers(ids: &[&str]) -> FakeFlower {
 
 fn state(flower: &FakeFlower, id: &str) -> (String, u64) {
     let job = flower.job(id);
-    (job["state"].as_str().unwrap().to_owned(), job["attempts"].as_u64().unwrap())
+    (
+        job["state"].as_str().unwrap().to_owned(),
+        job["attempts"].as_u64().unwrap(),
+    )
 }
 
 #[tokio::test(start_paused = true)]
@@ -59,8 +62,16 @@ async fn a_worker_drains_the_queue_concurrently_and_completes_every_job_exactly_
     for id in ids {
         let job = flower.job(id);
         assert_eq!(
-            (job["state"].clone(), job["attempts"].clone(), job["result"].clone()),
-            (json!("completed"), json!(1), json!({ "done": id, "by": "test-worker" }))
+            (
+                job["state"].clone(),
+                job["attempts"].clone(),
+                job["result"].clone()
+            ),
+            (
+                json!("completed"),
+                json!(1),
+                json!({ "done": id, "by": "test-worker" })
+            )
         );
     }
     assert_eq!(flower.query("jobs.ready", Value::Null), json!(false));
@@ -69,25 +80,47 @@ async fn a_worker_drains_the_queue_concurrently_and_completes_every_job_exactly_
 #[tokio::test(start_paused = true)]
 async fn a_failed_attempt_is_reported_requeued_with_backoff_and_retried_once_it_becomes_ready() {
     let flower = workers(&["flaky"]);
-    let worker = start(&flower.client(), |options| options, |claim: Job, _, _| async move {
-        if claim.attempt == 1 {
-            return Err(WorkError::new("upstream said no"));
-        }
-        Ok(json!({ "attempt": claim.attempt }))
-    });
+    let worker = start(
+        &flower.client(),
+        |options| options,
+        |claim: Job, _, _| async move {
+            if claim.attempt == 1 {
+                return Err(WorkError::new("upstream said no"));
+            }
+            Ok(json!({ "attempt": claim.attempt }))
+        },
+    );
     until(|| worker.types().contains(&"failed")).await;
     let failed = flower.job("flaky");
     assert_eq!(
-        (failed["state"].clone(), failed["attempts"].clone(), failed["error"].clone(), failed["availableAt"].clone()),
-        (json!("pending"), json!(1), json!({ "message": "upstream said no" }), json!(flower.now() + 1_000))
+        (
+            failed["state"].clone(),
+            failed["attempts"].clone(),
+            failed["error"].clone(),
+            failed["availableAt"].clone()
+        ),
+        (
+            json!("pending"),
+            json!(1),
+            json!({ "message": "upstream said no" }),
+            json!(flower.now() + 1_000)
+        )
     );
     flower.advance(999);
     sleep(20).await;
-    assert_eq!(worker.types(), ["claimed", "failed"], "the worker waits out the backoff");
+    assert_eq!(
+        worker.types(),
+        ["claimed", "failed"],
+        "the worker waits out the backoff"
+    );
     flower.advance(1);
     until(|| worker.types().contains(&"completed")).await;
     let events = worker.events();
-    let failed_event = events.iter().filter(|event| event.kind() != "limit").nth(1).cloned();
+    let failed_event = events
+        .iter()
+        .filter(|event| event.kind() != "limit")
+        .nth(1)
+        .cloned();
     worker.stop().await.unwrap();
     assert_eq!(
         failed_event,
@@ -98,15 +131,24 @@ async fn a_failed_attempt_is_reported_requeued_with_backoff_and_retried_once_it_
     );
     let done = flower.job("flaky");
     assert_eq!(
-        (done["state"].clone(), done["attempts"].clone(), done["result"].clone()),
+        (
+            done["state"].clone(),
+            done["attempts"].clone(),
+            done["result"].clone()
+        ),
         (json!("completed"), json!(2), json!({ "attempt": 2 }))
     );
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_result_flower_cannot_store_fails_the_attempt_with_the_reason_instead_of_going_unreported() {
+async fn a_result_flower_cannot_store_fails_the_attempt_with_the_reason_instead_of_going_unreported()
+ {
     let flower = workers(&["odd"]);
-    let worker = start(&flower.client(), |options| options, |_: Job, _, _| async { Ok(vec![1.0, f64::NAN]) });
+    let worker = start(
+        &flower.client(),
+        |options| options,
+        |_: Job, _, _| async { Ok(vec![1.0, f64::NAN]) },
+    );
     until(|| worker.types().contains(&"failed")).await;
     let events = worker.events();
     worker.stop().await.unwrap();
@@ -117,7 +159,11 @@ async fn a_result_flower_cannot_store_fails_the_attempt_with_the_reason_instead_
     }));
     let failed = flower.job("odd");
     assert_eq!(
-        (failed["state"].clone(), failed["attempts"].clone(), failed["error"].clone()),
+        (
+            failed["state"].clone(),
+            failed["attempts"].clone(),
+            failed["error"].clone()
+        ),
         (json!("pending"), json!(1), json!({ "message": reason }))
     );
 }
@@ -143,18 +189,37 @@ async fn renewal_keeps_a_job_alive_through_many_short_leases() {
     until(|| worker.events().len() == 2).await;
     let events = worker.events.clone();
     worker.stop().await.unwrap();
-    let types: Vec<_> = events.lock().iter().filter(|event| event.kind() != "limit").map(|event| event.kind()).collect();
+    let types: Vec<_> = events
+        .lock()
+        .iter()
+        .filter(|event| event.kind() != "limit")
+        .map(|event| event.kind())
+        .collect();
     assert_eq!(types, ["claimed", "completed"]);
     let done = flower.job("long");
     assert_eq!(
-        (done["state"].clone(), done["attempts"].clone(), done["result"].clone()),
+        (
+            done["state"].clone(),
+            done["attempts"].clone(),
+            done["result"].clone()
+        ),
         (json!("completed"), json!(1), json!("survived"))
     );
     let renewals = client.calls_to("jobs.renew");
-    assert!(renewals.len() >= 5, "renewed well past the first lease: {}", renewals.len());
+    assert!(
+        renewals.len() >= 5,
+        "renewed well past the first lease: {}",
+        renewals.len()
+    );
     let owner = renewals[0].args()["leases"][0]["owner"].clone();
-    assert_eq!(renewals[0].args(), json!({ "leases": [{ "id": "long", "owner": owner, "token": 1 }], "leaseMs": 300 }));
-    assert_eq!(renewals[0].args, format!(r#"{{"leases":[{{"id":"long","owner":{owner},"token":1}}],"leaseMs":300}}"#));
+    assert_eq!(
+        renewals[0].args(),
+        json!({ "leases": [{ "id": "long", "owner": owner, "token": 1 }], "leaseMs": 300 })
+    );
+    assert_eq!(
+        renewals[0].args,
+        format!(r#"{{"leases":[{{"id":"long","owner":{owner},"token":1}}],"leaseMs":300}}"#)
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -178,8 +243,16 @@ async fn work_still_running_at_the_end_of_its_lease_is_aborted_and_failed_with_t
     worker.stop().await.unwrap();
     let failed = flower.job("slow");
     assert_eq!(
-        (failed["state"].clone(), failed["attempts"].clone(), failed["error"].clone()),
-        (json!("pending"), json!(1), json!({ "message": "The lease ran out" }))
+        (
+            failed["state"].clone(),
+            failed["attempts"].clone(),
+            failed["error"].clone()
+        ),
+        (
+            json!("pending"),
+            json!(1),
+            json!({ "message": "The lease ran out" })
+        )
     );
 }
 
@@ -215,7 +288,11 @@ async fn a_completion_after_another_worker_took_over_the_expired_lease_is_report
     let types = worker.types();
     worker.stop().await.unwrap();
     assert_eq!(types, ["claimed", "lost"]);
-    assert_eq!(flower.job("contested")["lease"]["owner"], json!("thief"), "the lost completion changed nothing");
+    assert_eq!(
+        flower.job("contested")["lease"]["owner"],
+        json!("thief"),
+        "the lost completion changed nothing"
+    );
     flower.mutate(
         "jobs.complete",
         json!({ "id": thief["id"], "owner": thief["owner"], "token": thief["token"], "result": "rescued" }),
@@ -241,7 +318,10 @@ async fn renewal_notices_a_lease_taken_over_after_expiry_and_stops_the_work_earl
                 async move {
                     started.resolve();
                     let result: Result<Value, WorkError> = lease_end(stop).await;
-                    *reason.lock() = result.as_ref().err().map(|error| error.message().to_owned());
+                    *reason.lock() = result
+                        .as_ref()
+                        .err()
+                        .map(|error| error.message().to_owned());
                     result
                 }
             }
@@ -249,7 +329,11 @@ async fn renewal_notices_a_lease_taken_over_after_expiry_and_stops_the_work_earl
     );
     started.wait().await;
     flower.advance(300);
-    assert!(!flower.mutate("jobs.claim", json!({ "owner": "thief" })).is_null());
+    assert!(
+        !flower
+            .mutate("jobs.claim", json!({ "owner": "thief" }))
+            .is_null()
+    );
     until(|| worker.types().contains(&"lost")).await;
     let types = worker.types();
     worker.stop().await.unwrap();
@@ -263,7 +347,8 @@ async fn a_completion_whose_reply_is_lost_is_retried_with_the_same_request_id_an
     let flower = workers(&["a"]);
     let dropped = Arc::new(AtomicUsize::new(0));
     let client = flower.client().after(move |call, _| {
-        (call.name == "jobs.complete" && dropped.fetch_add(1, Ordering::SeqCst) == 0).then(FakeError::fetch_failed)
+        (call.name == "jobs.complete" && dropped.fetch_add(1, Ordering::SeqCst) == 0)
+            .then(FakeError::fetch_failed)
     });
     let worker = start(
         &client,
@@ -285,7 +370,11 @@ async fn a_completion_whose_reply_is_lost_is_retried_with_the_same_request_id_an
     assert_eq!(completions[0].request_id, completions[1].request_id);
     let done = flower.job("a");
     assert_eq!(
-        (done["state"].clone(), done["attempts"].clone(), done["result"].clone()),
+        (
+            done["state"].clone(),
+            done["attempts"].clone(),
+            done["result"].clone()
+        ),
         (json!("completed"), json!(1), json!("ok"))
     );
 }
@@ -317,9 +406,21 @@ async fn stopping_lets_the_held_job_finish_and_claims_nothing_new() {
     let stopped = worker.stop_later();
     release.resolve();
     stopped.await.unwrap().unwrap();
-    assert_eq!((state(&flower, "a").0, state(&flower, "b").0), ("completed".into(), "pending".into()));
-    assert_eq!(flower.job("a")["result"], json!({ "interrupted": false }), "stopping does not abort work in progress");
-    let names: Vec<String> = client.calls().into_iter().filter(|call| !call.watch).map(|call| call.name).collect();
+    assert_eq!(
+        (state(&flower, "a").0, state(&flower, "b").0),
+        ("completed".into(), "pending".into())
+    );
+    assert_eq!(
+        flower.job("a")["result"],
+        json!({ "interrupted": false }),
+        "stopping does not abort work in progress"
+    );
+    let names: Vec<String> = client
+        .calls()
+        .into_iter()
+        .filter(|call| !call.watch)
+        .map(|call| call.name)
+        .collect();
     assert_eq!(names, ["jobs.claim", "jobs.complete"]);
 }
 
@@ -331,11 +432,21 @@ async fn a_permanent_claim_error_rejects_the_worker_instead_of_spinning() {
     options.lease_ms = Some(60_000);
     options.clock = flower.clock().clone();
     options.health = Some(Arc::new(Load::idle));
-    let error = run_queue_worker(client.clone(), options, |_: Job, _, _| async { Ok(Value::Null) })
-        .await
-        .unwrap_err();
-    assert_eq!(error.client().and_then(|error| error.failure_code()), Some("LEASE_TOO_LONG"));
-    let names: Vec<String> = client.calls().into_iter().filter(|call| !call.watch).map(|call| call.name).collect();
+    let error = run_queue_worker(client.clone(), options, |_: Job, _, _| async {
+        Ok(Value::Null)
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.client().and_then(|error| error.failure_code()),
+        Some("LEASE_TOO_LONG")
+    );
+    let names: Vec<String> = client
+        .calls()
+        .into_iter()
+        .filter(|call| !call.watch)
+        .map(|call| call.name)
+        .collect();
     assert_eq!(names, ["jobs.claim"]);
     assert_eq!(state(&flower, "a").0, "pending");
 }
@@ -346,7 +457,14 @@ async fn a_permanent_claim_error_stops_every_claimer_once_held_jobs_finish() {
     let claims = Arc::new(AtomicUsize::new(0));
     let client = flower.client().before(move |call| {
         (!call.watch && call.name == "jobs.claim" && claims.fetch_add(1, Ordering::SeqCst) + 1 == 2)
-            .then(|| FakeError::denied(403, "FORBIDDEN", "Authorization denied", ("FORBIDDEN", "Access revoked")))
+            .then(|| {
+                FakeError::denied(
+                    403,
+                    "FORBIDDEN",
+                    "Authorization denied",
+                    ("FORBIDDEN", "Access revoked"),
+                )
+            })
     });
     let worker = start(
         &client,
@@ -363,10 +481,21 @@ async fn a_permanent_claim_error_stops_every_claimer_once_held_jobs_finish() {
     let events = worker.events.clone();
     let error = worker.done().await.unwrap_err();
     let error = error.client().expect("a client error");
-    assert_eq!((error.status(), error.failure_code()), (403, Some("FORBIDDEN")));
-    let types: Vec<_> = events.lock().iter().filter(|event| event.kind() != "limit").map(|event| event.kind()).collect();
+    assert_eq!(
+        (error.status(), error.failure_code()),
+        (403, Some("FORBIDDEN"))
+    );
+    let types: Vec<_> = events
+        .lock()
+        .iter()
+        .filter(|event| event.kind() != "limit")
+        .map(|event| event.kind())
+        .collect();
     assert_eq!(types, ["claimed", "completed"]);
-    let states: Vec<String> = ["a", "b", "c"].iter().map(|id| state(&flower, id).0).collect();
+    let states: Vec<String> = ["a", "b", "c"]
+        .iter()
+        .map(|id| state(&flower, id).0)
+        .collect();
     assert_eq!(states, ["completed", "pending", "pending"]);
 }
 
@@ -390,7 +519,11 @@ async fn a_job_arriving_at_an_idle_worker_costs_one_claim_not_one_per_claimer() 
         until(|| worker.count("completed") == index + 1).await;
     }
     worker.stop().await.unwrap();
-    let maxes: Vec<Value> = client.calls_to("jobs.claim").iter().map(|call| call.args()["max"].clone()).collect();
+    let maxes: Vec<Value> = client
+        .calls_to("jobs.claim")
+        .iter()
+        .map(|call| call.args()["max"].clone())
+        .collect();
     assert_eq!(maxes, [json!(4), json!(4), json!(4)]);
 }
 
@@ -411,7 +544,11 @@ async fn a_worker_takes_several_jobs_per_claim_and_renews_every_lease_it_holds_i
         },
         // The first two outlive their first lease, which only renewals keep.
         |claim: Job, stop, _| async move {
-            let ms = if claim.id == "a" || claim.id == "b" { 400 } else { 10 };
+            let ms = if claim.id == "a" || claim.id == "b" {
+                400
+            } else {
+                10
+            };
             tokio::select! {
                 _ = sleep(ms) => Ok(claim.id),
                 _ = stop.stopped() => Err(WorkError::new("stopped")),
@@ -436,7 +573,10 @@ async fn a_worker_takes_several_jobs_per_claim_and_renews_every_lease_it_holds_i
                 .join(",")
         })
         .collect();
-    assert!(renewed.len() >= 2 && renewed.iter().all(|ids| ids == "a,b"), "renewals {renewed:?}");
+    assert!(
+        renewed.len() >= 2 && renewed.iter().all(|ids| ids == "a,b"),
+        "renewals {renewed:?}"
+    );
     for id in ids {
         assert_eq!(state(&flower, id), ("completed".into(), 1));
     }
@@ -461,7 +601,10 @@ async fn with_chain_each_report_claims_the_next_job_so_a_busy_queue_costs_one_cl
         },
     );
     until(|| worker.count("completed") == ids.len()).await;
-    flower.mutate("jobs.enqueue", json!({ "id": "late", "payload": { "id": "late" } }));
+    flower.mutate(
+        "jobs.enqueue",
+        json!({ "id": "late", "payload": { "id": "late" } }),
+    );
     until(|| worker.count("completed") == ids.len() + 1).await;
     worker.stop().await.unwrap();
     let claims: Vec<_> = client
@@ -469,9 +612,20 @@ async fn with_chain_each_report_claims_the_next_job_so_a_busy_queue_costs_one_cl
         .into_iter()
         .filter(|call| call.args()["max"] != json!(0))
         .collect();
-    assert_eq!(claims.len(), 2, "one to start, one for the job that arrived once the queue ran dry");
-    let reports: Vec<Value> = client.calls_to("jobs.complete").iter().map(|call| call.args()["next"].clone()).collect();
-    assert_eq!(reports, vec![json!({ "max": 1, "leaseMs": 30_000, "waitMs": 60_000 }); ids.len() + 1]);
+    assert_eq!(
+        claims.len(),
+        2,
+        "one to start, one for the job that arrived once the queue ran dry"
+    );
+    let reports: Vec<Value> = client
+        .calls_to("jobs.complete")
+        .iter()
+        .map(|call| call.args()["next"].clone())
+        .collect();
+    assert_eq!(
+        reports,
+        vec![json!({ "max": 1, "leaseMs": 30_000, "waitMs": 60_000 }); ids.len() + 1]
+    );
     for id in ids.iter().chain(&["late"]) {
         assert_eq!(state(&flower, id), ("completed".into(), 1));
     }
@@ -504,9 +658,16 @@ async fn with_chain_a_stopping_workers_reports_claim_nothing_more() {
     let stopped = worker.stop_later();
     finish.resolve();
     stopped.await.unwrap().unwrap();
-    let nexts: Vec<Option<Value>> = client.calls_to("jobs.complete").iter().map(|call| call.args().get("next").cloned()).collect();
+    let nexts: Vec<Option<Value>> = client
+        .calls_to("jobs.complete")
+        .iter()
+        .map(|call| call.args().get("next").cloned())
+        .collect();
     assert_eq!(nexts, [None]);
-    assert_eq!((state(&flower, "a").0, state(&flower, "b").0), ("completed".into(), "pending".into()));
+    assert_eq!(
+        (state(&flower, "a").0, state(&flower, "b").0),
+        ("completed".into(), "pending".into())
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -540,7 +701,11 @@ async fn a_worker_takes_more_jobs_at_once_while_its_queue_holds_more_than_it_run
     until(|| worker.count("completed") == ids.len()).await;
     let limits = worker.limits();
     worker.stop().await.unwrap();
-    assert_eq!((limits.first().copied(), limits.last().copied()), (Some(4), Some(24)), "limits {limits:?}");
+    assert_eq!(
+        (limits.first().copied(), limits.last().copied()),
+        (Some(4), Some(24)),
+        "limits {limits:?}"
+    );
     let peak = peak.load(Ordering::SeqCst);
     assert!(peak > 2 && peak <= 24, "peak {peak}");
 }
@@ -580,12 +745,22 @@ async fn a_job_whose_provider_pushes_back_stops_the_worker_claiming_for_a_while(
     until(|| claimed_at.lock().len() == ids.len()).await;
     worker.stop().await.unwrap();
     let throttled_at = throttled_at.load(Ordering::SeqCst);
-    let next = claimed_at.lock().iter().copied().find(|at| *at > throttled_at).unwrap();
-    assert!(next - throttled_at >= 140, "claimed again {} ms after the provider pushed back", next - throttled_at);
+    let next = claimed_at
+        .lock()
+        .iter()
+        .copied()
+        .find(|at| *at > throttled_at)
+        .unwrap();
+    assert!(
+        next - throttled_at >= 140,
+        "claimed again {} ms after the provider pushed back",
+        next - throttled_at
+    );
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_worker_cut_below_its_long_running_jobs_takes_more_again_once_work_waits_and_the_process_keeps_up() {
+async fn a_worker_cut_below_its_long_running_jobs_takes_more_again_once_work_waits_and_the_process_keeps_up()
+ {
     let flower = workers(&["a", "b", "c", "d", "e", "f"]);
     let release = Deferred::new();
     let done = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -644,7 +819,9 @@ async fn a_worker_cut_below_its_long_running_jobs_takes_more_again_once_work_wai
     first.sort();
     assert_eq!(first, ["c", "d", "e", "f"]);
     assert!(
-        events.iter().any(|event| matches!(event, QueueWorkerEvent::Limit { limit: 1, .. })),
+        events
+            .iter()
+            .any(|event| matches!(event, QueueWorkerEvent::Limit { limit: 1, .. })),
         "the busy process was cut to one job"
     );
 }
@@ -674,11 +851,17 @@ async fn a_claim_flower_could_not_answer_is_waited_out_without_holding_room() {
     let types = worker.types();
     worker.stop().await.unwrap();
     assert_eq!(types, ["waiting", "claimed", "completed"]);
-    assert_eq!(events[0], QueueWorkerEvent::Waiting { error: "UNAVAILABLE: No leader".into() });
+    assert_eq!(
+        events[0],
+        QueueWorkerEvent::Waiting {
+            error: "UNAVAILABLE: No leader".into()
+        }
+    );
 }
 
 #[tokio::test(start_paused = true)]
-async fn waiting_workers_line_up_a_new_job_wakes_the_first_in_line_only_and_a_worker_leaves_the_line_when_it_stops() {
+async fn waiting_workers_line_up_a_new_job_wakes_the_first_in_line_only_and_a_worker_leaves_the_line_when_it_stops()
+ {
     let flower = workers(&[]);
     let (alpha, beta) = (flower.client(), flower.client());
     let line = |owner: &str| {
@@ -689,15 +872,26 @@ async fn waiting_workers_line_up_a_new_job_wakes_the_first_in_line_only_and_a_wo
             ..options
         }
     };
-    let first = start(&alpha, line("alpha"), |claim: Job, _, _| async move { Ok(claim.id) });
+    let first = start(&alpha, line("alpha"), |claim: Job, _, _| async move {
+        Ok(claim.id)
+    });
     until(|| alpha.calls_to("jobs.claim").len() == 1).await;
-    let second = start(&beta, line("beta"), |claim: Job, _, _| async move { Ok(claim.id) });
+    let second = start(&beta, line("beta"), |claim: Job, _, _| async move {
+        Ok(claim.id)
+    });
     until(|| beta.calls_to("jobs.claim").len() == 1).await;
-    assert_eq!(beta.calls_to("jobs.claim")[0].args, r#"{"owner":"beta","leaseMs":30000,"max":1,"waitMs":60000}"#);
+    assert_eq!(
+        beta.calls_to("jobs.claim")[0].args,
+        r#"{"owner":"beta","leaseMs":30000,"max":1,"waitMs":60000}"#
+    );
     flower.mutate("jobs.enqueue", json!({ "id": "x", "payload": {} }));
     until(|| first.count("completed") == 1).await;
     sleep(20).await;
-    assert_eq!(beta.calls_to("jobs.claim").len(), 1, "the job woke alpha alone");
+    assert_eq!(
+        beta.calls_to("jobs.claim").len(),
+        1,
+        "the job woke alpha alone"
+    );
     assert_eq!(second.count("claimed"), 0);
     first.stop().await.unwrap();
     assert_eq!(
@@ -708,7 +902,13 @@ async fn waiting_workers_line_up_a_new_job_wakes_the_first_in_line_only_and_a_wo
     flower.mutate("jobs.enqueue", json!({ "id": "y", "payload": {} }));
     until(|| second.count("completed") == 1).await;
     second.stop().await.unwrap();
-    assert_eq!((flower.job("x")["lease"].clone(), flower.job("y")["state"].clone()), (Value::Null, json!("completed")));
+    assert_eq!(
+        (
+            flower.job("x")["lease"].clone(),
+            flower.job("y")["state"].clone()
+        ),
+        (Value::Null, json!("completed"))
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -728,7 +928,10 @@ async fn a_stopping_worker_gives_held_jobs_drain_ms_then_aborts_and_fails_them()
                 let reason = reason.clone();
                 async move {
                     let result: Result<Value, WorkError> = lease_end(stop).await;
-                    *reason.lock() = result.as_ref().err().map(|error| error.message().to_owned());
+                    *reason.lock() = result
+                        .as_ref()
+                        .err()
+                        .map(|error| error.message().to_owned());
                     result
                 }
             }
@@ -738,19 +941,34 @@ async fn a_stopping_worker_gives_held_jobs_drain_ms_then_aborts_and_fails_them()
     let stopped_at = clock.now_ms();
     let events = worker.events.clone();
     worker.stop().await.unwrap();
-    assert!(clock.now_ms() - stopped_at >= 45, "held jobs had their time");
-    assert_eq!(reason.lock().as_deref(), Some("The worker stopped before the job finished"));
-    let types: Vec<_> = events.lock().iter().filter(|event| event.kind() != "limit").map(|event| event.kind()).collect();
+    assert!(
+        clock.now_ms() - stopped_at >= 45,
+        "held jobs had their time"
+    );
+    assert_eq!(
+        reason.lock().as_deref(),
+        Some("The worker stopped before the job finished")
+    );
+    let types: Vec<_> = events
+        .lock()
+        .iter()
+        .filter(|event| event.kind() != "limit")
+        .map(|event| event.kind())
+        .collect();
     assert_eq!(types, ["claimed", "failed"]);
     let failed = flower.job("server");
     assert_eq!(
         (failed["state"].clone(), failed["error"].clone()),
-        (json!("pending"), json!({ "message": "The worker stopped before the job finished" }))
+        (
+            json!("pending"),
+            json!({ "message": "The worker stopped before the job finished" })
+        )
     );
 }
 
 #[tokio::test(start_paused = true)]
-async fn with_release_jobs_still_running_when_drain_ms_ends_go_back_to_the_queue_instead_of_failing() {
+async fn with_release_jobs_still_running_when_drain_ms_ends_go_back_to_the_queue_instead_of_failing()
+ {
     let flower = workers(&["server", "short"]);
     let finish = Deferred::new();
     let worker = start(
@@ -780,12 +998,22 @@ async fn with_release_jobs_still_running_when_drain_ms_ends_go_back_to_the_queue
     let stopped = worker.stop_later();
     finish.resolve();
     stopped.await.unwrap().unwrap();
-    let mut types: Vec<_> = events.lock().iter().filter(|event| event.kind() != "limit").map(|event| event.kind()).collect();
+    let mut types: Vec<_> = events
+        .lock()
+        .iter()
+        .filter(|event| event.kind() != "limit")
+        .map(|event| event.kind())
+        .collect();
     types.sort();
     assert_eq!(types, ["claimed", "claimed", "completed", "released"]);
     let released = flower.job("server");
     assert_eq!(
-        (released["state"].clone(), released["error"].clone(), released["attempts"].clone(), released["lease"].clone()),
+        (
+            released["state"].clone(),
+            released["error"].clone(),
+            released["attempts"].clone(),
+            released["lease"].clone()
+        ),
         (json!("pending"), Value::Null, json!(1), Value::Null)
     );
     assert_eq!(state(&flower, "short").0, "completed");
@@ -793,10 +1021,15 @@ async fn with_release_jobs_still_running_when_drain_ms_ends_go_back_to_the_queue
     signal.cancel();
     let mut options = QueueWorkerOptions::new("jobs", signal);
     options.release = true;
-    let error = run_queue_worker(flower.client(), options, |_: Job, _, _| async { Ok(Value::Null) })
-        .await
-        .unwrap_err();
-    assert!(matches!(&error, WorkerError::Invalid(message) if message == "release needs drainMs"), "{error}");
+    let error = run_queue_worker(flower.client(), options, |_: Job, _, _| async {
+        Ok(Value::Null)
+    })
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&error, WorkerError::Invalid(message) if message == "release needs drainMs"),
+        "{error}"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -817,7 +1050,12 @@ async fn a_stopping_worker_gives_up_on_work_that_ignores_its_abort_so_it_stops_a
     worker.stop().await.unwrap();
     let took = clock.now_ms() - stopped_at;
     assert!((4_900..7_000).contains(&took), "stopped after {took} ms");
-    let unreported: Vec<_> = events.lock().iter().filter(|event| event.kind() == "unreported").cloned().collect();
+    let unreported: Vec<_> = events
+        .lock()
+        .iter()
+        .filter(|event| event.kind() == "unreported")
+        .cloned()
+        .collect();
     assert_eq!(
         unreported,
         [QueueWorkerEvent::Unreported {
@@ -825,11 +1063,16 @@ async fn a_stopping_worker_gives_up_on_work_that_ignores_its_abort_so_it_stops_a
             error: "The job did not stop when its worker did".into()
         }]
     );
-    assert_eq!(state(&flower, "stuck").0, "leased", "its lease runs out on its own");
+    assert_eq!(
+        state(&flower, "stuck").0,
+        "leased",
+        "its lease runs out on its own"
+    );
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_job_that_goes_idle_stops_counting_toward_concurrency_so_long_jobs_cant_keep_out_short_ones() {
+async fn a_job_that_goes_idle_stops_counting_toward_concurrency_so_long_jobs_cant_keep_out_short_ones()
+ {
     let flower = workers(&["long", "a", "b"]);
     let release = Deferred::new();
     let worker = start(
@@ -854,7 +1097,10 @@ async fn a_job_that_goes_idle_stops_counting_toward_concurrency_so_long_jobs_can
         },
     );
     until(|| worker.count("completed") == 2).await;
-    let states: Vec<String> = ["long", "a", "b"].iter().map(|id| state(&flower, id).0).collect();
+    let states: Vec<String> = ["long", "a", "b"]
+        .iter()
+        .map(|id| state(&flower, id).0)
+        .collect();
     assert_eq!(states, ["leased", "completed", "completed"]);
     release.resolve();
     until(|| worker.count("completed") == 3).await;
@@ -871,10 +1117,17 @@ async fn a_payload_the_work_cannot_read_fails_the_attempt_with_the_reason() {
         #[allow(dead_code)]
         missing: String,
     }
-    let worker = start(&flower.client(), |options| options, |_: Claim<Wanted>, _, _| async { Ok(Value::Null) });
+    let worker = start(
+        &flower.client(),
+        |options| options,
+        |_: Claim<Wanted>, _, _| async { Ok(Value::Null) },
+    );
     until(|| worker.count("failed") == 1).await;
     worker.stop().await.unwrap();
-    assert_eq!(flower.job("a")["error"], json!({ "message": "The payload cannot be read: missing field `missing`" }));
+    assert_eq!(
+        flower.job("a")["error"],
+        json!({ "message": "The payload cannot be read: missing field `missing`" })
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -895,7 +1148,10 @@ async fn a_panicking_job_fails_with_the_panic_message_and_the_worker_goes_on() {
     );
     until(|| worker.count("completed") == 1 && worker.count("failed") == 1).await;
     worker.stop().await.unwrap();
-    assert_eq!(flower.job("boom")["error"], json!({ "message": "the job blew up" }));
+    assert_eq!(
+        flower.job("boom")["error"],
+        json!({ "message": "the job blew up" })
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -917,11 +1173,21 @@ async fn leases_carry_their_history_through_renewals_and_reports() {
     );
     until(|| worker.count("completed") == 1).await;
     worker.stop().await.unwrap();
-    let history = format!(r#""history":{{"database":"{}","incarnation":"{}"}}"#, "d".repeat(32), "i".repeat(32));
+    let history = format!(
+        r#""history":{{"database":"{}","incarnation":"{}"}}"#,
+        "d".repeat(32),
+        "i".repeat(32)
+    );
     let renew = &client.calls_to("jobs.renew")[0];
     assert!(renew.args.contains(&history), "{}", renew.args);
     let complete = &client.calls_to("jobs.complete")[0];
-    assert!(complete.args.contains(&format!(r#""token":1,{history},"result":"kept""#)), "{}", complete.args);
+    assert!(
+        complete
+            .args
+            .contains(&format!(r#""token":1,{history},"result":"kept""#)),
+        "{}",
+        complete.args
+    );
     assert_eq!(state(&flower, "a"), ("completed".into(), 1));
 }
 
@@ -935,8 +1201,14 @@ async fn a_scoped_worker_in_line_sends_its_scope_everywhere() {
             ..Default::default()
         },
     );
-    flower.mutate("tools.enqueue", json!({ "scope": "computer:1", "id": "t1", "payload": { "n": 1 } }));
-    flower.mutate("tools.enqueue", json!({ "scope": "computer:2", "id": "t2", "payload": { "n": 2 } }));
+    flower.mutate(
+        "tools.enqueue",
+        json!({ "scope": "computer:1", "id": "t1", "payload": { "n": 1 } }),
+    );
+    flower.mutate(
+        "tools.enqueue",
+        json!({ "scope": "computer:2", "id": "t2", "payload": { "n": 2 } }),
+    );
     let client = flower.client();
     let worker = start(
         &client,
@@ -954,43 +1226,106 @@ async fn a_scoped_worker_in_line_sends_its_scope_everywhere() {
     );
     until(|| worker.count("completed") == 1).await;
     worker.stop().await.unwrap();
-    let claims: Vec<String> = client.calls_to("tools.claim").into_iter().map(|call| call.args).collect();
-    assert_eq!(claims[0], r#"{"owner":"w","leaseMs":30000,"scope":"computer:1","max":8,"waitMs":60000}"#);
-    assert_eq!(claims.last().unwrap(), r#"{"owner":"w","max":0,"waitMs":0,"scope":"computer:1"}"#);
+    let claims: Vec<String> = client
+        .calls_to("tools.claim")
+        .into_iter()
+        .map(|call| call.args)
+        .collect();
+    assert_eq!(
+        claims[0],
+        r#"{"owner":"w","leaseMs":30000,"scope":"computer:1","max":8,"waitMs":60000}"#
+    );
+    assert_eq!(
+        claims.last().unwrap(),
+        r#"{"owner":"w","max":0,"waitMs":0,"scope":"computer:1"}"#
+    );
     let complete = &client.calls_to("tools.complete")[0];
     assert_eq!(
         complete.args,
         r#"{"id":"t1","owner":"w","token":1,"scope":"computer:1","result":{"n":1},"next":{"max":8,"leaseMs":30000,"waitMs":60000}}"#
     );
-    let watches: Vec<String> = client.calls().into_iter().filter(|call| call.watch).map(|call| call.args).collect();
-    assert!(watches.iter().all(|args| args == r#"{"scope":"computer:1","owner":"w"}"#), "{watches:?}");
-    assert_eq!(flower.query("tools.get", json!({ "scope": "computer:2", "id": "t2" }))["state"], json!("pending"));
+    let watches: Vec<String> = client
+        .calls()
+        .into_iter()
+        .filter(|call| call.watch)
+        .map(|call| call.args)
+        .collect();
+    assert!(
+        watches
+            .iter()
+            .all(|args| args == r#"{"scope":"computer:1","owner":"w"}"#),
+        "{watches:?}"
+    );
+    assert_eq!(
+        flower.query("tools.get", json!({ "scope": "computer:2", "id": "t2" }))["state"],
+        json!("pending")
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn options_are_checked_like_the_sdk_checks_them() {
     let flower = workers(&[]);
-    let check = |configure: fn(QueueWorkerOptions) -> QueueWorkerOptions, expected: &'static str| {
+    let check = |configure: fn(QueueWorkerOptions) -> QueueWorkerOptions,
+                 expected: &'static str| {
         let client = flower.client();
         async move {
             let options = configure(QueueWorkerOptions::new("jobs", CancellationToken::new()));
-            let error = run_queue_worker(client, options, |_: Job, _, _| async { Ok(Value::Null) }).await.unwrap_err();
+            let error = run_queue_worker(client, options, |_: Job, _, _| async { Ok(Value::Null) })
+                .await
+                .unwrap_err();
             assert_eq!(error.to_string(), expected);
         }
     };
-    check(|o| QueueWorkerOptions { lease_ms: Some(100), margin_ms: Some(100), ..o }, "leaseMs must exceed marginMs").await;
-    check(|o| QueueWorkerOptions { batch: Some(0), ..o }, "batch must be a positive safe integer").await;
-    check(|o| QueueWorkerOptions { wait_ms: Some(1), ..o }, "waitMs must be a safe integer of at least 2").await;
-    check(|o| QueueWorkerOptions { release: true, ..o }, "release needs drainMs").await;
     check(
         |o| QueueWorkerOptions {
-            concurrency: Some(Concurrency::Adaptive(Adaptive { min: Some(4), max: Some(2), initial: None })),
+            lease_ms: Some(100),
+            margin_ms: Some(100),
+            ..o
+        },
+        "leaseMs must exceed marginMs",
+    )
+    .await;
+    check(
+        |o| QueueWorkerOptions {
+            batch: Some(0),
+            ..o
+        },
+        "batch must be a positive safe integer",
+    )
+    .await;
+    check(
+        |o| QueueWorkerOptions {
+            wait_ms: Some(1),
+            ..o
+        },
+        "waitMs must be a safe integer of at least 2",
+    )
+    .await;
+    check(
+        |o| QueueWorkerOptions { release: true, ..o },
+        "release needs drainMs",
+    )
+    .await;
+    check(
+        |o| QueueWorkerOptions {
+            concurrency: Some(Concurrency::Adaptive(Adaptive {
+                min: Some(4),
+                max: Some(2),
+                initial: None,
+            })),
             ..o
         },
         "concurrency needs whole numbers with 1 <= min <= initial <= max",
     )
     .await;
-    check(|o| QueueWorkerOptions { concurrency: Some(Concurrency::Fixed(0)), ..o }, "concurrency needs whole numbers with 1 <= min <= initial <= max").await;
+    check(
+        |o| QueueWorkerOptions {
+            concurrency: Some(Concurrency::Fixed(0)),
+            ..o
+        },
+        "concurrency needs whole numbers with 1 <= min <= initial <= max",
+    )
+    .await;
 }
 
 /// Real threads and real time: the lock keeps the accounting right under parallel jobs.
@@ -1021,7 +1356,8 @@ async fn many_jobs_on_many_threads_complete_exactly_once() {
                     if claim.id.ends_with('7') {
                         control.idle();
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(1 + (claim.token % 3))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(1 + (claim.token % 3)))
+                        .await;
                     Ok(claim.id)
                 }
             }
@@ -1029,7 +1365,11 @@ async fn many_jobs_on_many_threads_complete_exactly_once() {
     );
     let started = std::time::Instant::now();
     while worker.count("completed") < ids.len() {
-        assert!(started.elapsed() < std::time::Duration::from_secs(20), "completed {}", worker.count("completed"));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "completed {}",
+            worker.count("completed")
+        );
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     worker.stop().await.unwrap();

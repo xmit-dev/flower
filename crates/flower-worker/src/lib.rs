@@ -28,10 +28,13 @@ use std::error::Error as StdError;
 use std::fmt;
 
 pub use capacity::{
-    Adaptive, Concurrency, Health, HealthLimits, LimitChange, Limiter, Load, ProcessHealth, default_process_health,
-    idle_health, process_health,
+    Adaptive, Concurrency, Health, HealthLimits, LimitChange, Limiter, Load, ProcessHealth,
+    default_process_health, idle_health, process_health,
 };
-pub use client::{ClientError, Predicate, QueueClient, RetryPolicy, backoff, default_backoff, non_empty_array, truthy};
+pub use client::{
+    ClientError, Predicate, QueueClient, RetryPolicy, backoff, default_backoff, non_empty_array,
+    truthy,
+};
 pub use clock::{Clock, system_now_ms};
 #[cfg(feature = "flower-client")]
 pub use flower::retry_policy;
@@ -39,7 +42,9 @@ pub use json::to_js_raw;
 pub use queue::{EventHandler, QueueWorkerOptions, run_queue_worker};
 pub use reconcile::{ReconcileOptions, reconcile};
 pub use stop::{JobControl, JobStop, WorkError};
-pub use types::{Claim, ExternalClaim, ExternalWork, LeaseIdentity, QueueWorkerEvent, ReconcileEvent};
+pub use types::{
+    Claim, ExternalClaim, ExternalWork, LeaseIdentity, QueueWorkerEvent, ReconcileEvent,
+};
 
 /// Why [`run_queue_worker`] or [`reconcile`] stopped with an error.
 #[derive(Debug)]
@@ -100,7 +105,14 @@ pub(crate) fn new_uuid() -> String {
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 /// The message of a panic, as a thrown error's.

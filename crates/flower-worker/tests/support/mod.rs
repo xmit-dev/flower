@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use flower_worker::testing::{FakeClient, FakeError};
 use flower_worker::{
-    Claim, JobControl, JobStop, Load, QueueWorkerEvent, QueueWorkerOptions, WorkError, WorkerError, run_queue_worker,
+    Claim, JobControl, JobStop, Load, QueueWorkerEvent, QueueWorkerOptions, WorkError, WorkerError,
+    run_queue_worker,
 };
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -21,7 +22,10 @@ pub type Outcome = Result<(), WorkerError<FakeError>>;
 pub async fn until(condition: impl Fn() -> bool) {
     let started = tokio::time::Instant::now();
     while !condition() {
-        assert!(started.elapsed() < Duration::from_secs(3), "Timed out waiting for the worker");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "Timed out waiting for the worker"
+        );
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
 }
@@ -71,10 +75,19 @@ impl Started {
         self.events.lock().clone()
     }
     pub fn types(&self) -> Vec<&'static str> {
-        self.events.lock().iter().filter(|event| event.kind() != "limit").map(|event| event.kind()).collect()
+        self.events
+            .lock()
+            .iter()
+            .filter(|event| event.kind() != "limit")
+            .map(|event| event.kind())
+            .collect()
     }
     pub fn count(&self, kind: &str) -> usize {
-        self.events.lock().iter().filter(|event| event.kind() == kind).count()
+        self.events
+            .lock()
+            .iter()
+            .filter(|event| event.kind() == kind)
+            .count()
     }
     pub fn limits(&self) -> Vec<u64> {
         self.events
@@ -89,7 +102,11 @@ impl Started {
     /// Stop and wait for the worker.
     pub async fn stop(mut self) -> Outcome {
         self.stop.cancel();
-        self.done.take().expect("not stopped yet").await.expect("the worker task ran")
+        self.done
+            .take()
+            .expect("not stopped yet")
+            .await
+            .expect("the worker task ran")
     }
     /// Stop without waiting; await the returned handle later.
     pub fn stop_later(mut self) -> JoinHandle<Outcome> {
@@ -98,12 +115,20 @@ impl Started {
     }
     /// Wait for the worker to end on its own.
     pub async fn done(mut self) -> Outcome {
-        self.done.take().expect("not stopped yet").await.expect("the worker task ran")
+        self.done
+            .take()
+            .expect("not stopped yet")
+            .await
+            .expect("the worker task ran")
     }
 }
 
 /// `start(client, options)`: queue `jobs`, an idle health, events recorded, the fake's clock.
-pub fn start<P, R, W, F>(client: &FakeClient, configure: impl FnOnce(QueueWorkerOptions) -> QueueWorkerOptions, work: W) -> Started
+pub fn start<P, R, W, F>(
+    client: &FakeClient,
+    configure: impl FnOnce(QueueWorkerOptions) -> QueueWorkerOptions,
+    work: W,
+) -> Started
 where
     P: DeserializeOwned + Send + 'static,
     R: Serialize + Send + 'static,

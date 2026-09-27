@@ -26,7 +26,9 @@ use tokio::sync::{Notify, oneshot};
 use tokio::time::{MissedTickBehavior, interval_at, sleep};
 use tokio_util::sync::CancellationToken;
 
-use crate::capacity::{Concurrency, Health, LimitChange, Limiter, MAX_SAFE_INTEGER, default_process_health};
+use crate::capacity::{
+    Concurrency, Health, LimitChange, Limiter, MAX_SAFE_INTEGER, default_process_health,
+};
 use crate::client::{ClientError, QueueClient, RetryPolicy, default_backoff, truthy};
 use crate::clock::Clock;
 use crate::json::{raw, storable};
@@ -185,7 +187,11 @@ where
     worker.run().await
 }
 
-type ErasedWork = Arc<dyn Fn(Claim<Value>, JobStop, JobControl) -> BoxFuture<'static, Result<Box<RawValue>, String>> + Send + Sync>;
+type ErasedWork = Arc<
+    dyn Fn(Claim<Value>, JobStop, JobControl) -> BoxFuture<'static, Result<Box<RawValue>, String>>
+        + Send
+        + Sync,
+>;
 
 struct Settings {
     queue: String,
@@ -362,7 +368,9 @@ impl<E: Send + Sync + 'static> Control for Core<E> {
     fn idle(&self, key: u64) {
         let guard = self.enter();
         let mut state = guard.borrow_mut();
-        let Some(entry) = state.held.get_mut(&key) else { return };
+        let Some(entry) = state.held.get_mut(&key) else {
+            return;
+        };
         if entry.idled {
             return;
         }
@@ -480,12 +488,18 @@ pub(crate) fn claimed_jobs(value: Value) -> Result<Vec<Claim<Value>>, String> {
         };
     };
     let more = first.remove("more");
-    let mut jobs = vec![serde_json::from_value(Value::Object(first)).map_err(|error| format!("A claim returned an invalid job: {error}"))?];
+    let mut jobs = vec![
+        serde_json::from_value(Value::Object(first))
+            .map_err(|error| format!("A claim returned an invalid job: {error}"))?,
+    ];
     match more {
         None => {}
         Some(Value::Array(more)) => {
             for job in more {
-                jobs.push(serde_json::from_value(job).map_err(|error| format!("A claim returned an invalid job: {error}"))?);
+                jobs.push(
+                    serde_json::from_value(job)
+                        .map_err(|error| format!("A claim returned an invalid job: {error}"))?,
+                );
             }
         }
         Some(other) => return Err(format!("A claim returned more: {other}")),
@@ -505,7 +519,11 @@ fn safe(value: u64) -> bool {
 }
 
 impl<C: QueueClient> Worker<C> {
-    fn new(client: C, options: QueueWorkerOptions, work: ErasedWork) -> Result<Arc<Self>, WorkerError<C::Error>> {
+    fn new(
+        client: C,
+        options: QueueWorkerOptions,
+        work: ErasedWork,
+    ) -> Result<Arc<Self>, WorkerError<C::Error>> {
         let invalid = |message: &str| WorkerError::Invalid(message.to_owned());
         let lease_ms = options.lease_ms.unwrap_or(30_000);
         let margin_ms = options.margin_ms.unwrap_or(lease_ms / 5);
@@ -527,18 +545,27 @@ impl<C: QueueClient> Worker<C> {
         if options.release && options.drain_ms.is_none() {
             return Err(invalid("release needs drainMs"));
         }
-        let health = options.health.clone().unwrap_or_else(default_process_health);
-        let concurrency = options.concurrency.unwrap_or(Concurrency::Adaptive(crate::Adaptive {
-            min: Some(1),
-            max: Some(16),
-            initial: None,
-        }));
-        let limiter = Limiter::with_clock(concurrency, health, &options.clock).map_err(WorkerError::Invalid)?;
+        let health = options
+            .health
+            .clone()
+            .unwrap_or_else(default_process_health);
+        let concurrency = options
+            .concurrency
+            .unwrap_or(Concurrency::Adaptive(crate::Adaptive {
+                min: Some(1),
+                max: Some(16),
+                initial: None,
+            }));
+        let limiter = Limiter::with_clock(concurrency, health, &options.clock)
+            .map_err(WorkerError::Invalid)?;
         let claimers = options.claimers.unwrap_or(4).min(limiter.max).max(1);
         if !safe(claimers) {
             return Err(invalid("claimers must be a positive safe integer"));
         }
-        let owner = options.owner.clone().unwrap_or_else(|| format!("worker-{}", new_uuid()));
+        let owner = options
+            .owner
+            .clone()
+            .unwrap_or_else(|| format!("worker-{}", new_uuid()));
         let ready_args = if wait {
             raw(&ReadyArgs {
                 scope: options.scope.as_deref(),
@@ -610,7 +637,12 @@ impl<C: QueueClient> Worker<C> {
     }
 
     /// `send(method, args, until)`: a mutation retried until `until`.
-    fn send(&self, method: &str, args: Box<RawValue>, until: i64) -> impl Future<Output = Result<Value, C::Error>> + Send + 'static {
+    fn send(
+        &self,
+        method: &str,
+        args: Box<RawValue>,
+        until: i64,
+    ) -> impl Future<Output = Result<Value, C::Error>> + Send + 'static {
         let client = self.client.clone();
         let name = format!("{}.{}", self.settings.queue, method);
         let retry = RetryPolicy {
@@ -660,7 +692,10 @@ impl<C: QueueClient> Worker<C> {
                 let notified = core.running_changed.notified();
                 tokio::pin!(notified);
                 notified.as_mut().enable();
-                if running.iter().all(|key| !core.enter().borrow().running.contains(key)) {
+                if running
+                    .iter()
+                    .all(|key| !core.enter().borrow().running.contains(key))
+                {
                     return;
                 }
                 notified.await;
@@ -677,12 +712,19 @@ impl<C: QueueClient> Worker<C> {
                 let guard = core.enter();
                 for entry in guard.borrow_mut().held.values_mut() {
                     entry.drained = true;
-                    entry.stop.stop("The worker stopped before the job finished");
+                    entry
+                        .stop
+                        .stop("The worker stopped before the job finished");
                 }
             }
             sleep(Duration::from_millis(ABANDON_AFTER_MS)).await;
             let guard = core.enter();
-            let ids: Vec<String> = guard.borrow().held.values().map(|entry| entry.job.id.clone()).collect();
+            let ids: Vec<String> = guard
+                .borrow()
+                .held
+                .values()
+                .map(|entry| entry.job.id.clone())
+                .collect();
             for id in ids {
                 core.emit(QueueWorkerEvent::Unreported {
                     id,
@@ -808,7 +850,9 @@ impl<C: QueueClient> Worker<C> {
                     }
                     let delay = {
                         let guard = self.core.enter();
-                        self.core.emit(QueueWorkerEvent::Waiting { error: error.describe() });
+                        self.core.emit(QueueWorkerEvent::Waiting {
+                            error: error.describe(),
+                        });
                         let mut state = guard.borrow_mut();
                         let failures = state.failures;
                         state.failures += 1;
@@ -884,7 +928,9 @@ impl<C: QueueClient> Worker<C> {
                 let due: Vec<(u64, &Held)> = state
                     .held
                     .iter()
-                    .filter(|(_, entry)| renewed_at - entry.renewed_at >= renew_every && !entry.stop.is_stopped())
+                    .filter(|(_, entry)| {
+                        renewed_at - entry.renewed_at >= renew_every && !entry.stop.is_stopped()
+                    })
                     .map(|(key, entry)| (*key, entry))
                     .collect();
                 if due.is_empty() {
@@ -895,8 +941,16 @@ impl<C: QueueClient> Worker<C> {
                     lease_ms: settings.lease_ms,
                     scope: self.scope(),
                 });
-                let until = due.iter().map(|(_, entry)| entry.deadline).min().unwrap_or(renewed_at);
-                (due.into_iter().map(|(key, _)| key).collect::<Vec<_>>(), args, until)
+                let until = due
+                    .iter()
+                    .map(|(_, entry)| entry.deadline)
+                    .min()
+                    .unwrap_or(renewed_at);
+                (
+                    due.into_iter().map(|(key, _)| key).collect::<Vec<_>>(),
+                    args,
+                    until,
+                )
             };
             let worker = self.clone();
             let sent = self.send("renew", args, until);
@@ -906,13 +960,16 @@ impl<C: QueueClient> Worker<C> {
                 let guard = worker.core.enter();
                 let mut state = guard.borrow_mut();
                 for (index, key) in due.into_iter().enumerate() {
-                    let Some(entry) = state.held.get_mut(&key) else { continue };
+                    let Some(entry) = state.held.get_mut(&key) else {
+                        continue;
+                    };
                     if expiries.get(index).is_some_and(Value::is_null) {
                         entry.stop.stop("The lease was lost");
                         continue;
                     }
                     entry.renewed_at = renewed_at;
-                    entry.deadline = renewed_at + (worker.settings.lease_ms - worker.settings.margin_ms) as i64;
+                    entry.deadline =
+                        renewed_at + (worker.settings.lease_ms - worker.settings.margin_ms) as i64;
                     worker.arm(key, entry);
                 }
             });
@@ -967,7 +1024,8 @@ impl<C: QueueClient> Worker<C> {
             state.held.insert(key, entry);
             key
         };
-        self.core.emit(QueueWorkerEvent::Claimed { job: job.clone() });
+        self.core
+            .emit(QueueWorkerEvent::Claimed { job: job.clone() });
         let control = JobControl {
             target: self.core.clone(),
             key,
@@ -977,7 +1035,11 @@ impl<C: QueueClient> Worker<C> {
         tokio::spawn(self.clone().job(key, future));
     }
 
-    async fn job(self: Arc<Self>, key: u64, future: BoxFuture<'static, Result<Box<RawValue>, String>>) {
+    async fn job(
+        self: Arc<Self>,
+        key: u64,
+        future: BoxFuture<'static, Result<Box<RawValue>, String>>,
+    ) {
         let result = match AssertUnwindSafe(future).catch_unwind().await {
             Ok(result) => result,
             Err(panic) => Err(panic_message(&*panic)),
@@ -986,7 +1048,10 @@ impl<C: QueueClient> Worker<C> {
         let (method, args, take, until, id) = {
             let guard = self.core.enter();
             let mut state = guard.borrow_mut();
-            let entry = state.held.remove(&key).expect("a running job is held until its work ends");
+            let entry = state
+                .held
+                .remove(&key)
+                .expect("a running job is held until its work ends");
             entry.timer.cancel();
             if entry.idled {
                 state.idle -= 1;
@@ -1000,7 +1065,11 @@ impl<C: QueueClient> Worker<C> {
                 (None, Err(message)) => (Method::Fail, None, Some(message.as_str())),
             };
             // This job's room passes to the jobs its report claims; the claimers keep out of the rest.
-            let take = if settings.chain && method != Method::Release && !self.core.signal.is_cancelled() && state.limiter.pause() == 0 {
+            let take = if settings.chain
+                && method != Method::Release
+                && !self.core.signal.is_cancelled()
+                && state.limiter.pause() == 0
+            {
                 (settings.batch as i64).min(state.limit() - state.busy() + 1)
             } else {
                 0
@@ -1025,7 +1094,13 @@ impl<C: QueueClient> Worker<C> {
                 next,
             });
             let error = message.map(str::to_owned);
-            (method, args, take, entry.deadline + settings.margin_ms as i64, (entry.job.id.clone(), error))
+            (
+                method,
+                args,
+                take,
+                entry.deadline + settings.margin_ms as i64,
+                (entry.job.id.clone(), error),
+            )
         };
         let sent_at = self.now();
         let reply = self.send(method.name(), args, until).await;
@@ -1134,7 +1209,9 @@ impl<C: QueueClient> Worker<C> {
                         probe
                     });
                     // Room for this many, held until the claim answers.
-                    let take = (settings.batch as i64).min(state.limit() - state.busy()).max(1);
+                    let take = (settings.batch as i64)
+                        .min(state.limit() - state.busy())
+                        .max(1);
                     state.claiming += take;
                     Step::Claim {
                         take,
@@ -1150,7 +1227,11 @@ impl<C: QueueClient> Worker<C> {
                     continue;
                 }
                 Step::Again => continue,
-                Step::Claim { take, sent_at, probe } => (take, sent_at, probe),
+                Step::Claim {
+                    take,
+                    sent_at,
+                    probe,
+                } => (take, sent_at, probe),
             };
             let args = raw(&ClaimArgs {
                 owner: &settings.owner,
@@ -1162,7 +1243,9 @@ impl<C: QueueClient> Worker<C> {
             // `await send(...)` lets the claimers already woken look first, as JavaScript runs the
             // continuations queued before this one: they see this claim probing and wait for it.
             tokio::task::yield_now().await;
-            let reply = self.send("claim", args, sent_at + settings.lease_ms as i64).await;
+            let reply = self
+                .send("claim", args, sent_at + settings.lease_ms as i64)
+                .await;
             let retry_in = {
                 let guard = self.core.enter();
                 let mut jobs = Vec::new();
@@ -1180,7 +1263,9 @@ impl<C: QueueClient> Worker<C> {
                         } else if !error.is_transient() {
                             exit = Some(Err(Halt::Client(error)));
                         } else {
-                            self.core.emit(QueueWorkerEvent::Waiting { error: error.describe() });
+                            self.core.emit(QueueWorkerEvent::Waiting {
+                                error: error.describe(),
+                            });
                             let mut state = guard.borrow_mut();
                             retry_in = Some(default_backoff(state.failures));
                             state.failures += 1;
