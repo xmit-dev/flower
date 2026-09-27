@@ -13,6 +13,8 @@
 mod capacity;
 mod client;
 mod clock;
+#[cfg(feature = "flower-client")]
+mod flower;
 mod json;
 mod queue;
 mod reconcile;
@@ -31,6 +33,8 @@ pub use capacity::{
 };
 pub use client::{ClientError, Predicate, QueueClient, RetryPolicy, backoff, default_backoff, non_empty_array, truthy};
 pub use clock::{Clock, system_now_ms};
+#[cfg(feature = "flower-client")]
+pub use flower::retry_policy;
 pub use json::to_js_raw;
 pub use queue::{EventHandler, QueueWorkerOptions, run_queue_worker};
 pub use reconcile::{ReconcileOptions, reconcile};
@@ -77,8 +81,13 @@ impl<E: StdError + 'static> StdError for WorkerError<E> {
     }
 }
 
-/// `message(error)` for an error a job or computation returned: its display text.
+/// `message(error)` for an error a job or computation returned: a Flower client error as
+/// [`ClientError::describe`] gives it, anything else its display text.
 pub(crate) fn describe_error(error: &(dyn StdError + 'static)) -> String {
+    #[cfg(feature = "flower-client")]
+    if let Some(error) = error.downcast_ref::<flower_client::FlowerError>() {
+        return ClientError::describe(error);
+    }
     error.to_string()
 }
 

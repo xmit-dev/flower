@@ -1062,6 +1062,7 @@ name = "flower-worker"
 version = "0.1.0"
 dependencies = [
  "fastrand",
+ "flower-client",
  "flower-worker",
  "futures-util",
  "getrandom 0.4.3",

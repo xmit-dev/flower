@@ -10,12 +10,15 @@ license = "MIT"
 # features across a Flower `--workspace` build, and the server's canonical JSON relies on sorted
 # `Map`s and plain `Number`s. `raw_value` lets request arguments keep the key order the TS SDK sends.
 [features]
-default = []
+default = ["flower-client"]
+# QueueClient for flower_client::FlowerClient (and ClientError for FlowerError).
+flower-client = ["dep:flower-client"]
 # An in-memory Flower (queue.http() and external().http() methods) and a client over it, for tests.
 testing = ["dep:sha2"]
 
 [dependencies]
 fastrand = "2"
+flower-client = { path = "../flower-client", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 getrandom = "0.4"
 parking_lot = "0.12"
