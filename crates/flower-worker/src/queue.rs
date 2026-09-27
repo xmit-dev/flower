@@ -672,6 +672,9 @@ impl<C: QueueClient> Worker<C> {
         if self.settings.renew {
             tokio::spawn(self.clone().renewing(renewal.clone()));
         }
+        // Dropped mid-run, the intervals end too: running jobs keep going until their leases run
+        // out. A stop runs to the end and cancels them itself.
+        let _intervals = (renewal.clone().drop_guard(), adjusting.clone().drop_guard());
 
         join_all((0..self.settings.claimers).map(|_| {
             let worker = self.clone();

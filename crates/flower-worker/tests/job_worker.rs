@@ -1378,3 +1378,45 @@ async fn many_jobs_on_many_threads_complete_exactly_once() {
         assert_eq!(state(&flower, id), ("completed".into(), 1));
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn dropping_the_worker_future_ends_every_task_it_started_once_its_jobs_end() {
+    let flower = workers(&["a"]);
+    let client = flower.client();
+    let alive = || {
+        tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks()
+    };
+    let before = alive();
+    let claimed = Deferred::new();
+    let options = QueueWorkerOptions {
+        health: Some(Arc::new(Load::idle)),
+        clock: flower.clock().clone(),
+        lease_ms: Some(1_000),
+        ..QueueWorkerOptions::new("jobs", CancellationToken::new())
+    };
+    let worker = run_queue_worker(client.clone(), options, {
+        let claimed = claimed.clone();
+        move |_: Job, stop, _| {
+            let claimed = claimed.clone();
+            async move {
+                claimed.resolve();
+                lease_end::<Value>(stop).await
+            }
+        }
+    });
+    tokio::select! {
+        _ = worker => panic!("the worker ended on its own"),
+        _ = claimed.wait() => {}
+    }
+    // The job keeps its lease until it runs out, then reports; nothing else outlives the future.
+    until(|| client.calls_to("jobs.fail").len() == 1).await;
+    let failed = client.calls_to("jobs.fail")[0].args();
+    assert_eq!(failed["error"], json!({ "message": "The lease ran out" }));
+    until(|| alive() == before).await;
+    assert!(
+        client.calls_to("jobs.renew").is_empty(),
+        "renewals ended with the future"
+    );
+}

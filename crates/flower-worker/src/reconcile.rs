@@ -982,6 +982,8 @@ impl<C: QueueClient> LeasedPool<C> {
         if !self.enter().borrow().limiter.fixed() {
             tokio::spawn(self.clone().adjusting(adjusting.clone()));
         }
+        // Dropped mid-run, the intervals end too (a stop runs to the end and cancels them itself).
+        let _intervals = (renewal.clone().drop_guard(), adjusting.clone().drop_guard());
         let mut attempt = 0u32;
         while !signal.is_cancelled() {
             let notified = self.room_changed.notified();
