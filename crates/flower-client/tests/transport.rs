@@ -387,7 +387,8 @@ async fn an_unread_event_stream_is_backpressured_instead_of_buffered_whole() {
 async fn sdk_calls_multiplex_on_one_connection_and_preserve_methods_headers_and_request_ids() {
     let concurrent = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
-    let received: Arc<Mutex<Vec<(String, Value, Option<String>, http::Version)>>> = Arc::default();
+    type Received = (String, Value, Option<String>, http::Version);
+    let received: Arc<Mutex<Vec<Received>>> = Arc::default();
     let (now, top, seen) = (concurrent.clone(), peak.clone(), received.clone());
     let server = serve(Mode::Auto, move |request, _| {
         let (now, top, seen) = (now.clone(), top.clone(), seen.clone());
