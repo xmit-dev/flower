@@ -22,7 +22,7 @@ use tokio::sync::watch;
 use crate::client::{ClientError, Predicate, QueueClient, RetryPolicy, backoff};
 use crate::clock::Clock;
 
-pub use external::Digest;
+pub use external::{Digest, shard_of};
 pub use queue::{FakeQueue, QueueConfig, QueueRetry};
 
 /// A client error as the TS SDK would raise it: a `FlowerError` (status, code, message,

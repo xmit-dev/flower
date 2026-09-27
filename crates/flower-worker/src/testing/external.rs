@@ -159,7 +159,11 @@ impl Digest {
                 }),
                 None => Err(FakeError::invalid("args must be a string")),
             },
-            "digest.pending" => Ok(self.pending(args).unwrap_or(Value::Null)),
+            "digest.pending" => match args {
+                // The external's argument schema: `documentId`, a string of 1 to 256.
+                Value::String(id) if (1..=256).contains(&id.encode_utf16().count()) => Ok(self.pending(args).unwrap_or(Value::Null)),
+                _ => Err(FakeError::invalid("args must be a string of 1 to 256")),
+            },
             "digest.publish" => (|| {
                 let work = object(args, &["args", "key", "value"], "args")?;
                 let args = work.get("args").cloned().unwrap_or(Value::Null);
