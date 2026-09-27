@@ -3,7 +3,7 @@ import type { RetryPolicy } from "./client.ts";
 import { Limiter, processHealth, type Concurrency, type Health } from "./capacity.ts";
 import type { ExternalClaim, ExternalWork } from "./external.ts";
 import { canonicalJson, type Json } from "./json.ts";
-import type { Claim } from "./temporal.ts";
+import type { Claim, Claimed } from "./temporal.ts";
 
 export { processHealth } from "./capacity.ts";
 export type { Adaptive, Concurrency, Health, HealthLimits, Load } from "./capacity.ts";
@@ -52,6 +52,12 @@ export interface QueueWorkerOptions<P = Json, R = Json> {
   readonly batch?: number;
   /** Claims in flight at once, once claims come back full. Default 4. */
   readonly claimers?: number;
+  /**
+   * Report each outcome with a claim for this process's next jobs, as many as it has room for, in
+   * the same commit: while work waits, a job then costs its report alone rather than a claim too.
+   * Needs complete and fail methods that take `next` and answer with it, as queue.http() generates. Default false.
+   */
+  readonly chain?: boolean;
   /** Wait in the queue's line, so a new job wakes one process instead of all: needs a claim that takes max and waitMs, and a ready that takes owner, as queue.http() generates. Default false. */
   readonly wait?: boolean;
   /** How long a place in line lasts; an idle worker claims again at half of it to keep it. Default 60,000. */
@@ -118,6 +124,7 @@ export async function runQueueWorker<P = Json, R = Json>(client: FlowerClient<an
   const batch = options.batch ?? 1;
   const wait = options.wait ?? false;
   const waitMs = options.waitMs ?? 60_000;
+  const chain = options.chain ?? false;
   if (!Number.isSafeInteger(leaseMs) || leaseMs <= marginMs || marginMs < 0) throw new TypeError("leaseMs must exceed marginMs");
   if (!Number.isSafeInteger(batch) || batch < 1) throw new TypeError("batch must be a positive safe integer");
   if (!Number.isSafeInteger(waitMs) || waitMs < 2) throw new TypeError("waitMs must be a safe integer of at least 2");
@@ -143,6 +150,8 @@ export async function runQueueWorker<P = Json, R = Json>(client: FlowerClient<an
   let ready: Promise<void> | null = wait ? Promise.resolve() : null;
   // The queue showed work since the last short claim.
   let shown = false;
+  // A readiness watch is open.
+  let watching = false;
   let failures = 0;
   // After the queue shows work, one claimer asks at a time until claims come back full: when a
   // single job arrived, the others would only come back empty. `full` counts full claims in a row.
@@ -171,6 +180,10 @@ export async function runQueueWorker<P = Json, R = Json>(client: FlowerClient<an
    * claim, or, in line, when it is time to claim again to keep the place. One watch serves every claimer.
    */
   const whenReady = () => ready ??= (async () => {
+    watching = true;
+    try { await watch(); } finally { watching = false; }
+  })();
+  const watch = async () => {
     for (;;) {
       const refresh = wait ? AbortSignal.timeout(Math.floor(waitMs / 2)) : null;
       try {
@@ -189,7 +202,7 @@ export async function runQueueWorker<P = Json, R = Json>(client: FlowerClient<an
         await pause(backoff(failures++), signal);
       }
     }
-  })();
+  };
 
   const adjusting = setInterval(() => {
     // A full pool claims nothing, so claims cannot show that work waits: its readiness watch does.
@@ -226,6 +239,15 @@ export async function runQueueWorker<P = Json, R = Json>(client: FlowerClient<an
     }
   }, Math.max(1, Math.floor(renewEveryMs / 2))) : undefined;
 
+  /** A claim that came back short means the queue ran dry: watch for work again, keeping a watch still open. */
+  function claimed(got: number, asked: number): void {
+    if (got < asked) {
+      full = 0;
+      if (!watching) ready = null;
+      shown = false;
+    } else full++;
+  }
+
   function start(job: Claim<P>, sentAt: number): void {
     const identity = { id: job.id, owner: job.owner, token: job.token, ...(job.history ? { history: job.history } : {}) } as unknown as Record<string, Json>;
     const entry: Held = { job, identity, stop: new AbortController(), deadline: sentAt + leaseMs - marginMs, renewedAt: sentAt };
@@ -244,28 +266,50 @@ export async function runQueueWorker<P = Json, R = Json>(client: FlowerClient<an
       },
     };
     const task = (async () => {
-      let outcome: [string, Json];
+      let outcome: [string, Record<string, Json>];
       try {
         const result = await work(job, entry.stop.signal, control);
         if (entry.stop.signal.aborted) throw entry.stop.signal.reason;
-        outcome = ["complete", { ...identity, ...scope, result: storable(result) } as Json];
+        outcome = ["complete", { ...identity, ...scope, result: storable(result) }];
       } catch (error) {
         // Abortable APIs reject with a generic AbortError; the lease's reason says why.
-        outcome = entry.drained && options.release ? ["release", { ...identity, ...scope } as Json]
-          : ["fail", { ...identity, ...scope, error: { message: message(entry.stop.signal.aborted ? entry.stop.signal.reason : error) } } as Json];
+        outcome = entry.drained && options.release ? ["release", { ...identity, ...scope }]
+          : ["fail", { ...identity, ...scope, error: { message: message(entry.stop.signal.aborted ? entry.stop.signal.reason : error) } }];
       } finally {
         held.delete(entry);
         clearTimeout(entry.timer);
         if (idled) idle--;
       }
+      // This job's room passes to the jobs its report claims; the claimers keep out of the rest.
+      const take = chain && outcome[0] !== "release" && !signal.aborted && limiter.pause === 0 ? Math.min(batch, limiter.limit - busy() + 1) : 0;
+      if (take > 0) {
+        outcome[1].next = { max: take, leaseMs, ...(wait ? { waitMs } : {}) };
+        claiming += take - 1;
+      }
+      const sentAt = Date.now();
       try {
-        await send(outcome[0], outcome[1], entry.deadline + marginMs);
+        const reply = await send<{ next?: Claimed<P> } | null>(outcome[0], outcome[1], entry.deadline + marginMs);
         onEvent(outcome[0] === "complete" ? { type: "completed", id: job.id } : outcome[0] === "release" ? { type: "released", id: job.id }
           : { type: "failed", id: job.id, error: String((outcome[1] as { error: { message: string } }).error.message) });
+        if (take > 0) {
+          const jobs: Claim<P>[] = [];
+          if (reply?.next) {
+            const { more = [], ...first } = reply.next;
+            jobs.push(first as Claim<P>, ...more);
+          }
+          claimed(jobs.length, take);
+          for (const next of jobs) start(next, sentAt);
+          if (jobs.length === take && busy() >= limiter.limit) limiter.want();
+        }
       } catch (error) {
         // Refused (the lease moved on) or never answered: either way the queue hands the job out again once the lease ends.
         if (leaseLost(error)) onEvent({ type: "lost", id: job.id });
         else onEvent({ type: "unreported", id: job.id, error: message(error) });
+      } finally {
+        if (take > 0) {
+          claiming -= take - 1;
+          wake(take - 1);
+        }
       }
     })().finally(() => {
       running.delete(task);
@@ -320,11 +364,7 @@ export async function runQueueWorker<P = Json, R = Json>(client: FlowerClient<an
         await pause(retryIn, signal);
         continue;
       }
-      if (jobs.length < take) {
-        full = 0;
-        ready = null;
-        shown = false;
-      } else full++;
+      claimed(jobs.length, take);
       for (const job of jobs) start(job, sentAt);
       // The claim took all it asked for and filled the room: the queue may hold more than the pool takes.
       if (jobs.length === take && busy() >= limiter.limit) limiter.want();

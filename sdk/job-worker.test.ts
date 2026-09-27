@@ -303,6 +303,35 @@ test("a worker takes several jobs per claim and renews every lease it holds in o
   assert.deepEqual(["a", "b", "c", "d", "e"].map((id) => [job(db, id).state, job(db, id).attempts]), Array(5).fill(["completed", 1]));
 });
 
+test("with chain, each report claims the next job, so a busy queue costs one claim", async () => {
+  const ids = ["a", "b", "c", "d", "e", "f"];
+  const db = await queue(ids);
+  const { client, calls } = recording(db);
+  const worker = start(client, { concurrency: 1, chain: true, wait: true, work: async (claim) => { await sleep(2); return claim.id; } });
+  await until(() => worker.count("completed") === ids.length);
+  db.mutate("jobs.enqueue", { id: "late", payload: { id: "late" } });
+  await until(() => worker.count("completed") === ids.length + 1);
+  await worker.stop();
+  const claims = calls.filter((call) => call.name === "jobs.claim" && call.args.max !== 0);
+  assert.equal(claims.length, 2, "one to start, one for the job that arrived once the queue ran dry");
+  const reports = calls.filter((call) => call.name === "jobs.complete").map((call) => call.args.next);
+  assert.deepEqual(reports, Array(ids.length + 1).fill({ max: 1, leaseMs: 30_000, waitMs: 60_000 }));
+  assert.deepEqual([...ids, "late"].map((id) => [job(db, id).state, job(db, id).attempts]), Array(ids.length + 1).fill(["completed", 1]));
+});
+
+test("with chain, a stopping worker's reports claim nothing more", async () => {
+  const db = await queue(["a", "b"]);
+  const { client, calls } = recording(db);
+  const finish = deferred();
+  const worker = start(client, { concurrency: 1, chain: true, work: async (claim) => { await finish.promise; return claim.id; } });
+  await until(() => worker.count("claimed") === 1);
+  const stopped = worker.stop();
+  finish.resolve();
+  await stopped;
+  assert.deepEqual(calls.filter((call) => call.name === "jobs.complete").map((call) => call.args.next), [undefined]);
+  assert.deepEqual([job(db, "a").state, job(db, "b").state], ["completed", "pending"]);
+});
+
 test("a worker takes more jobs at once while its queue holds more than it runs", async () => {
   const ids = Array.from({ length: 120 }, (_, index) => `job-${String(index).padStart(3, "0")}`);
   const db = await queue(ids);

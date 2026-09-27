@@ -394,6 +394,25 @@ test("release() hands a job back at its turn with its attempt count and no new e
   assert.equal(rejected(() => db.mutate("jobs.release", { id: "a2", owner: "w", token: 1, delayMs: -1 })).failure!.code, "INVALID_ARGUMENT");
 });
 
+test("a report with next claims the owner's next jobs in the same commit", async () => {
+  const db = await testDatabase(app);
+  for (const id of ["a", "b", "c", "d"]) db.mutate("enqueueIn", { id });
+  const first = db.mutate("jobs.claim", { owner: "w" })!;
+  const done = db.mutate("jobs.complete", { id: first.id, owner: "w", token: first.token, result: { ok: true }, next: { max: 2, leaseMs: 500 } });
+  assert.equal(done.state, "completed");
+  assert.deepEqual([done.next?.id, done.next?.owner, done.next?.expiresAt, done.next?.more?.map((claim) => claim.id)], ["b", "w", 1_000_500, ["c"]]);
+  const failed = db.mutate("jobs.fail", { id: "b", owner: "w", token: done.next!.token, error: "busy", next: {} });
+  assert.deepEqual([failed.state, failed.next?.id, failed.next?.more], ["pending", "d", undefined]);
+  const plain = db.mutate("jobs.complete", { id: "c", owner: "w", token: done.next!.more![0]!.token, result: { ok: true } });
+  assert.equal("next" in plain, false, "without next, a report returns the job alone");
+  const last = db.mutate("jobs.complete", { id: "d", owner: "w", token: failed.next!.token, result: { ok: true }, next: { max: 4, waitMs: 60_000 } });
+  assert.equal(last.next, null);
+  assert.deepEqual(db.query("scanLine"), [["w", 4, 1_000_000]], "a short claim puts the owner in line");
+  assert.equal(rejected(() => db.mutate("jobs.complete", { id: "a", owner: "w", token: 1, result: { ok: true }, next: { max: 65 } })).failure!.code, "INVALID_ARGUMENT");
+  assert.deepEqual(rejected(() => db.mutate("jobs.complete", { id: "a", owner: "w", token: 1, result: { ok: true }, next: {} })).failure, lost, "a refused report claims nothing");
+  assert.deepEqual(db.query("jobs.stats"), { ready: false, oldestReadyAt: null, nextAvailableAt: 1_000_010, readyCount: 0, leasedCount: 0, delayedCount: 1 });
+});
+
 test("stats counts ready, leased and delayed jobs up to countUpTo", async () => {
   const db = await testDatabase(app);
   for (let index = 0; index < 5; index++) db.mutate("enqueueIn", { id: `r${index}` });

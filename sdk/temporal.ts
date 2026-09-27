@@ -249,10 +249,10 @@ type LeaseArgs<A extends boolean> = LeaseIdentity & ScopeArgs<A>;
 export type QueueMethodName = "enqueue" | "claim" | "renew" | "complete" | "fail" | "release" | "retry" | "cancel" | "get" | "ready" | "stats";
 export interface QueueMethods<P, R, A extends boolean = false> {
   enqueue: MutationMethod<{ id: string; payload: P; delayMs?: number; at?: number; replace?: boolean; priority?: number; group?: string } & ScopeArgs<A>, Job<P, R>>;
-  claim: MutationMethod<{ owner: string; leaseMs?: number; max?: number; waitMs?: number } & ScopeArgs<A>, (Claim<P> & { more?: Claim<P>[] }) | null>;
+  claim: MutationMethod<{ owner: string; leaseMs?: number; max?: number; waitMs?: number } & ScopeArgs<A>, Claimed<P>>;
   renew: MutationMethod<{ leases: LeaseIdentity[]; leaseMs?: number } & ScopeArgs<A>, (number | null)[]>;
-  complete: MutationMethod<LeaseArgs<A> & { result: R }, Job<P, R>>;
-  fail: MutationMethod<LeaseArgs<A> & { error: Json; retry?: boolean; delayMs?: number }, Job<P, R>>;
+  complete: MutationMethod<LeaseArgs<A> & { result: R; next?: NextClaim }, Job<P, R> & { next?: Claimed<P> }>;
+  fail: MutationMethod<LeaseArgs<A> & { error: Json; retry?: boolean; delayMs?: number; next?: NextClaim }, Job<P, R> & { next?: Claimed<P> }>;
   release: MutationMethod<LeaseArgs<A> & { delayMs?: number }, Job<P, R>>;
   retry: MutationMethod<{ id: string; delayMs?: number } & ScopeArgs<A>, Job<P, R>>;
   cancel: MutationMethod<{ id: string } & ScopeArgs<A>, boolean>;
@@ -261,6 +261,14 @@ export interface QueueMethods<P, R, A extends boolean = false> {
   stats: QueryMethod<(A extends true ? { scope: string; countUpTo?: number } : { countUpTo?: number }) | null, QueueStats>;
 }
 const workerMethods = ["claim", "renew", "complete", "fail", "release", "get", "ready", "stats"] as const;
+/** What a generated claim returns: the first job, carrying any others in `more`, or null. */
+export type Claimed<P = Json> = (Claim<P> & { more?: Claim<P>[] }) | null;
+/** A report's claim for the lease owner's next jobs, in the same commit: a claim's options without the owner. */
+export interface NextClaim {
+  readonly max?: number;
+  readonly leaseMs?: number;
+  readonly waitMs?: number;
+}
 export type QueueHttp<Prefix extends string, P, R, M extends QueueMethodName, A extends boolean = false> = { readonly [K in M as `${Prefix}.${K}`]: QueueMethods<P, R, A>[K] };
 export interface QueueHttpOptions<M extends QueueMethodName> {
   /** Which methods to expose. Defaults to the worker set: claim, renew, complete, fail, release, get, ready, stats. */
@@ -704,24 +712,28 @@ export function queue<P = Json, R = Json>(name: string, options: QueueOptions<P,
       view(scopeSource === "argument" ? args.scope : typeof scopeSource === "function" ? scopeSource(ctx) : "");
     const pick = (args: any, ...keys: string[]) => Object.fromEntries(keys.filter((key) => args?.[key] !== undefined).map((key) => [key, args[key]]));
     const identity = (args: any): LeaseIdentity => pick(args, "id", "owner", "token", "history") as unknown as LeaseIdentity;
+    const claimShape = { leaseMs: v.optional(v.int({ min: 1 })), max: v.optional(v.int({ min: 0, max: MAX_CLAIMS })), waitMs: v.optional(v.int({ min: 0 })) };
+    const next = v.optional(v.object(claimShape));
+    // Several claims come back as the first, carrying the others in `more`.
+    const claimed = (ctx: MutationContext, args: any, owner: string, options: any): Claimed<P> => {
+      const [first, ...more] = target(ctx, args).claimMany(ctx, owner, pick(options, "leaseMs", "max", "waitMs"));
+      return first === undefined ? null : more.length === 0 ? first : { ...first, more };
+    };
+    // A report with `next` claims the lease owner's next jobs in the same commit, saving the worker a claim.
+    const withNext = (ctx: MutationContext, args: any, job: Job<P, R>) => args.next === undefined ? job : { ...job, next: claimed(ctx, args, args.owner, args.next) };
     const factories: Record<QueueMethodName, () => MutationMethod<any, any> | QueryMethod<any, any>> = {
       enqueue: () => mutation(`${prefix}.enqueue`, spec({
         id: v.string({ min: 1 }), payload: v.json(), delayMs: v.optional(v.int({ min: 0 })), at: v.optional(v.int({ min: 0 })), replace: v.optional(v.boolean()),
         priority: v.optional(v.int()), group: v.optional(v.string({ min: 1 })),
       }), (ctx, args: any) => target(ctx, args).enqueue(ctx, args.id, args.payload, pick(args, "delayMs", "at", "replace", "priority", "group"))),
-      // Several claims come back as the first, carrying the others in `more`.
-      claim: () => mutation(`${prefix}.claim`, spec({
-        owner: v.string({ min: 1 }), leaseMs: v.optional(v.int({ min: 1 })), max: v.optional(v.int({ min: 0, max: MAX_CLAIMS })), waitMs: v.optional(v.int({ min: 0 })),
-      }), (ctx, args: any) => {
-        const [first, ...more] = target(ctx, args).claimMany(ctx, args.owner, pick(args, "leaseMs", "max", "waitMs"));
-        return first === undefined ? null : more.length === 0 ? first : { ...first, more };
-      }),
+      claim: () => mutation(`${prefix}.claim`, spec({ owner: v.string({ min: 1 }), ...claimShape }),
+        (ctx, args: any) => claimed(ctx, args, args.owner, args)),
       renew: () => mutation(`${prefix}.renew`, spec({ leases: v.array(v.object(leaseSchema), { max: MAX_RENEWALS }), leaseMs: v.optional(v.int({ min: 1 })) }),
         (ctx, args: any) => target(ctx, args).renewMany(ctx, args.leases.map(identity), pick(args, "leaseMs"))),
-      complete: () => mutation(`${prefix}.complete`, spec({ ...leaseSchema, result: v.json() }),
-        (ctx, args: any) => target(ctx, args).complete(ctx, identity(args), args.result)),
-      fail: () => mutation(`${prefix}.fail`, spec({ ...leaseSchema, error: v.json(), retry: v.optional(v.boolean()), delayMs: v.optional(v.int({ min: 0 })) }),
-        (ctx, args: any) => target(ctx, args).fail(ctx, identity(args), args.error, pick(args, "retry", "delayMs"))),
+      complete: () => mutation(`${prefix}.complete`, spec({ ...leaseSchema, result: v.json(), next }),
+        (ctx, args: any) => withNext(ctx, args, target(ctx, args).complete(ctx, identity(args), args.result))),
+      fail: () => mutation(`${prefix}.fail`, spec({ ...leaseSchema, error: v.json(), retry: v.optional(v.boolean()), delayMs: v.optional(v.int({ min: 0 })), next }),
+        (ctx, args: any) => withNext(ctx, args, target(ctx, args).fail(ctx, identity(args), args.error, pick(args, "retry", "delayMs")))),
       release: () => mutation(`${prefix}.release`, spec({ ...leaseSchema, delayMs: v.optional(v.int({ min: 0 })) }),
         (ctx, args: any) => target(ctx, args).release(ctx, identity(args), pick(args, "delayMs"))),
       retry: () => mutation(`${prefix}.retry`, spec({ id: v.string({ min: 1 }), delayMs: v.optional(v.int({ min: 0 })) }),
