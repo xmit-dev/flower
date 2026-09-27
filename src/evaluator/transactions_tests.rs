@@ -40,9 +40,11 @@ fn transaction_planning_cannot_read_or_write_database_state_even_if_caught() {
             "transaction",
             100,
         );
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("TRANSACTION_PLAN_ONLY"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("TRANSACTION_PLAN_ONLY")
+        );
     }
 }

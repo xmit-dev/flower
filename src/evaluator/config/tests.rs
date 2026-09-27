@@ -1,6 +1,6 @@
 use super::*;
 use crate::{consensus::Records, evaluator};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[test]
 fn validates_only_budgets_and_representation_constraints() {
@@ -68,10 +68,12 @@ fn environment_worker() {
         return;
     };
     if case == "invalid" {
-        assert!(settings()
-            .unwrap_err()
-            .to_string()
-            .contains("FLOWER_RESULT_MAX_BYTES"));
+        assert!(
+            settings()
+                .unwrap_err()
+                .to_string()
+                .contains("FLOWER_RESULT_MAX_BYTES")
+        );
         assert!(evaluator::warmup().is_err());
         return;
     }

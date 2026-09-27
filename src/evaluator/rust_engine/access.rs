@@ -1056,10 +1056,8 @@ impl Access {
                 if !written.contains_key(&field.name)
                     && !clear.contains(&field.name)
                     && let Some(value) = entries.get(&field.name)
-                    && !self.field_readable(
-                        field,
-                        self.subject(key, &parts, Some(stored), None, rows),
-                    )
+                    && !self
+                        .field_readable(field, self.subject(key, &parts, Some(stored), None, rows))
                 {
                     written.insert(field.name.clone(), value.clone());
                 }
@@ -1084,15 +1082,13 @@ impl Access {
                     (Some(write), _) => write.holds(subject),
                     // Change only what you can read: in the stored row, or in
                     // the new one for an insert.
-                    (None, Some(read)) => {
-                        read.holds(self.subject(
-                            key,
-                            &parts,
-                            Some(previous.unwrap_or(&next)),
-                            None,
-                            rows,
-                        ))
-                    }
+                    (None, Some(read)) => read.holds(self.subject(
+                        key,
+                        &parts,
+                        Some(previous.unwrap_or(&next)),
+                        None,
+                        rows,
+                    )),
                     (None, None) => true,
                 }
         });
@@ -1121,19 +1117,15 @@ impl Engine<'_> {
         if let Some(access) = self.access.get(collection) {
             return access.clone();
         }
-        let access = self
-            .schema
-            .policies
-            .get(collection)
-            .map(|policy| {
-                Arc::new(Access::new(
-                    collection,
-                    policy,
-                    &self.schema.policies,
-                    &self.principal,
-                    self.now,
-                ))
-            });
+        let access = self.schema.policies.get(collection).map(|policy| {
+            Arc::new(Access::new(
+                collection,
+                policy,
+                &self.schema.policies,
+                &self.principal,
+                self.now,
+            ))
+        });
         self.access.insert(collection.to_owned(), access.clone());
         access
     }
@@ -1359,10 +1351,22 @@ mod tests {
         }))
         .unwrap();
         let access = |collection: &str, principal: Value| {
-            Access::new(collection, &policies[collection], &policies, &principal, 1_000)
+            Access::new(
+                collection,
+                &policies[collection],
+                &policies,
+                &principal,
+                1_000,
+            )
         };
         // Admins read every entry without looking a session up.
-        assert!(access("events", json!({"subject":"root","claims":{"role":"admin"}})).open_reads());
+        assert!(
+            access(
+                "events",
+                json!({"subject":"root","claims":{"role":"admin"}})
+            )
+            .open_reads()
+        );
         // So do staff, whose sessions rule folds to true: they still need the
         // session to exist.
         let staff = access("events", json!({"subject":"s","claims":{"role":"staff"}}));
@@ -1372,20 +1376,29 @@ mod tests {
         );
         // Others keep the owner comparison, with their subject inlined.
         let alice = access("events", json!({"subject":"alice"}));
-        assert!(
-            matches!(&alice.read, Check::Readable { read, .. }
+        assert!(matches!(&alice.read, Check::Readable { read, .. }
             if matches!(&**read, Check::Compare(Op::Eq, Term::Row(path), Term::Value(subject))
-                if path == &["owner"] && subject == "alice"))
-        );
+                if path == &["owner"] && subject == "alice")));
         // A caller no session rule can match needs no lookup either.
-        assert!(matches!(access("events", Value::Null).read, Check::Const(false)));
-        assert!(matches!(access("via", json!({"subject":"alice"})).read, Check::Const(false)));
+        assert!(matches!(
+            access("events", Value::Null).read,
+            Check::Const(false)
+        ));
+        assert!(matches!(
+            access("via", json!({"subject":"alice"})).read,
+            Check::Const(false)
+        ));
         // Checks without rows to look into see none.
         assert!(!alice.visible(r#"["s1",1]"#, &json!({}), &[], &NoRows));
         // With rows, the entry shows when its session does.
         struct Sessions;
         impl Rows for Sessions {
-            fn readable(&self, collection: &str, key: &str, visible: &dyn Fn(&Value) -> bool) -> bool {
+            fn readable(
+                &self,
+                collection: &str,
+                key: &str,
+                visible: &dyn Fn(&Value) -> bool,
+            ) -> bool {
                 assert_eq!(collection, "sessions");
                 match key {
                     "s1" => visible(&json!({"owner":"alice"})),
@@ -1405,7 +1418,11 @@ mod tests {
         valid.remove("via");
         validate_targets(&valid).unwrap();
         valid.remove("sessions");
-        assert!(validate_targets(&valid).unwrap_err().contains("needs a collection with an access policy"));
+        assert!(
+            validate_targets(&valid)
+                .unwrap_err()
+                .contains("needs a collection with an access policy")
+        );
     }
 
     /// `cargo test --release --lib specialization_cost -- --ignored --nocapture`
@@ -1430,7 +1447,13 @@ mod tests {
         let rounds = 200_000u32;
         let started = std::time::Instant::now();
         for _ in 0..rounds {
-            std::hint::black_box(Access::new("notes", &policy, &BTreeMap::new(), &principal, 1_000));
+            std::hint::black_box(Access::new(
+                "notes",
+                &policy,
+                &BTreeMap::new(),
+                &principal,
+                1_000,
+            ));
         }
         println!(
             "Access::new for a 5-rule policy: {:?} each",

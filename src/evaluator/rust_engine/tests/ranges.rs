@@ -125,11 +125,13 @@ fn ordered_ranges_page_compound_bounds_and_reject_mismatched_cursors() {
     let page = read(&data, json!({"prefix":["a"],"limit":1}));
     let error=run(data.clone(),json!({"name":"read","args":reference(json!({"prefix":["b"],"limit":1,"after":page["cursor"]}))}),"query",None,&fixture()).unwrap_err();
     assert_eq!(error.code, "INVALID_REFERENCE");
-    assert!(keys(&read(
-        &data,
-        json!({"prefix":["a"],"gte":7,"lt":2,"limit":1})
-    ))
-    .is_empty());
+    assert!(
+        keys(&read(
+            &data,
+            json!({"prefix":["a"],"gte":7,"lt":2,"limit":1})
+        ))
+        .is_empty()
+    );
     assert_eq!(
         keys(&read(&data, json!({"prefix":["a",2],"limit":99}))),
         vec!["key04", "key05"]
@@ -207,10 +209,12 @@ fn ordered_ranges_track_empty_phantoms_and_value_only_changes() {
         &fixture,
     );
     let id = cell_id("matches", &Value::Null);
-    assert!(data[&id]["outcome"]["value"]["rows"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        data[&id]["outcome"]["value"]["rows"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     let result = deploy(
         &mut data,
         json!({"writes":[{"collection":"unrelated","key":"x","value":1}]}),
@@ -238,10 +242,12 @@ fn ordered_ranges_track_empty_phantoms_and_value_only_changes() {
         json!({"writes":[{"collection":"items","key":"x","delete":true}]}),
         &fixture,
     );
-    assert!(data[&id]["outcome"]["value"]["rows"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        data[&id]["outcome"]["value"]["rows"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! guest-observable mutable state. Validate each final Wizer image, not a digest
 //! or assumptions about the current C compiler. Growing or trapping instances
 //! must still be discarded by the caller; Wasm memories cannot be shrunk.
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use std::collections::BTreeMap;
 use wasmparser::{Encoding, ExternalKind, Operator, Parser, Payload, RefType, TypeRef, ValType};
 
@@ -295,16 +295,20 @@ mod tests {
     #[test]
     fn hidden_mutable_and_reference_globals_are_rejected() {
         let hidden = module(&[(EncValType::I32, true, None)], &[]);
-        assert!(validate(&hidden)
-            .unwrap_err()
-            .to_string()
-            .contains("hidden mutable global 0"));
-        for mutable in [false, true] {
-            let refs = module(&[(EncValType::EXTERNREF, mutable, Some("reference"))], &[]);
-            assert!(validate(&refs)
+        assert!(
+            validate(&hidden)
                 .unwrap_err()
                 .to_string()
-                .contains("reference-valued"));
+                .contains("hidden mutable global 0")
+        );
+        for mutable in [false, true] {
+            let refs = module(&[(EncValType::EXTERNREF, mutable, Some("reference"))], &[]);
+            assert!(
+                validate(&refs)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("reference-valued")
+            );
         }
     }
 
@@ -371,28 +375,34 @@ mod tests {
             let mut imports = ImportSection::new();
             imports.import("outside", "state", entity);
             wasm.section(&imports);
-            assert!(validate(&wasm.finish())
-                .unwrap_err()
-                .to_string()
-                .contains("imported guest state"));
+            assert!(
+                validate(&wasm.finish())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("imported guest state")
+            );
         }
     }
 
     #[test]
     fn reference_values_and_unapproved_instruction_features_are_rejected() {
         let locals = module_with_locals(&[], &[], &[(1, EncValType::EXTERNREF)]);
-        assert!(validate(&locals)
-            .unwrap_err()
-            .to_string()
-            .contains("reference-valued locals"));
+        assert!(
+            validate(&locals)
+                .unwrap_err()
+                .to_string()
+                .contains("reference-valued locals")
+        );
         let mut wasm = Module::new();
         let mut types = TypeSection::new();
         types.ty().function([EncValType::EXTERNREF], []);
         wasm.section(&types);
-        assert!(validate(&wasm.finish())
-            .unwrap_err()
-            .to_string()
-            .contains("reference-valued function signatures"));
+        assert!(
+            validate(&wasm.finish())
+                .unwrap_err()
+                .to_string()
+                .contains("reference-valued function signatures")
+        );
         let wasm = module(
             &[],
             &[
@@ -403,10 +413,12 @@ mod tests {
         wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
             .validate_all(&wasm)
             .unwrap();
-        assert!(validate(&wasm)
-            .unwrap_err()
-            .to_string()
-            .contains("unsupported reset features"));
+        assert!(
+            validate(&wasm)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported reset features")
+        );
     }
 
     #[test]

@@ -78,15 +78,17 @@ fn concurrent_cold_bundle_callers_keep_heaps_callbacks_and_budgets_private() {
                             // sticky memory failure must not taint any other
                             // caller sharing the immutable prepared image.
                             let failed = Limits::new(Instant::now() + Duration::from_secs(30), 1);
-                            assert!(execute_prepared(
-                                &image,
-                                "test",
-                                &Value::Null,
-                                "query",
-                                &mut |_, _| panic!("memory failure must precede callbacks"),
-                                failed.clone(),
-                            )
-                            .is_err());
+                            assert!(
+                                execute_prepared(
+                                    &image,
+                                    "test",
+                                    &Value::Null,
+                                    "query",
+                                    &mut |_, _| panic!("memory failure must precede callbacks"),
+                                    failed.clone(),
+                                )
+                                .is_err()
+                            );
                             assert!(failed.check().is_err());
                         }
                         for round in 0..2 {
@@ -349,10 +351,12 @@ fn recycled_entropy_permissions_follow_each_callback_kind_and_randomness_is_fres
         if allowed {
             samples.push(result["value"].clone());
         } else {
-            assert!(result["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("only in mutations"));
+            assert!(
+                result["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("only in mutations")
+            );
         }
     }
     assert_ne!(samples[0], samples[1]);
@@ -523,10 +527,12 @@ fn managed_authorization_is_resolved_again_after_store_reuse() {
         if allowed {
             assert_eq!(value["value"][0], value["value"][1]);
         } else {
-            assert!(value["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("permission revoked"));
+            assert!(
+                value["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("permission revoked")
+            );
         }
     }
     assert!(pool::stats(&prepared).reused >= 2);

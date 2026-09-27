@@ -107,19 +107,23 @@ fn wire_budget_includes_maximum_append_envelope_and_snapshot_segments() {
     let limits = settings(&pairs).unwrap();
     let mut too_small = pairs.clone();
     too_small[1].1 = (max_transaction + headroom - 1).to_string();
-    assert!(settings(&too_small)
-        .unwrap_err()
-        .to_string()
-        .contains("Raft envelope"));
+    assert!(
+        settings(&too_small)
+            .unwrap_err()
+            .to_string()
+            .contains("Raft envelope")
+    );
     // Segments carry their bytes as they are.
     let mut chunk = pairs.clone();
     chunk[2].1 = max_transaction.to_string();
     assert!(settings(&chunk).is_ok());
     chunk[2].1 = (max_transaction + 1).to_string();
-    assert!(settings(&chunk)
-        .unwrap_err()
-        .to_string()
-        .contains("FLOWER_SNAPSHOT_CHUNK_BYTES plus"));
+    assert!(
+        settings(&chunk)
+            .unwrap_err()
+            .to_string()
+            .contains("FLOWER_SNAPSHOT_CHUNK_BYTES plus")
+    );
 
     let mut command = RaftCommand::Single(Commit {
         internal: false,
@@ -175,30 +179,38 @@ fn persisted_log_positions_reject_distance_overflow_without_a_fixed_count_ceilin
     limits.snapshot_after_logs = u64::MAX - 1025;
     limits.validate_log_index(Some(1024)).unwrap();
     limits.snapshot_after_logs += 1;
-    assert!(limits
-        .validate_log_index(Some(1024))
-        .unwrap_err()
-        .to_string()
-        .contains("FLOWER_SNAPSHOT_AFTER_LOGS"));
+    assert!(
+        limits
+            .validate_log_index(Some(1024))
+            .unwrap_err()
+            .to_string()
+            .contains("FLOWER_SNAPSHOT_AFTER_LOGS")
+    );
     limits.snapshot_after_logs = 256;
     limits.snapshot_purge_batch_logs = u64::MAX;
-    assert!(limits
-        .validate_log_index(Some(0))
-        .unwrap_err()
-        .to_string()
-        .contains("FLOWER_SNAPSHOT_PURGE_BATCH_LOGS"));
+    assert!(
+        limits
+            .validate_log_index(Some(0))
+            .unwrap_err()
+            .to_string()
+            .contains("FLOWER_SNAPSHOT_PURGE_BATCH_LOGS")
+    );
     limits.snapshot_purge_batch_logs = 1;
     limits.raft_payload_entries = u64::MAX;
-    assert!(limits
-        .validate_log_index(Some(0))
-        .unwrap_err()
-        .to_string()
-        .contains("FLOWER_RAFT_PAYLOAD_ENTRIES"));
-    assert!(limits
-        .validate_log_index(Some(u64::MAX))
-        .unwrap_err()
-        .to_string()
-        .contains("exhausts u64"));
+    assert!(
+        limits
+            .validate_log_index(Some(0))
+            .unwrap_err()
+            .to_string()
+            .contains("FLOWER_RAFT_PAYLOAD_ENTRIES")
+    );
+    assert!(
+        limits
+            .validate_log_index(Some(u64::MAX))
+            .unwrap_err()
+            .to_string()
+            .contains("exhausts u64")
+    );
 }
 
 #[test]
@@ -306,9 +318,13 @@ fn supplemental_snapshot_policy_is_configurable_without_changing_entry_trigger()
 #[test]
 fn applied_states_wait_half_a_second_to_be_written_together_by_default() {
     let interval = |value: &str| {
-        settings(&[("FLOWER_PERSIST_INTERVAL_MS", value.into())]).map(|limits| limits.persist_interval)
+        settings(&[("FLOWER_PERSIST_INTERVAL_MS", value.into())])
+            .map(|limits| limits.persist_interval)
     };
-    assert_eq!(settings(&[]).unwrap().persist_interval, Duration::from_millis(500));
+    assert_eq!(
+        settings(&[]).unwrap().persist_interval,
+        Duration::from_millis(500)
+    );
     assert_eq!(interval("0").unwrap(), Duration::ZERO);
     assert_eq!(interval("60000").unwrap(), Duration::from_secs(60));
     for invalid in ["60001", "-1", "soon"] {

@@ -1,5 +1,5 @@
 //! Reject capability or ABI drift before compiling a newly vendored guest.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::collections::BTreeMap;
 use wasmparser::{ExternalKind, Parser, Payload, TypeRef, ValType};
 

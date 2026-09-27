@@ -4,7 +4,7 @@
 //! classification recurse without a depth bound. Validate the complete encoded
 //! tree before calling that adapter. Key semantics remain the responsibility of
 //! the maintained ASN.1/cryptography providers; this is not a new key decoder.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use zeroize::Zeroizing;
 
 // Match Flower's existing 128-level input nesting boundary. This protects the
@@ -210,10 +210,12 @@ mod tests {
                 encoded = wrapped(tag, &encoded);
             }
             let encoded = wrapped(0x30, &encoded);
-            assert!(validate_der(&encoded)
-                .unwrap_err()
-                .to_string()
-                .contains("nesting"));
+            assert!(
+                validate_der(&encoded)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("nesting")
+            );
         }
     }
 
@@ -252,15 +254,19 @@ mod tests {
     #[test]
     fn oversized_identifiers_fail_before_arbitrary_precision_work() {
         let oid = wrapped(0x30, &wrapped(6, &[0xff; 20_000]));
-        assert!(validate_der(&oid)
-            .unwrap_err()
-            .to_string()
-            .contains("identifier"));
+        assert!(
+            validate_der(&oid)
+                .unwrap_err()
+                .to_string()
+                .contains("identifier")
+        );
         let tag = wrapped(0x30, &[&[0xbf][..], &[0xff; 20_000], &[0]].concat());
-        assert!(validate_der(&tag)
-            .unwrap_err()
-            .to_string()
-            .contains("identifier"));
+        assert!(
+            validate_der(&tag)
+                .unwrap_err()
+                .to_string()
+                .contains("identifier")
+        );
     }
 
     #[test]

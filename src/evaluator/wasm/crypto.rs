@@ -136,13 +136,24 @@ fn decrypt(caller: &Caller<'_, Host>, args: &[&[u8]], now: u64) -> Result<Output
     let decrypted = jwt::decrypt(std::str::from_utf8(args[0])?, args[1], &options, now);
     let claims = decrypted.as_ref().ok().map(|verified| &verified.claims);
     declare_decryption_change(caller, claims, options.clock_tolerance_seconds, now)?;
-    Ok(Output::bytes(6, serde_json::to_string(&decrypted?)?.into_bytes()))
+    Ok(Output::bytes(
+        6,
+        serde_json::to_string(&decrypted?)?.into_bytes(),
+    ))
 }
 
 /// Watches of a verified token wake when it expires or activates, not on a timer.
-fn declare_verification_change(caller: &Caller<'_, Host>, token: &[u8], tolerance: f64, now: u64) -> Result<()> {
+fn declare_verification_change(
+    caller: &Caller<'_, Host>,
+    token: &[u8],
+    tolerance: f64,
+    now: u64,
+) -> Result<()> {
     let token = std::str::from_utf8(token).unwrap_or_default();
-    if let (Some(time), Some(callback)) = (jwt::changes_at(token, tolerance, now), caller.data().callback) {
+    if let (Some(time), Some(callback)) = (
+        jwt::changes_at(token, tolerance, now),
+        caller.data().callback,
+    ) {
         // SAFETY: same synchronous scoped lifetime as host_call.
         unsafe { callback.invoke("changesAt", json!([time]))? };
     }

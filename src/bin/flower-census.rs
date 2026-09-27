@@ -295,7 +295,14 @@ fn main() -> Result<()> {
             .filter(|item| item["internal"] != serde_json::Value::Bool(true))
             .count();
         let tally = commits
-            .entry(if unchanged { "items of entries writing nothing" } else { "items of entries writing" }.into())
+            .entry(
+                if unchanged {
+                    "items of entries writing nothing"
+                } else {
+                    "items of entries writing"
+                }
+                .into(),
+            )
             .or_default();
         tally.add(receipted, 0);
         for item in items {
@@ -317,7 +324,10 @@ fn main() -> Result<()> {
     println!("raft log indices {first:?}..={last}");
     print("raft_logs_v1 by kind", &kinds);
     print("raft_logs_v1 by payload part", &parts);
-    print("raft_logs_v1 receipted items (rows: entries, key column: items)", &commits);
+    print(
+        "raft_logs_v1 receipted items (rows: entries, key column: items)",
+        &commits,
+    );
     print(
         "rewrites: full value bytes (key column) vs top-level delta bytes (value column)",
         &deltas,

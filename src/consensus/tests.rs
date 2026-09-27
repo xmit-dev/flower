@@ -1240,7 +1240,10 @@ async fn leader_restarted_with_lost_appends_does_not_resume_its_term() {
     nodes[first].restart().await;
     let deadline = Instant::now() + Duration::from_secs(15);
     while nodes[first].raft().metrics().current_leader != Some(nodes[first].id) {
-        assert!(Instant::now() < deadline, "the first leader did not lead again");
+        assert!(
+            Instant::now() < deadline,
+            "the first leader did not lead again"
+        );
         let _ = nodes[first].raft().raft.trigger().elect().await;
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
@@ -1323,7 +1326,12 @@ async fn slow_snapshot_catch_up_does_not_restart_itself_through_elections() {
     let text = "x".repeat(1000);
     for revision in 1..3 {
         let puts = (0..1000)
-            .map(|n| (format!(r#"source:["blobs","{revision}-{n:04}"]"#), json!(text)))
+            .map(|n| {
+                (
+                    format!(r#"source:["blobs","{revision}-{n:04}"]"#),
+                    json!(text),
+                )
+            })
             .collect();
         let command = Commit {
             internal: false,
@@ -1349,7 +1357,13 @@ async fn slow_snapshot_catch_up_does_not_restart_itself_through_elections() {
     };
     raft.trigger().purge_log(snapshot_index).await.unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while nodes[first_leader].raft().metrics().purged.map(|id| id.index) < Some(snapshot_index) {
+    while nodes[first_leader]
+        .raft()
+        .metrics()
+        .purged
+        .map(|id| id.index)
+        < Some(snapshot_index)
+    {
         assert!(Instant::now() < deadline, "logs were not purged");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

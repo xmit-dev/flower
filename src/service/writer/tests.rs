@@ -224,7 +224,15 @@ async fn early_drain_runs_maintenance_before_saturated_queues_without_a_timer_wa
     let later = Some(Instant::now() + Duration::from_secs(60));
     for _ in 0..3 {
         assert!(matches!(
-            next_work(&mut receiver, &mut deferred, &mut progress, later, true, true).now_or_never(),
+            next_work(
+                &mut receiver,
+                &mut deferred,
+                &mut progress,
+                later,
+                true,
+                true
+            )
+            .now_or_never(),
             Some(Work::Maintenance)
         ));
         assert_eq!(receiver.len(), 2);
@@ -237,16 +245,30 @@ async fn early_drain_runs_maintenance_before_saturated_queues_without_a_timer_wa
         ("queued-first", false, true),
         ("queued-second", true, false),
     ] {
-        let Some(Work::Request(request)) =
-            next_work(&mut receiver, &mut deferred, &mut progress, later, due, enabled).now_or_never()
-        else {
+        let Some(Work::Request(request)) = next_work(
+            &mut receiver,
+            &mut deferred,
+            &mut progress,
+            later,
+            due,
+            enabled,
+        )
+        .now_or_never() else {
             panic!("queued customer work must be ready after maintenance");
         };
         assert_eq!(request.input.request_id().as_deref(), Some(id));
     }
     drop(sender);
     assert!(matches!(
-        next_work(&mut receiver, &mut deferred, &mut progress, later, false, true).now_or_never(),
+        next_work(
+            &mut receiver,
+            &mut deferred,
+            &mut progress,
+            later,
+            false,
+            true
+        )
+        .now_or_never(),
         Some(Work::Closed)
     ));
 }
@@ -1588,7 +1610,10 @@ async fn speculative_candidates_recheck_order_principal_receipts_cas_and_transac
         "auth reads are deliberately rechecked separately"
     );
     let access = candidate.access.as_ref().unwrap();
-    assert!(access.holds(&app, &state), "an unchanged decision is reused");
+    assert!(
+        access.holds(&app, &state),
+        "an unchanged decision is reused"
+    );
     assert!(!access.holds(&app, &changed), "authorization read the role");
     assert!(
         !candidate.validate(&app, &changed, &input).await.unwrap(),
@@ -2585,27 +2610,51 @@ async fn salvaged_wave_rechecks_authorization_cas_and_exact_replays() {
 
 #[tokio::test]
 async fn maintenance_schedule_follows_hints_and_never_runs_twice_within_its_spacing() {
-    let (_directory, app) = crate::service::tests::application("var __flowerBundle={default:{definitions:{},http:{}}};".into()).await;
+    let (_directory, app) = crate::service::tests::application(
+        "var __flowerBundle={default:{definitions:{},http:{}}};".into(),
+    )
+    .await;
     let spacing = Duration::from_millis(250);
     let mut schedule = Schedule::new(spacing);
-    assert!(schedule.next.unwrap() <= Instant::now(), "the first run is immediate");
+    assert!(
+        schedule.next.unwrap() <= Instant::now(),
+        "the first run is immediate"
+    );
     schedule.ran(&app, Some(Ok(NextRun::Idle)));
     let last = schedule.last.unwrap();
     assert_eq!(schedule.next, None, "idle maintenance has no timer");
     schedule.soon();
-    assert_eq!(schedule.next, Some(last + spacing), "a write reschedules, paced");
+    assert_eq!(
+        schedule.next,
+        Some(last + spacing),
+        "a write reschedules, paced"
+    );
     schedule.ran(&app, Some(Ok(NextRun::Now)));
-    assert_eq!(schedule.next, Some(schedule.last.unwrap() + spacing), "more work waits one spacing");
-    for outcome in [Some(Ok(NextRun::Unknown)), Some(Err(anyhow::anyhow!("no quorum")))] {
+    assert_eq!(
+        schedule.next,
+        Some(schedule.last.unwrap() + spacing),
+        "more work waits one spacing"
+    );
+    for outcome in [
+        Some(Ok(NextRun::Unknown)),
+        Some(Err(anyhow::anyhow!("no quorum"))),
+    ] {
         schedule.ran(&app, outcome);
-        assert_eq!(schedule.next, Some(schedule.last.unwrap() + spacing), "polled and retried");
+        assert_eq!(
+            schedule.next,
+            Some(schedule.last.unwrap() + spacing),
+            "polled and retried"
+        );
     }
     schedule.ran(&app, None);
     assert_eq!(schedule.next, None, "followers wait to lead");
     let now = app.clock.sample_after(0).unwrap();
     schedule.ran(&app, Some(Ok(NextRun::At(now + 10_000))));
     let delay = schedule.next.unwrap() - schedule.last.unwrap();
-    assert!(delay > Duration::from_millis(9_900) && delay < Duration::from_millis(10_100), "{delay:?}");
+    assert!(
+        delay > Duration::from_millis(9_900) && delay < Duration::from_millis(10_100),
+        "{delay:?}"
+    );
     app.consensus.shutdown().await.unwrap();
 }
 
@@ -2663,12 +2712,17 @@ async fn mutations_declared_without_receipts_run_again_on_retry() {
     let call = json!({"requestId":"append-1","name":"log.append"});
     let first = submit(&fixture.app, call.clone(), false).await.unwrap();
     let again = submit(&fixture.app, call, false).await.unwrap();
-    assert_eq!((first["value"].clone(), again["value"].clone()), (json!(1), json!(2)));
+    assert_eq!(
+        (first["value"].clone(), again["value"].clone()),
+        (json!(1), json!(2))
+    );
     assert_eq!(again["duplicate"], false);
     let state = fixture.app.consensus.read().await.unwrap();
     assert!(!state.requests.contains_key("append-1"));
     assert_eq!(
-        http_method(&state, "log.append", Some(MethodKind::Mutation)).unwrap().receipt,
+        http_method(&state, "log.append", Some(MethodKind::Mutation))
+            .unwrap()
+            .receipt,
         false
     );
     fixture.close().await;

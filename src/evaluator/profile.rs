@@ -169,7 +169,11 @@ pub(super) fn invocation(
         };
         Arc::new(Invocation {
             started: Instant::now(),
-            mode: if legacy { Cow::Owned(mode.into()) } else { Cow::Borrowed(bounded_mode(mode)) },
+            mode: if legacy {
+                Cow::Owned(mode.into())
+            } else {
+                Cow::Borrowed(bounded_mode(mode))
+            },
             // OTEL never retains method names; legacy profiling remains opt-in.
             name: if legacy { name.into() } else { String::new() },
             legacy,

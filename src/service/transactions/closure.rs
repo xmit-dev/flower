@@ -469,9 +469,10 @@ async fn begin(
         }
         if record.phase == Phase::Commit
             && !inadmissible(&state, request)
-            && !state.requests.get(request).is_some_and(|receipt| {
-                receipt.fingerprint == record.fingerprint
-            })
+            && !state
+                .requests
+                .get(request)
+                .is_some_and(|receipt| receipt.fingerprint == record.fingerprint)
         {
             return Err(conflict(
                 "committed transaction has neither a retry receipt nor a retry admission fence",

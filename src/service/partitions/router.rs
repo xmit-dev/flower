@@ -128,7 +128,10 @@ impl Gate {
     /// exactly when its cached observation expires.
     pub(in crate::service) fn lapses(self: &Arc<Self>) -> tokio::sync::watch::Receiver<()> {
         let mut monitor = self.monitor.lock().expect("partition gate monitor");
-        if let Some(receiver) = monitor.as_ref().filter(|receiver| receiver.has_changed().is_ok()) {
+        if let Some(receiver) = monitor
+            .as_ref()
+            .filter(|receiver| receiver.has_changed().is_ok())
+        {
             return receiver.clone();
         }
         let (sender, receiver) = tokio::sync::watch::channel(());
@@ -136,15 +139,23 @@ impl Gate {
         let gate = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
-                let Some(current) = gate.upgrade() else { return };
-                let expires = current.routes.expiry(&current.partition).await.unwrap_or_else(Instant::now);
+                let Some(current) = gate.upgrade() else {
+                    return;
+                };
+                let expires = current
+                    .routes
+                    .expiry(&current.partition)
+                    .await
+                    .unwrap_or_else(Instant::now);
                 drop(current);
                 tokio::time::sleep_until(expires.into()).await;
                 // The gate keeps one receiver of its own; nobody else listens.
                 if sender.receiver_count() <= 1 {
                     return;
                 }
-                let Some(current) = gate.upgrade() else { return };
+                let Some(current) = gate.upgrade() else {
+                    return;
+                };
                 if current.check().await.is_err() {
                     sender.send_replace(());
                     return;

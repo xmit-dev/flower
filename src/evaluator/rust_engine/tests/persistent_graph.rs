@@ -948,7 +948,10 @@ fn metadata_bounds_argument_depth_before_recursive_identity_work() {
 fn clock_readers_follow_reader_records_through_rebuilds() {
     let mut data = Records::default();
     // A raw write may leave a cell with no dependency list or reader records.
-    data.insert(r#"cell:["double",null]"#.into(), json!({"ok": true, "value": 2}));
+    data.insert(
+        r#"cell:["double",null]"#.into(),
+        json!({"ok": true, "value": 2}),
+    );
     assert!(data.reactive().cacheable());
     // Only a write changes what a key reader read, and certificates observe
     // the catalog, so key readers leave results certifiable.

@@ -1,11 +1,11 @@
 //! Optional cold-path address maps for external profilers, including macOS sample.
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     io::Write,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 use wasmtime::Module;

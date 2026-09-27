@@ -285,7 +285,8 @@ impl SharedDatabase {
                 .map_err(|error| Arc::new(anyhow::Error::new(error)));
             let micros = |since: Instant| since.elapsed().as_micros().min(u64::MAX as u128) as u64;
             self.busy_micros.fetch_add(micros(began), Ordering::AcqRel);
-            self.commit_micros.fetch_add(micros(committing), Ordering::AcqRel);
+            self.commit_micros
+                .fetch_add(micros(committing), Ordering::AcqRel);
             self.batches.fetch_add(1, Ordering::AcqRel);
             self.durable_batches
                 .fetch_add(durable as u64, Ordering::AcqRel);

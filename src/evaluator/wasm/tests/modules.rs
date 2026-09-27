@@ -80,15 +80,17 @@ fn module_outcomes_are_values_failures_or_invalid() {
         "DEFINITION_MISSING"
     );
     let shared = limits();
-    assert!(execute_prepared(
-        &prepared,
-        "trap",
-        &Value::Null,
-        "query",
-        &mut |_, _| Ok(Value::Null),
-        shared.clone()
-    )
-    .is_err());
+    assert!(
+        execute_prepared(
+            &prepared,
+            "trap",
+            &Value::Null,
+            "query",
+            &mut |_, _| Ok(Value::Null),
+            shared.clone()
+        )
+        .is_err()
+    );
     assert!(
         shared.check().is_err(),
         "a trap poisons the shared allowance"
@@ -197,11 +199,13 @@ fn modules_outside_the_guest_surface_are_rejected_before_running() {
     }
     let mut hashed = bundle(COUNTER);
     hashed["hash"] = json!(crate::evaluator::hash(b"other"));
-    assert!(crate::evaluator::evaluate(
-        BTreeMap::new(),
-        json!({"requestId":"deploy","bundle":hashed})
-    )
-    .unwrap_err()
-    .to_string()
-    .contains("hash"));
+    assert!(
+        crate::evaluator::evaluate(
+            BTreeMap::new(),
+            json!({"requestId":"deploy","bundle":hashed})
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("hash")
+    );
 }

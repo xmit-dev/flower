@@ -566,9 +566,17 @@ impl Engine<'_> {
         scanned
     }
 
-    fn scan_rows(&mut self, query: &RangeQuery, access: Option<&access::Access>) -> EngineResult<Scanned> {
+    fn scan_rows(
+        &mut self,
+        query: &RangeQuery,
+        access: Option<&access::Access>,
+    ) -> EngineResult<Scanned> {
         // A row found through an index field the caller can't read stays hidden.
-        let selecting: &[String] = if query.source_keys { &[] } else { &query.fields };
+        let selecting: &[String] = if query.source_keys {
+            &[]
+        } else {
+            &query.fields
+        };
         // Rows the caller's `readable` rules look up, recorded as read below.
         let lookup = access::RowLookup::new(self);
         let visible = |key: &str, value: &Value| {

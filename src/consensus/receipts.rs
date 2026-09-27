@@ -76,7 +76,11 @@ impl std::fmt::Debug for Receipts {
 
 impl PartialEq for Receipts {
     fn eq(&self, other: &Self) -> bool {
-        self.len() == other.len() && self.iter().zip(other.iter()).all(|(left, right)| left == right)
+        self.len() == other.len()
+            && self
+                .iter()
+                .zip(other.iter())
+                .all(|(left, right)| left == right)
     }
 }
 
@@ -170,7 +174,10 @@ impl Receipts {
     pub fn contains_key(&self, key: &str) -> bool {
         match self.map.get(key) {
             Some(entry) => entry.receipt.is_some(),
-            None => self.backing.as_ref().is_some_and(|backing| backing.contains(key)),
+            None => self
+                .backing
+                .as_ref()
+                .is_some_and(|backing| backing.contains(key)),
         }
     }
 
@@ -214,7 +221,11 @@ impl Receipts {
         version: u64,
     ) -> Option<Arc<Receipt>> {
         let previous = self.get_shared(&key).cloned();
-        self.memo.0.get_mut().expect("receipts memo lock").remove(&key);
+        self.memo
+            .0
+            .get_mut()
+            .expect("receipts memo lock")
+            .remove(&key);
         self.map.insert(
             key,
             Entry {
@@ -228,7 +239,11 @@ impl Receipts {
 
     pub fn remove(&mut self, key: &str) -> Option<Arc<Receipt>> {
         let previous = self.get_shared(key).cloned();
-        self.memo.0.get_mut().expect("receipts memo lock").remove(key);
+        self.memo
+            .0
+            .get_mut()
+            .expect("receipts memo lock")
+            .remove(key);
         if self.backing.is_none() {
             self.map.remove(key);
         } else if previous.is_some() {
@@ -275,7 +290,9 @@ impl Receipts {
     /// Start strictly after an incremental collection cursor without rescanning
     /// the retained prefix. Old immutable roots continue to own removed values.
     pub fn after(&self, cursor: Option<&str>) -> Iter<'_> {
-        let lower = cursor.map_or(Bound::Unbounded, |cursor| Bound::Excluded(cursor.to_owned()));
+        let lower = cursor.map_or(Bound::Unbounded, |cursor| {
+            Bound::Excluded(cursor.to_owned())
+        });
         Iter(Box::new(self.merged(lower).map(|found| match found {
             Found::Tree(key, entry) => (key, entry.receipt.as_deref().expect("live receipt")),
             Found::Stored(stored) => {
@@ -449,7 +466,9 @@ impl<'de> Deserialize<'de> for Receipts {
                 };
                 // As spooled records: checked, then kept on disk only.
                 let mut writer = spool.writer();
-                while let Some((key, raw)) = map.next_entry::<String, Box<serde_json::value::RawValue>>()? {
+                while let Some((key, raw)) =
+                    map.next_entry::<String, Box<serde_json::value::RawValue>>()?
+                {
                     serde_json::from_str::<Receipt>(raw.get()).map_err(serde::de::Error::custom)?;
                     writer
                         .insert(key, next_version(), raw.get().as_bytes())
@@ -527,7 +546,9 @@ mod tests {
     fn backed_receipts_match_memory_through_writes_cursors_and_rebases() {
         let mut state = 0xacce55_u64;
         let mut next = move |bound: u64| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 33) % bound
         };
         let keys: Vec<String> = (0..32).map(|n| format!("r{n:02}")).collect();

@@ -286,10 +286,7 @@ impl Engine<'_> {
             if cursor % 64 == 0 {
                 self.check_fatal()?;
             }
-            let readers: Vec<String> = self
-                .staged
-                .readers(&changed_dependencies[cursor])
-                .collect();
+            let readers: Vec<String> = self.staged.readers(&changed_dependencies[cursor]).collect();
             for reader in readers {
                 if cursor < direct_dependencies {
                     self.preview.direct.insert(reader.clone());

@@ -160,10 +160,16 @@ async fn successive_appends_share_one_buffer_and_readers_never_lose_the_suffix()
     let mut store = Store::open(1, directory.path().into()).await.unwrap();
     let blocker = store.inner.shared.database().begin_write().unwrap();
     let first = store
-        .start_append(vec![entry(1, command("first", 0, &[], &[]))], Durability::Immediate)
+        .start_append(
+            vec![entry(1, command("first", 0, &[], &[]))],
+            Durability::Immediate,
+        )
         .await;
     let next = store.clone();
-    let mut second = Box::pin(next.start_append(vec![entry(2, command("second", 1, &[], &[]))], Durability::Immediate));
+    let mut second = Box::pin(next.start_append(
+        vec![entry(2, command("second", 1, &[], &[]))],
+        Durability::Immediate,
+    ));
     assert!(futures_util::poll!(&mut second).is_pending());
     assert_eq!(store.try_get_log_entries(..).await.unwrap().len(), 1);
     drop(blocker);
@@ -538,7 +544,10 @@ async fn write_error_rolls_back_changed_records_and_fails_later_applies() {
     // Recovery restarts from the last written state and replays the log.
     let mut reopened = Store::open(1, directory.path().into()).await.unwrap();
     assert_eq!(reopened.snapshot().await, original.application);
-    assert_eq!(reopened.applied_state().await.unwrap().0, original.last_applied);
+    assert_eq!(
+        reopened.applied_state().await.unwrap().0,
+        original.last_applied
+    );
     reopened.apply([update]).await.unwrap();
     let expected = reopened.snapshot().await;
     assert_eq!(expected.revision, 2);
@@ -854,19 +863,31 @@ async fn apply_publishes_atomically_without_a_second_disk_sync() {
     let (mut store, pause) = open_pausing_store(directory.path());
     let (ready, mut ready_rx) = tokio::sync::oneshot::channel();
     let (release, release_rx) = std::sync::mpsc::channel();
-    *pause.lock().unwrap() = Some(PausedSync { ready, release: release_rx });
+    *pause.lock().unwrap() = Some(PausedSync {
+        ready,
+        release: release_rx,
+    });
     let mut applying = store.clone();
     let apply = tokio::spawn(async move {
-        applying.apply([entry(1, command("one",0,&[("value",json!(1))],&[]))]).await
+        applying
+            .apply([entry(1, command("one", 0, &[("value", json!(1))], &[]))])
+            .await
     });
     let completed = tokio::time::timeout(Duration::from_secs(2), async {
-        while !apply.is_finished() { tokio::task::yield_now().await; }
-    }).await.is_ok();
+        while !apply.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .is_ok();
     let unused = pause.lock().unwrap().take().is_some();
     // Always unblock a regressed implementation before asserting.
     let _ = release.send(());
     apply.await.unwrap().unwrap();
-    assert!(completed && unused, "apply attempted a second fsync after the durable Raft append");
+    assert!(
+        completed && unused,
+        "apply attempted a second fsync after the durable Raft append"
+    );
     assert!(ready_rx.try_recv().is_err());
     assert_eq!(store.applied_state().await.unwrap().0, Some(log_id(1)));
     assert_eq!(store.snapshot().await.requests["one"].revision, 1);
@@ -1024,8 +1045,7 @@ async fn asynchronous_append_reports_flush_failure_to_raft() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn published_readers_progress_during_apply_without_exposing_staged_records_or_receipts()
-{
+async fn published_readers_progress_during_apply_without_exposing_staged_records_or_receipts() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(1, directory.path().into()).await.unwrap();
     store
@@ -1734,14 +1754,25 @@ async fn queued_appends_publish_without_waiting_and_direct_writes_wait_for_them(
         }
     };
     let (mut first, mut second, mut third) = (store.clone(), store.clone(), store.clone());
-    let one = tokio::spawn(async move { first.blocking_append([entry(1, command("one", 0, &[], &[]))]).await });
+    let one = tokio::spawn(async move {
+        first
+            .blocking_append([entry(1, command("one", 0, &[], &[]))])
+            .await
+    });
     pending(1).await;
     // The second append is published while the first cannot commit.
-    let two = tokio::spawn(async move { second.blocking_append([entry(2, command("two", 1, &[], &[]))]).await });
+    let two = tokio::spawn(async move {
+        second
+            .blocking_append([entry(2, command("two", 1, &[], &[]))])
+            .await
+    });
     pending(2).await;
     let mut reader = store.clone();
     assert_eq!(reader.try_get_log_entries(1..3).await.unwrap().len(), 2);
-    assert_eq!(reader.get_log_state().await.unwrap().last_log_id, Some(log_id(2)));
+    assert_eq!(
+        reader.get_log_state().await.unwrap().last_log_id,
+        Some(log_id(2))
+    );
     // A truncation is a direct transaction: it waits for both queued appends.
     let truncated = tokio::spawn(async move { third.truncate(log_id(2)).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1752,7 +1783,10 @@ async fn queued_appends_publish_without_waiting_and_direct_writes_wait_for_them(
     two.await.unwrap().unwrap();
     truncated.await.unwrap().unwrap();
     assert!(store.inner.appending.read().unwrap().is_empty());
-    assert_eq!(reader.get_log_state().await.unwrap().last_log_id, Some(log_id(1)));
+    assert_eq!(
+        reader.get_log_state().await.unwrap().last_log_id,
+        Some(log_id(1))
+    );
     assert_eq!(reader.try_get_log_entries(1..3).await.unwrap().len(), 1);
 }
 
@@ -1776,13 +1810,20 @@ fn redb_file_space() {
     );
 }
 
-
 #[tokio::test]
 async fn a_database_with_an_older_index_layout_fails_to_open() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(1, directory.path().into()).await.unwrap();
     store
-        .apply([entry(1, command("rows", 0, &[(r#"source:["orders","k"]"#, json!({"shop":"a"}))], &[]))])
+        .apply([entry(
+            1,
+            command(
+                "rows",
+                0,
+                &[(r#"source:["orders","k"]"#, json!({"shop":"a"}))],
+                &[],
+            ),
+        )])
         .await
         .unwrap();
     store.close().await.unwrap();
@@ -1791,7 +1832,11 @@ async fn a_database_with_an_older_index_layout_fails_to_open() {
     {
         let db = Database::open(directory.path().join("flower.redb")).unwrap();
         let transaction = db.begin_write().unwrap();
-        transaction.open_table(META).unwrap().remove(INDEX_LAYOUT_META).unwrap();
+        transaction
+            .open_table(META)
+            .unwrap()
+            .remove(INDEX_LAYOUT_META)
+            .unwrap();
         transaction.commit().unwrap();
     }
     let error = Store::open(1, directory.path().into()).await.err().unwrap();

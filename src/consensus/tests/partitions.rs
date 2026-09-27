@@ -87,27 +87,38 @@ async fn partition_graph_cleanup_remains_deleted_after_restart() {
     let generation = "a".repeat(64);
     let cell = r#"cell:["leaf",null]"#;
     let root = r#"root:["leaf",null]"#;
-    let value = |number| json!({"name":"leaf","args":null,
-        "outcome":{"ok":true,"value":number},"deps":[]});
+    let value = |number| {
+        json!({"name":"leaf","args":null,
+        "outcome":{"ok":true,"value":number},"deps":[]})
+    };
     let mut seed = commit("graph-seed", 0, 1);
     seed.puts = BTreeMap::from([
         (cell.into(), value(1)),
         (root.into(), json!({"name":"leaf","args":null})),
         (format!("graph:{generation}:{cell}"), value(2)),
-        (format!("graph:{generation}:{root}"), json!({"name":"leaf","args":null})),
+        (
+            format!("graph:{generation}:{root}"),
+            json!({"name":"leaf","args":null}),
+        ),
         ("reactive:active".into(), json!(generation)),
     ]);
-    assert!(matches!(apply(&mut store, &mut index, scoped("graph", 1, seed)).await,
-        ApplyResult::Committed(_)));
+    assert!(matches!(
+        apply(&mut store, &mut index, scoped("graph", 1, seed)).await,
+        ApplyResult::Committed(_)
+    ));
     let mut cleanup = commit("graph-cleanup", 1, 2);
     cleanup.puts.clear();
     cleanup.deletes = vec![cell.into(), root.into()];
-    assert!(matches!(apply(&mut store, &mut index, scoped("graph", 1, cleanup)).await,
-        ApplyResult::Committed(_)));
+    assert!(matches!(
+        apply(&mut store, &mut index, scoped("graph", 1, cleanup)).await,
+        ApplyResult::Committed(_)
+    ));
     store.close().await.unwrap();
     drop(store);
     let store = Store::open(1, directory.path().into()).await.unwrap();
-    let snapshot = store.partition_snapshot(&binding("graph", 1), None, true).unwrap();
+    let snapshot = store
+        .partition_snapshot(&binding("graph", 1), None, true)
+        .unwrap();
     assert!(snapshot.data.get_raw_shared(cell).is_none());
     assert!(snapshot.data.get_raw_shared(root).is_none());
     assert_eq!(snapshot.data.get(cell), Some(&value(2)));
@@ -573,7 +584,9 @@ async fn partition_images_reject_hash_revision_receipt_transaction_and_graph_cor
                 .insert("transaction:participant".into(), json!({"prepared":true}));
         }
         if invalid == "graph" {
-            snapshot.data.insert("reactive:active".into(), json!("invalid-generation"));
+            snapshot
+                .data
+                .insert("reactive:active".into(), json!("invalid-generation"));
         }
         let bytes = serde_json::to_string(&snapshot).unwrap();
         let transfer = transfer("invalid-import");
@@ -710,18 +723,30 @@ async fn applies_rebase_written_partitions_and_every_settled_one_eventually() {
         create(&mut store, &mut index, id).await;
     }
     let backing = |store: &Store, id: &str| {
-        let snapshot = store.partition_snapshot(&binding(id, 1), None, true).unwrap();
+        let snapshot = store
+            .partition_snapshot(&binding(id, 1), None, true)
+            .unwrap();
         snapshot.data.backing().cloned().unwrap()
     };
     store.persisted().await.unwrap();
     apply(&mut store, &mut index, commit("root-0", 0, 1).into()).await;
     let before: Vec<_> = ["p0", "p2"].iter().map(|id| backing(&store, id)).collect();
-    let result = apply(&mut store, &mut index, scoped("p1", 1, commit("write", 0, 7))).await;
+    let result = apply(
+        &mut store,
+        &mut index,
+        scoped("p1", 1, commit("write", 0, 7)),
+    )
+    .await;
     assert!(matches!(result, ApplyResult::Committed(_)), "{result:?}");
     store.persisted().await.unwrap();
     apply(&mut store, &mut index, commit("root-1", 1, 2).into()).await;
-    let written = store.partition_snapshot(&binding("p1", 1), None, true).unwrap();
-    assert!(written.data.is_settled(), "the written partition moves on the next rebase");
+    let written = store
+        .partition_snapshot(&binding("p1", 1), None, true)
+        .unwrap();
+    assert!(
+        written.data.is_settled(),
+        "the written partition moves on the next rebase"
+    );
     assert_eq!(written.data["source:[\"counter\",\"one\"]"], 7);
     for revision in 2..(2 + 64) {
         store.persisted().await.unwrap();
@@ -729,7 +754,10 @@ async fn applies_rebase_written_partitions_and_every_settled_one_eventually() {
         apply(&mut store, &mut index, command.into()).await;
     }
     for (id, before) in ["p0", "p2"].iter().zip(before) {
-        assert!(!Arc::ptr_eq(&before, &backing(&store, id)), "{id} still pins its old snapshot");
+        assert!(
+            !Arc::ptr_eq(&before, &backing(&store, id)),
+            "{id} still pins its old snapshot"
+        );
     }
 }
 

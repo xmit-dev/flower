@@ -11,8 +11,10 @@ mod perf_tests;
 mod profile;
 pub(crate) mod rust_engine;
 pub(crate) mod staging;
+pub use rust_engine::{
+    DependencyCertificate, MutationCertificate, Observation, touched, touches_everything,
+};
 pub(crate) use rust_engine::{ReactiveIndex, update_memberships};
-pub use rust_engine::{DependencyCertificate, MutationCertificate, Observation, touched, touches_everything};
 #[cfg(test)]
 mod guest_parity_tests;
 #[cfg(test)]

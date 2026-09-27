@@ -1,10 +1,10 @@
 //! Turn C shadow-stack under/overflow into uncatchable Wasm traps. Wasmtime's
 //! native stack guard alone does not cover variable-size C alloca frames living
 //! inside linear memory. Instrument the pinned guest before Wizer compilation.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use wasm_encoder::{
-    reencode::{self, Reencode},
     BlockType, CodeSection, Instruction, Module,
+    reencode::{self, Reencode},
 };
 use wasmparser::{ExternalKind, Operator, Parser, Payload};
 

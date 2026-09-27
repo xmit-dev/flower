@@ -176,8 +176,14 @@ async fn build_application(
 #[test]
 fn maintenance_hints_say_when_to_run_again() {
     for (value, next) in [
-        (json!({"$flower":{"continue":true,"next":5_000}}), NextRun::Now),
-        (json!({"$flower":{"continue":false,"next":null}}), NextRun::Idle),
+        (
+            json!({"$flower":{"continue":true,"next":5_000}}),
+            NextRun::Now,
+        ),
+        (
+            json!({"$flower":{"continue":false,"next":null}}),
+            NextRun::Idle,
+        ),
         (json!({"$flower":{"next":2_000}}), NextRun::At(2_000)),
         (json!({"$flower":{"next":1_500.2}}), NextRun::At(1_501)),
         (json!({"$flower":{"next":1_000}}), NextRun::Now),
@@ -615,7 +621,11 @@ async fn coalesced_clock_queries_resample_after_reacquiring_the_snapshot() {
             observed == now || observed > 1017,
             "A retried query uses a fresh host-sampled clock, never another waiter's clock"
         );
-        assert_eq!(result.validity, Validity::Polled, "ctx.now() promises no change time");
+        assert_eq!(
+            result.validity,
+            Validity::Polled,
+            "ctx.now() promises no change time"
+        );
     }
     app.consensus.shutdown().await.unwrap();
 }

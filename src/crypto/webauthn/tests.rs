@@ -3,9 +3,9 @@ use aws_lc_rs::{
     rand::SystemRandom,
     rsa::KeySize,
     signature::{
-        EcdsaKeyPair, EcdsaSigningAlgorithm, KeyPair, RsaEncoding, RsaKeyPair,
         ECDSA_P256_SHA256_ASN1_SIGNING, ECDSA_P384_SHA384_ASN1_SIGNING,
-        ECDSA_P521_SHA512_ASN1_SIGNING, RSA_PKCS1_SHA256, RSA_PSS_SHA256,
+        ECDSA_P521_SHA512_ASN1_SIGNING, EcdsaKeyPair, EcdsaSigningAlgorithm, KeyPair,
+        RSA_PKCS1_SHA256, RSA_PSS_SHA256, RsaEncoding, RsaKeyPair,
     },
 };
 use ed25519_dalek::{Signer, SigningKey};

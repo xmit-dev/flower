@@ -34,7 +34,9 @@ struct SegmentHeader {
 
 /// A snapshot segment on the wire: its header's JSON length, four
 /// little-endian bytes, then that JSON, then the segment's bytes as they are.
-pub(super) fn encode_segment(request: InstallSnapshotRequest<TypeConfig>) -> serde_json::Result<Vec<u8>> {
+pub(super) fn encode_segment(
+    request: InstallSnapshotRequest<TypeConfig>,
+) -> serde_json::Result<Vec<u8>> {
     let header = serde_json::to_vec(&SegmentHeader {
         vote: request.vote,
         meta: request.meta,
@@ -230,7 +232,8 @@ impl Connection {
             }
             return Err(RPCError::Network(NetworkError::new(&error)));
         }
-        self.post(path, body.bytes, "application/json", option).await
+        self.post(path, body.bytes, "application/json", option)
+            .await
     }
 
     /// Send a body that is not JSON, as a snapshot segment is.
@@ -253,7 +256,8 @@ impl Connection {
                 ));
                 return Err(RPCError::Network(NetworkError::new(&error)));
             }
-            self.post(path, body, "application/octet-stream", option).await
+            self.post(path, body, "application/octet-stream", option)
+                .await
         };
         crate::telemetry::raft_rpc(path, self.target, post).await
     }

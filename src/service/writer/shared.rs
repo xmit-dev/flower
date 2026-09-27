@@ -88,7 +88,13 @@ impl SharedCommit {
                 puts.insert(key, value);
             }
             // As CompactBatch::new logs it: a receipt-less item has no identity.
-            let identity = |value: String| if command.internal { String::new() } else { value };
+            let identity = |value: String| {
+                if command.internal {
+                    String::new()
+                } else {
+                    value
+                }
+            };
             items.push(BatchItem {
                 internal: command.internal,
                 request_id: identity(command.request_id),

@@ -1,9 +1,9 @@
 //! Aggregate, sticky transaction limits shared by nested, disposable guests.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Instant,
 };

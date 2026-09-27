@@ -1,7 +1,7 @@
 //! Native transport policy, loaded once before accepting requests. All internal
 //! clients use the same TLS roots and scheme; there is no downgrade or insecure
 //! certificate/hostname-verification option.
-use anyhow::{ensure, Context};
+use anyhow::{Context, ensure};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
@@ -9,7 +9,7 @@ use std::{
 };
 use tokio_rustls::rustls::{
     self,
-    pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
+    pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
 };
 use zeroize::Zeroizing;
 

@@ -4,7 +4,7 @@
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use openraft::{CommittedLeaderId, Entry, EntryPayload, LogId, Vote};
 use serde::Serialize;
 

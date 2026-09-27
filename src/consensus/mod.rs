@@ -34,10 +34,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use openraft::error::RaftError;
-use openraft::raft::{
-    AppendEntriesRequest, AppendEntriesResponse,
-    VoteRequest, VoteResponse,
-};
+use openraft::raft::{AppendEntriesRequest, AppendEntriesResponse, VoteRequest, VoteResponse};
 use openraft::{BasicNode, CommittedLeaderId, Config, RaftMetrics, SnapshotPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,9 +48,9 @@ pub use partitions::{
 };
 pub use progress::Progress;
 pub use receipts::Receipts;
-pub(crate) use records::{next_version, versions_after, versions_high_water};
 pub(crate) use records::HISTORY_MARKER;
 pub use records::Records;
+pub(crate) use records::{next_version, versions_after, versions_high_water};
 pub use store::{SharedDatabase, SnapshotData, Storage};
 
 /// Application state at one committed, atomically published revision.
@@ -92,7 +89,11 @@ pub struct Commit {
     #[serde(deserialize_with = "json_payload::records")]
     pub puts: BTreeMap<String, Value>,
     pub deletes: Vec<String>,
-    #[serde(default, skip_serializing_if = "Value::is_null", deserialize_with = "json_payload::value")]
+    #[serde(
+        default,
+        skip_serializing_if = "Value::is_null",
+        deserialize_with = "json_payload::value"
+    )]
     pub result: Value,
 }
 
@@ -117,7 +118,11 @@ pub struct BatchItem {
     pub request_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fingerprint: String,
-    #[serde(default, skip_serializing_if = "Value::is_null", deserialize_with = "json_payload::value")]
+    #[serde(
+        default,
+        skip_serializing_if = "Value::is_null",
+        deserialize_with = "json_payload::value"
+    )]
     pub result: Value,
 }
 
@@ -850,9 +855,7 @@ impl Consensus {
 
     /// The keys of every publication from now on, of every application state;
     /// `changes::Changes::concern` picks this handle's.
-    pub(crate) fn changes(
-        &self,
-    ) -> tokio::sync::broadcast::Receiver<Arc<changes::Changes>> {
+    pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<Arc<changes::Changes>> {
         self.store.changes()
     }
 
@@ -962,10 +965,7 @@ async fn vote(
     Json(consensus.raft.vote(request).await)
 }
 
-async fn install_snapshot(
-    State(consensus): State<Consensus>,
-    body: axum::body::Bytes,
-) -> Response {
+async fn install_snapshot(State(consensus): State<Consensus>, body: axum::body::Bytes) -> Response {
     // Segments travel as bytes rather than JSON; see network::encode_segment.
     match network::decode_segment(&body) {
         Ok(request) => Json(consensus.raft.install_snapshot(request).await).into_response(),

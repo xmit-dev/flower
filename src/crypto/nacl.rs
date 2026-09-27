@@ -11,15 +11,15 @@
 //! This module is deterministic. The bridge owns OS randomness, its mutation
 //! restriction, and resource admission. Inputs are borrowed bytes, never JSON.
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use crypto_secretbox::{
-    aead::{AeadInPlace, KeyInit},
     Kdf, Key, XSalsa20Poly1305,
+    aead::{AeadInPlace, KeyInit},
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256, Sha512};
 use subtle::ConstantTimeEq;
-use x25519_dalek::{x25519, X25519_BASEPOINT_BYTES};
+use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 use zeroize::{Zeroize, Zeroizing};
 
 /// The bridge must erase a byte result after copying it into guest memory:

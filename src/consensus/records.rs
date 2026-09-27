@@ -305,14 +305,18 @@ impl Records {
         }
     }
 
-    fn merged(&self, (lower, upper): Bounds) -> impl DoubleEndedIterator<Item = Found<'_, Entry>> + Send {
-        let stored: Box<dyn DoubleEndedIterator<Item = super::backing::Stored> + Send + '_> = match &self.backing {
-            Some(backing) => backing.range(
-                lower.as_ref().map(String::as_str),
-                upper.as_ref().map(String::as_str),
-            ),
-            None => Box::new(std::iter::empty()),
-        };
+    fn merged(
+        &self,
+        (lower, upper): Bounds,
+    ) -> impl DoubleEndedIterator<Item = Found<'_, Entry>> + Send {
+        let stored: Box<dyn DoubleEndedIterator<Item = super::backing::Stored> + Send + '_> =
+            match &self.backing {
+                Some(backing) => backing.range(
+                    lower.as_ref().map(String::as_str),
+                    upper.as_ref().map(String::as_str),
+                ),
+                None => Box::new(std::iter::empty()),
+            };
         Merge::new(self.map.range::<_, String>((lower, upper)), stored)
     }
 
@@ -444,9 +448,11 @@ impl Records {
     pub(crate) fn graph_clocks(&self) -> impl Iterator<Item = &Value> {
         self.get_raw_shared("clock")
             .into_iter()
-            .chain(self.graphs.keys().filter_map(|generation| {
-                self.get_raw_shared(&format!("graph:{generation}:clock"))
-            }))
+            .chain(
+                self.graphs.keys().filter_map(|generation| {
+                    self.get_raw_shared(&format!("graph:{generation}:clock"))
+                }),
+            )
             .map(Arc::as_ref)
     }
 
@@ -503,10 +509,10 @@ impl Records {
             Bound::Included(format!("{prefix}{lower}")),
             Bound::Excluded(format!("{prefix}{upper}")),
         ))
-            .map(move |found| {
-                let (key, value, _) = self.keep(found);
-                (&key[offset..], value.as_ref())
-            })
+        .map(move |found| {
+            let (key, value, _) = self.keep(found);
+            (&key[offset..], value.as_ref())
+        })
     }
 
     /// The durable key recording that `reader` depends on `dependency`. Keys
@@ -594,7 +600,10 @@ impl Records {
 
     fn lookup(&self, key: &str) -> Option<(&String, &Arc<Value>, u64)> {
         if let Some((key, entry)) = self.map.get_key_value(key) {
-            return entry.value.as_ref().map(|value| (key, value, entry.version));
+            return entry
+                .value
+                .as_ref()
+                .map(|value| (key, value, entry.version));
         }
         if let Some(kept) = self.memo.get(key) {
             return Some(kept);
@@ -744,7 +753,12 @@ impl Records {
             // Most commits rewrite retention's accounting; what ctx.history()
             // returns changes only with its database or incarnation.
             let identity = |state: Option<&Arc<Value>>| {
-                state.map(|state| (state.get("database").cloned(), state.get("incarnation").cloned()))
+                state.map(|state| {
+                    (
+                        state.get("database").cloned(),
+                        state.get("incarnation").cloned(),
+                    )
+                })
             };
             if identity(previous) != identity(next) {
                 self.memberships
@@ -856,7 +870,8 @@ impl Records {
     }
 
     pub fn values(&self) -> impl DoubleEndedIterator<Item = &Value> {
-        self.shared_within(owned(&..)).map(|(_, value)| value.as_ref())
+        self.shared_within(owned(&..))
+            .map(|(_, value)| value.as_ref())
     }
 }
 
@@ -1241,14 +1256,10 @@ mod tests {
         let ordered_entry = r#"ordered-entry:["items",["group"]]:"a":"first""#;
         let mut records = Records::from([(first.into(), json!(1))]);
         let empty = records.graph_view(Some(GRAPH_A));
-        let empty_membership = empty
-            .generation(r#"collection:"items""#)
-            .unwrap();
+        let empty_membership = empty.generation(r#"collection:"items""#).unwrap();
         records.insert(format!("graph:{GRAPH_A}:{CELL}"), graph_cell(1));
         let candidate = records.graph_view(Some(GRAPH_A));
-        assert!((empty_membership == candidate
-                .generation(r#"collection:"items""#)
-                .unwrap()));
+        assert!((empty_membership == candidate.generation(r#"collection:"items""#).unwrap()));
         records.insert(second.into(), json!(2));
         records.insert(index_entry.into(), json!(true));
         records.insert(ordered_entry.into(), json!(true));
@@ -1278,15 +1289,14 @@ mod tests {
         for generation in [None, Some(GRAPH_A), Some(GRAPH_B)] {
             let view = records.graph_view(generation);
             for (marker, token) in markers.iter().zip(&tokens) {
-                assert!(view.generation(marker).is_some(), "{generation:?}: {marker}");
+                assert!(
+                    view.generation(marker).is_some(),
+                    "{generation:?}: {marker}"
+                );
                 assert_ne!(view.generation(marker), *token, "{generation:?}: {marker}");
             }
         }
-        assert!(
-            empty
-                .generation(r#"collection:"items""#)
-                .is_some()
-        );
+        assert!(empty.generation(r#"collection:"items""#).is_some());
     }
 
     #[test]
@@ -1373,10 +1383,13 @@ mod tests {
         let collection = r#"collection:"items""#;
         let old_marker = before.generation(collection).unwrap();
         for generation in [None, Some(GRAPH_A), Some(GRAPH_B)] {
-            assert!((old_marker == before
-                    .graph_view(generation)
-                    .generation(collection)
-                    .unwrap()));
+            assert!(
+                (old_marker
+                    == before
+                        .graph_view(generation)
+                        .generation(collection)
+                        .unwrap())
+            );
         }
         records.insert(r#"source:["items","second"]"#.into(), json!(2));
         let new_marker = records.generation(collection).unwrap();
@@ -1412,7 +1425,9 @@ mod tests {
     fn backed_records_match_memory_through_writes_ranges_and_rebases() {
         let mut state = 0x5eed_u64;
         let mut next = move |bound: u64| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 33) % bound
         };
         let keys: Vec<String> = (0..48).map(|n| format!("k{n:02}")).collect();
@@ -1470,9 +1485,10 @@ mod tests {
             }
             let range = (bound(next(200), &keys), bound(next(200), &keys));
             let valid = match (&range.0, &range.1) {
-                (Bound::Included(lower) | Bound::Excluded(lower), Bound::Included(upper) | Bound::Excluded(upper)) => {
-                    lower < upper
-                }
+                (
+                    Bound::Included(lower) | Bound::Excluded(lower),
+                    Bound::Included(upper) | Bound::Excluded(upper),
+                ) => lower < upper,
                 _ => true,
             };
             if valid {
@@ -1485,7 +1501,11 @@ mod tests {
                     let mut items = records.range_shared(range);
                     let mut drained = Vec::new();
                     for &front in &pattern {
-                        let item = if front { items.next() } else { items.next_back() };
+                        let item = if front {
+                            items.next()
+                        } else {
+                            items.next_back()
+                        };
                         if let Some((key, value)) = item {
                             drained.push((key.clone(), (**value).clone()));
                         }
@@ -1720,7 +1740,10 @@ mod tests {
         assert_eq!(spooled.overlay_len(), 0);
         assert_eq!(spooled, memory);
         assert!(!spooled.has_valid_source_ids());
-        assert_eq!(spooled.get(r#"source:["rows","0042"]"#), memory.get(r#"source:["rows","0042"]"#));
+        assert_eq!(
+            spooled.get(r#"source:["rows","0042"]"#),
+            memory.get(r#"source:["rows","0042"]"#)
+        );
         assert_eq!(serde_json::to_string(&spooled).unwrap(), text);
         let decoded: Records = serde_json::from_str(&text).unwrap();
         assert!(decoded.backing.is_none());
@@ -1732,7 +1755,9 @@ mod tests {
     fn spooled_runs_match_memory_through_ranges_from_either_end() {
         let mut state = 0x5b001_u64;
         let mut next = move |bound: u64| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 33) % bound
         };
         let keys: Vec<String> = (0..700).map(|n| format!("k{n:04}")).collect();
@@ -1762,19 +1787,28 @@ mod tests {
         };
         for _ in 0..400 {
             let range = (bound(next(3000)), bound(next(3000)));
-            if let (Bound::Included(lower) | Bound::Excluded(lower), Bound::Included(upper) | Bound::Excluded(upper)) =
-                &range
+            if let (
+                Bound::Included(lower) | Bound::Excluded(lower),
+                Bound::Included(upper) | Bound::Excluded(upper),
+            ) = &range
                 && lower >= upper
             {
                 continue;
             }
-            let range = (range.0.as_ref().map(String::as_str), range.1.as_ref().map(String::as_str));
+            let range = (
+                range.0.as_ref().map(String::as_str),
+                range.1.as_ref().map(String::as_str),
+            );
             let pattern: Vec<bool> = (0..keys.len()).map(|_| next(2) == 0).collect();
             let drain = |records: &Records| -> Vec<String> {
                 let mut items = records.range_shared(range);
                 let mut drained = Vec::new();
                 for &front in &pattern {
-                    let item = if front { items.next() } else { items.next_back() };
+                    let item = if front {
+                        items.next()
+                    } else {
+                        items.next_back()
+                    };
                     drained.extend(item.map(|(key, _)| key.clone()));
                 }
                 drained

@@ -250,7 +250,10 @@ fn certificates_track_collection_and_index_phantoms_but_skip_unrelated_buckets()
         &fixture,
     );
     assert!(!present.valid(&data), "a row moved out of the bucket");
-    assert!(other_bucket.valid(&data), "an unrelated bucket is unchanged");
+    assert!(
+        other_bucket.valid(&data),
+        "an unrelated bucket is unchanged"
+    );
     let (_, present) = query(&data, "indexed", json!("a"), &fixture);
     deploy(
         &mut data,
@@ -435,17 +438,23 @@ fn markers_handle_delimiters_and_quoted_unicode_without_cross_bucket_collisions(
     // Scalar values have ordered entries only; the others equality entries.
     let entries: Vec<(String, String)> = values
         .iter()
-        .map(|value| {
-            match super::super::ranges::entry(&spec, "row", &json!({"x:[]": value})) {
+        .map(
+            |value| match super::super::ranges::entry(&spec, "row", &json!({"x:[]": value})) {
                 Some(ordered) => (ordered, range.clone()),
                 None => (
                     format!("{prefix}{}:\"row\"", canonical_json(value)),
                     equality.clone(),
                 ),
-            }
-        })
+            },
+        )
         .collect();
-    assert_eq!(entries.iter().filter(|(_, marker)| *marker == equality).count(), 1);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|(_, marker)| *marker == equality)
+            .count(),
+        1
+    );
     for (value, (id, marker)) in values.iter().zip(&entries) {
         // A bucket is stamped by the entries in its window, which must
         // contain exactly that bucket's entries.
@@ -465,13 +474,12 @@ fn markers_handle_delimiters_and_quoted_unicode_without_cross_bucket_collisions(
     }
     let ordered = super::super::ranges::entry(&spec, "row", &json!({"x:[]":1})).unwrap();
     data.insert(ordered.clone(), json!("row"));
-    assert!(data
-        .generation(&super::super::ranges::dependency(collection, &fields))
-        .is_some());
+    assert!(
+        data.generation(&super::super::ranges::dependency(collection, &fields))
+            .is_some()
+    );
     data.insert(source_id(collection, "row"), json!(1));
-    assert!(data
-        .generation(&collection_id(collection))
-        .is_some());
+    assert!(data.generation(&collection_id(collection)).is_some());
 }
 
 fn optimistic(data: &Records, name: &str, args: Value, fixture: &Fixture) -> Evaluation {
@@ -676,10 +684,11 @@ fn optimistic_mutations_match_serial_across_independent_hot_and_dynamic_graphs()
 
 #[test]
 fn history_readers_survive_retention_accounting_but_not_a_new_incarnation() {
-    let fixture = Fixture::new([("history", (|_, host| host("history", json!([]))) as Callback)]);
-    let retention = |incarnation: &str, receipts: u64| {
-        json!({"database":"d".repeat(32),"incarnation":incarnation,"receipt_count":receipts})
-    };
+    let fixture = Fixture::new([(
+        "history",
+        (|_, host| host("history", json!([]))) as Callback,
+    )]);
+    let retention = |incarnation: &str, receipts: u64| json!({"database":"d".repeat(32),"incarnation":incarnation,"receipt_count":receipts});
     let mut data = Records::from([(
         crate::consensus::retention::KEY.to_owned(),
         retention(&"a".repeat(32), 0),
@@ -688,8 +697,14 @@ fn history_readers_survive_retention_accounting_but_not_a_new_incarnation() {
     assert_eq!(read.value["incarnation"], "a".repeat(32));
     let certificate = read.mutation_certificate.unwrap();
     // Every receipted commit rewrites the accounting.
-    data.insert(crate::consensus::retention::KEY.into(), retention(&"a".repeat(32), 1));
+    data.insert(
+        crate::consensus::retention::KEY.into(),
+        retention(&"a".repeat(32), 1),
+    );
     assert!(certificate.valid(&data), "the history it read is unchanged");
-    data.insert(crate::consensus::retention::KEY.into(), retention(&"b".repeat(32), 1));
+    data.insert(
+        crate::consensus::retention::KEY.into(),
+        retention(&"b".repeat(32), 1),
+    );
     assert!(!certificate.valid(&data), "a new incarnation changes it");
 }

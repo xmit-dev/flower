@@ -106,10 +106,12 @@ fn root_pages_are_hidden_reuse_completed_cells_and_cut_over_atomically() {
     assert_eq!(cell(&data, "value", "a"), 2);
     assert_eq!(cell(&data.graph_view(Some(GENERATION)), "value", "a"), 20);
     let second = graph_page(data.clone(), input.clone(), GENERATION, vec![b], 100).unwrap();
-    assert!(!second
-        .evaluated
-        .iter()
-        .any(|key| key == "cell:[\"value\",\"a\"]"));
+    assert!(
+        !second
+            .evaluated
+            .iter()
+            .any(|key| key == "cell:[\"value\",\"a\"]")
+    );
     apply(&mut data, second);
     ready(&mut data);
     let activation = activate(data.clone(), input, 100).unwrap();
@@ -124,9 +126,11 @@ fn root_pages_are_hidden_reuse_completed_cells_and_cut_over_atomically() {
     let restored: Records = serde_json::from_str(&serde_json::to_string(&data).unwrap()).unwrap();
     assert_eq!(cell(&restored, "value", "a"), 20);
     let changed=invoke_at(restored.clone(),json!({"name":"write","requestId":"after","args":{"rows":[{"key":"a","value":{"group":"g","amount":4}}]}}),"mutation",101).unwrap();
-    assert!(changed
-        .puts
-        .contains_key(&format!("graph:{GENERATION}:cell:[\"value\",\"a\"]")));
+    assert!(
+        changed
+            .puts
+            .contains_key(&format!("graph:{GENERATION}:cell:[\"value\",\"a\"]"))
+    );
     let mut continued = restored;
     apply(&mut continued, changed);
     assert_eq!(cell(&continued, "value", "a"), 40);
@@ -193,17 +197,21 @@ fn shadow_failure_preserves_active_write_and_fences_activation() {
     let mutation=invoke_at(data.clone(),json!({"name":"write","requestId":"bad-shadow","args":{"rows":[{"key":"a","value":{"group":"g","amount":8,"bad":true}}]}}),"mutation",101).unwrap();
     assert_eq!(mutation.value, "accepted");
     assert_eq!(mutation.puts[JOB]["phase"], "failed");
-    assert!(mutation.puts[JOB]["error"]
-        .as_str()
-        .unwrap()
-        .contains("CYCLE"));
+    assert!(
+        mutation.puts[JOB]["error"]
+            .as_str()
+            .unwrap()
+            .contains("CYCLE")
+    );
     apply(&mut data, mutation);
     assert_eq!(cell(&data, "value", "a"), 8);
     assert_eq!(cell(&data.graph_view(Some(GENERATION)), "value", "a"), 20);
-    assert!(activate(data, input, 101)
-        .unwrap_err()
-        .to_string()
-        .contains("not ready"));
+    assert!(
+        activate(data, input, 101)
+            .unwrap_err()
+            .to_string()
+            .contains("not ready")
+    );
 }
 
 #[test]
@@ -265,9 +273,11 @@ fn staging_fences_prior_speculation_and_malformed_graph_pointers() {
         100,
     )
     .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("Malformed active reactive graph pointer"));
+    assert!(
+        error
+            .to_string()
+            .contains("Malformed active reactive graph pointer")
+    );
 }
 
 #[test]
@@ -292,16 +302,20 @@ var __flowerBundle={default:{keys:[key],definitions:{
         shadow["cell:[\"value\",\"a\"]"]["deps"],
         json!(["managedKeys"])
     );
-    assert!(activate(data.clone(), input.clone(), 100)
-        .unwrap_err()
-        .to_string()
-        .contains("KEY_UNAVAILABLE"));
+    assert!(
+        activate(data.clone(), input.clone(), 100)
+            .unwrap_err()
+            .to_string()
+            .contains("KEY_UNAVAILABLE")
+    );
     let catalog = json!({"domain":"staging-tests","revision":1,"keys":{},"bindings":{}});
     let update = update_keys_at(data.clone(), catalog.clone(), 101).unwrap();
     assert_eq!(update.puts["managedKeys"], catalog);
-    assert!(update
-        .puts
-        .contains_key(&format!("graph:{GENERATION}:cell:[\"value\",\"a\"]")));
+    assert!(
+        update
+            .puts
+            .contains_key(&format!("graph:{GENERATION}:cell:[\"value\",\"a\"]"))
+    );
     assert!(
         !update.puts.contains_key(JOB),
         "a valid policy update must not fail the build"

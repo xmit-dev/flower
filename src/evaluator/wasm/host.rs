@@ -1,6 +1,6 @@
-use super::{failure_parts, max_json_bytes, Host};
+use super::{Host, failure_parts, max_json_bytes};
 use crate::evaluator::wire;
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use serde_json::Value;
 use wasmtime::{Caller, Engine, Linker};
 

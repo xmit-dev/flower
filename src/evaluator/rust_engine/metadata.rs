@@ -168,7 +168,11 @@ pub(super) fn scan_readers(
         let (before, after) = (position(previous), position(next));
         // As in the index: a value alone changes only windows that returned it.
         let values = before.is_some() && before == after;
-        let positions = if values { vec![before] } else { vec![before, after] };
+        let positions = if values {
+            vec![before]
+        } else {
+            vec![before, after]
+        };
         for position in positions.into_iter().flatten() {
             let Some(bucket) = windows::bucket(&position) else {
                 continue;
@@ -179,7 +183,10 @@ pub(super) fn scan_readers(
                     continue;
                 };
                 let bounds = if values {
-                    window.values.as_ref().map(|(lower, upper)| (lower.as_str(), upper.as_str()))
+                    window
+                        .values
+                        .as_ref()
+                        .map(|(lower, upper)| (lower.as_str(), upper.as_str()))
                 } else {
                     Some((window.lower.as_str(), window.upper.as_str()))
                 };
@@ -232,7 +239,10 @@ impl ReactiveIndex {
             && key.starts_with(&buckets)
         {
             cursor = match edge(&key, readers.len()).and_then(|(dependency, _)| {
-                Some((dependencies::bucket_spec(dependency)?, dependencies::bucket_spec_text(dependency)?))
+                Some((
+                    dependencies::bucket_spec(dependency)?,
+                    dependencies::bucket_spec_text(dependency)?,
+                ))
             }) {
                 Some((spec, text)) => {
                     index.add_buckets(&[spec]);

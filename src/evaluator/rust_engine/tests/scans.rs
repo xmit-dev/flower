@@ -486,7 +486,8 @@ fn delete(key: &str) -> Value {
 fn evaluated(data: &mut Records, writes: Value, fixture: &Fixture) -> BTreeSet<String> {
     // A reloaded state rebuilds its scan windows from reader records; it must
     // rerun exactly the cells the incrementally maintained one does.
-    let mut reloaded: Records = serde_json::from_str(&serde_json::to_string(data).unwrap()).unwrap();
+    let mut reloaded: Records =
+        serde_json::from_str(&serde_json::to_string(data).unwrap()).unwrap();
     let expected: BTreeSet<String> = deploy(&mut reloaded, json!({ "writes": writes }), fixture)
         .evaluated
         .into_iter()
@@ -1091,7 +1092,9 @@ fn bucketed_and_spanning_windows_find_the_readers_a_linear_scan_does() {
     use crate::evaluator::rust_engine::windows::Window;
     let mut state = 0x5ca9_u64;
     let mut next = move |bound: u64| {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (state >> 33) % bound
     };
     let fields = vec!["tenant".to_owned(), "score".to_owned()];
@@ -1099,7 +1102,8 @@ fn bucketed_and_spanning_windows_find_the_readers_a_linear_scan_does() {
     let row = |next: &mut dyn FnMut(u64) -> u64| {
         let value = json!({"tenant": tenants[next(4) as usize], "score": next(20)});
         let key = format!("k{}", next(50));
-        let position = crate::evaluator::rust_engine::ranges::position(Some(&fields), &key, &value).unwrap();
+        let position =
+            crate::evaluator::rust_engine::ranges::position(Some(&fields), &key, &value).unwrap();
         (key, value, position)
     };
     let mut data = Records::default();
@@ -1115,14 +1119,30 @@ fn bucketed_and_spanning_windows_find_the_readers_a_linear_scan_does() {
             _ => (first.clone().min(second.clone()), first.max(second)),
         };
         let values = (next(2) == 0).then(|| (lower.clone(), upper.clone()));
-        let window = Window { collection: "items".into(), fields: Some(fields.clone()), lower, upper, values };
+        let window = Window {
+            collection: "items".into(),
+            fields: Some(fields.clone()),
+            lower,
+            upper,
+            values,
+        };
         let cell = format!("cell:[\"reader\",{n}]");
         data.insert(cell.clone(), json!({"deps": [window.dependency()]}));
-        data.insert(Records::reader_key(&window.dependency(), &cell), Value::Null);
+        data.insert(
+            Records::reader_key(&window.dependency(), &cell),
+            Value::Null,
+        );
         windows.push((window, cell));
     }
-    let narrow = windows.iter().filter(|(window, _)| window.bucket().is_some()).count();
-    assert!(narrow >= 30 && narrow < windows.len(), "{narrow} of {} within a bucket", windows.len());
+    let narrow = windows
+        .iter()
+        .filter(|(window, _)| window.bucket().is_some())
+        .count();
+    assert!(
+        narrow >= 30 && narrow < windows.len(),
+        "{narrow} of {} within a bucket",
+        windows.len()
+    );
     let backed = data.backed_copy();
     for step in 0..400 {
         let (key, before, _) = row(&mut next);
@@ -1133,7 +1153,9 @@ fn bucketed_and_spanning_windows_find_the_readers_a_linear_scan_does() {
             _ => Some(row(&mut next).1),
         };
         let position = |value: &Option<Value>| {
-            value.as_ref().and_then(|value| crate::evaluator::rust_engine::ranges::position(Some(&fields), &key, value))
+            value.as_ref().and_then(|value| {
+                crate::evaluator::rust_engine::ranges::position(Some(&fields), &key, value)
+            })
         };
         let (from, to) = (position(&previous), position(&after));
         let values = from.is_some() && from == to;
@@ -1153,7 +1175,14 @@ fn bucketed_and_spanning_windows_find_the_readers_a_linear_scan_does() {
             .collect();
         for records in [&data, &backed] {
             let mut found = Vec::new();
-            crate::evaluator::rust_engine::metadata::scan_readers(records, "items", &key, previous.as_ref(), after.as_ref(), &mut found);
+            crate::evaluator::rust_engine::metadata::scan_readers(
+                records,
+                "items",
+                &key,
+                previous.as_ref(),
+                after.as_ref(),
+                &mut found,
+            );
             let found: BTreeSet<&str> = found.iter().map(String::as_str).collect();
             assert_eq!(found, expected, "step {step}");
         }

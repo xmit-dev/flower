@@ -1147,7 +1147,12 @@ fn log_fixture() -> Fixture {
             // Start a session and log its first entry in one mutation.
             "start",
             (|args, host| {
-                set(host, "sessions", args["id"].as_str().unwrap(), args["session"].clone())?;
+                set(
+                    host,
+                    "sessions",
+                    args["id"].as_str().unwrap(),
+                    args["session"].clone(),
+                )?;
                 append(host, &args["id"], &json!(1), "first")
             }) as Callback,
         ),
@@ -1179,9 +1184,7 @@ fn log_policies() -> BTreeMap<String, Policy> {
 fn log_setup() -> (Records, Fixture) {
     let fixture = log_fixture();
     let mut data = Records::default();
-    let event = |session: &str, n: u64| {
-        json!({"collection":"events","key":canonical_json(&json!([session, n])),"value":{"session":session,"n":n,"text":format!("{session}/{n}")}})
-    };
+    let event = |session: &str, n: u64| json!({"collection":"events","key":canonical_json(&json!([session, n])),"value":{"session":session,"n":n,"text":format!("{session}/{n}")}});
     let result = run_with_schema(
         data.clone(),
         json!({"requestId":"schema","writes":[
@@ -1267,7 +1270,13 @@ fn readable_shows_rows_whose_named_row_the_caller_may_read() {
         json!([])
     );
     assert_eq!(
-        texts(&query(&data, &fixture, "bySession", json!("s1"), Some(alice()))),
+        texts(&query(
+            &data,
+            &fixture,
+            "bySession",
+            json!("s1"),
+            Some(alice())
+        )),
         ["s1/1", "s1/2"]
     );
     assert_eq!(
@@ -1305,37 +1314,73 @@ fn readable_shows_rows_whose_named_row_the_caller_may_read() {
 fn results_through_readable_follow_the_rows_it_looked_up() {
     let (mut data, fixture) = log_setup();
     let scan = |data: &Records, principal: Value| {
-        let result = call(data, &fixture, "query", "scan", Value::Null, Some(principal)).unwrap();
+        let result = call(
+            data,
+            &fixture,
+            "query",
+            "scan",
+            Value::Null,
+            Some(principal),
+        )
+        .unwrap();
         (result.value, result.query_certificate.expect("certificate"))
     };
     let (_, alices) = scan(&data, alice());
     let (_, admins) = scan(&data, admin());
     // A session no entry names changes nothing.
-    deploy(&mut data, session_write("s4", json!({"owner":"bob","private":true})), &fixture);
+    deploy(
+        &mut data,
+        session_write("s4", json!({"owner":"bob","private":true})),
+        &fixture,
+    );
     assert!(alices.valid(&data));
     assert!(admins.valid(&data));
     // Bob opening his private session reveals its entries to alice at once;
     // the admin's result never looked sessions up.
-    deploy(&mut data, session_write("s2", json!({"owner":"bob"})), &fixture);
+    deploy(
+        &mut data,
+        session_write("s2", json!({"owner":"bob"})),
+        &fixture,
+    );
     assert!(!alices.valid(&data));
     assert!(admins.valid(&data));
     let (rows, alices) = scan(&data, alice());
     assert_eq!(texts_of(&rows), ["s1/1", "s1/2", "s2/1", "s3/1"]);
     // Closing it again hides them; so would a missing session appearing.
-    deploy(&mut data, session_write("s2", json!({"owner":"bob","private":true})), &fixture);
+    deploy(
+        &mut data,
+        session_write("s2", json!({"owner":"bob","private":true})),
+        &fixture,
+    );
     assert!(!alices.valid(&data));
     let (rows, alices) = scan(&data, alice());
     assert_eq!(texts_of(&rows), ["s1/1", "s1/2", "s3/1"]);
-    deploy(&mut data, session_write("gone", json!({"owner":"carol"})), &fixture);
+    deploy(
+        &mut data,
+        session_write("gone", json!({"owner":"carol"})),
+        &fixture,
+    );
     assert!(!alices.valid(&data));
     assert_eq!(
         texts_of(&scan(&data, alice()).0),
         ["gone/1", "s1/1", "s1/2", "s3/1"]
     );
     // A get depends on its entry's session too.
-    let get = call(&data, &fixture, "query", "get", json!(["s1", 1]), Some(alice())).unwrap();
+    let get = call(
+        &data,
+        &fixture,
+        "query",
+        "get",
+        json!(["s1", 1]),
+        Some(alice()),
+    )
+    .unwrap();
     let certificate = get.query_certificate.expect("certificate");
-    deploy(&mut data, session_write("s1", json!({"owner":"alice","private":true,"title":"t"})), &fixture);
+    deploy(
+        &mut data,
+        session_write("s1", json!({"owner":"alice","private":true,"title":"t"})),
+        &fixture,
+    );
     assert!(!certificate.valid(&data));
 }
 

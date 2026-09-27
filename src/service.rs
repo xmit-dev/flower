@@ -720,7 +720,9 @@ impl Validity {
         match (self, other) {
             (Self::Polled, _) | (_, Self::Polled) => Self::Polled,
             (Self::Until(a), Self::Until(b)) => Self::Until(a.min(b)),
-            (Self::Until(time), Self::Stable) | (Self::Stable, Self::Until(time)) => Self::Until(time),
+            (Self::Until(time), Self::Stable) | (Self::Stable, Self::Until(time)) => {
+                Self::Until(time)
+            }
             (Self::Stable, Self::Stable) => Self::Stable,
         }
     }

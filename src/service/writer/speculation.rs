@@ -269,31 +269,29 @@ impl<'a> Wave<'a> {
         mut admitted: Option<admission::Permit>,
     ) {
         let now = self.now;
-        let slots = pending
-            .iter()
-            .map(|pending| {
-                let admitted = admitted.take();
-                let input = pending.input.clone();
-                let state = state.clone();
-                let started = Arc::new(AtomicBool::new(false));
-                let signal = started.clone();
-                Slot {
-                    future: Some(Box::pin(async move {
-                        prepare_candidate_admitted(
-                            app,
-                            &state,
-                            &input,
-                            false,
-                            Some(now),
-                            Some(signal),
-                            admitted,
-                        )
-                        .await
-                    })),
-                    result: None,
-                    started,
-                }
-            });
+        let slots = pending.iter().map(|pending| {
+            let admitted = admitted.take();
+            let input = pending.input.clone();
+            let state = state.clone();
+            let started = Arc::new(AtomicBool::new(false));
+            let signal = started.clone();
+            Slot {
+                future: Some(Box::pin(async move {
+                    prepare_candidate_admitted(
+                        app,
+                        &state,
+                        &input,
+                        false,
+                        Some(now),
+                        Some(signal),
+                        admitted,
+                    )
+                    .await
+                })),
+                result: None,
+                started,
+            }
+        });
         self.slots.extend(slots);
     }
     pub fn is_empty(&self) -> bool {

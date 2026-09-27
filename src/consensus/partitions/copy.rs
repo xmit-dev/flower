@@ -501,18 +501,31 @@ mod budget_tests {
         let generation = "a".repeat(64);
         let cell = r#"cell:["leaf",null]"#;
         let root = r#"root:["leaf",null]"#;
-        let value = |number| serde_json::json!({"name":"leaf","args":null,
-            "outcome":{"ok":true,"value":number},"deps":[]});
+        let value = |number| {
+            serde_json::json!({"name":"leaf","args":null,
+            "outcome":{"ok":true,"value":number},"deps":[]})
+        };
         let mut base = Snapshot::default();
         base.data.insert(cell.into(), value(1));
-        base.data.insert(root.into(), serde_json::json!({"name":"leaf","args":null}));
+        base.data
+            .insert(root.into(), serde_json::json!({"name":"leaf","args":null}));
         let mut active = base.clone();
         active.revision = 1;
-        active.data.insert(format!("graph:{generation}:{cell}"), value(2));
-        active.data.insert(format!("graph:{generation}:{root}"), serde_json::json!({"name":"leaf","args":null}));
-        active.data.insert("reactive:active".into(), serde_json::json!(generation));
+        active
+            .data
+            .insert(format!("graph:{generation}:{cell}"), value(2));
+        active.data.insert(
+            format!("graph:{generation}:{root}"),
+            serde_json::json!({"name":"leaf","args":null}),
+        );
+        active
+            .data
+            .insert("reactive:active".into(), serde_json::json!(generation));
         let activation = delta(&base, &active).unwrap();
-        assert!(activation.data.get_raw_shared(cell).is_none(), "unchanged legacy cells must not become copies of the active graph");
+        assert!(
+            activation.data.get_raw_shared(cell).is_none(),
+            "unchanged legacy cells must not become copies of the active graph"
+        );
         assert!(activation.data.get_raw_shared(root).is_none());
         for (key, value) in &activation.data {
             base.data.insert(key.clone(), value.clone());

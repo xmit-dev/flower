@@ -2,7 +2,7 @@
 //! path used for evaluated patches. No clock or secret is consulted here.
 use super::*;
 use crate::consensus::retention::{self as policy, Action, Command, Session, State};
-use anyhow::{ensure, Context};
+use anyhow::{Context, ensure};
 
 fn value<'a>(state: &'a Snapshot, delta: &'a ApplicationDelta, key: &str) -> Option<&'a Value> {
     delta
@@ -97,7 +97,10 @@ fn no_active_transactions(state: &Snapshot) -> anyhow::Result<()> {
         !state.data.contains_key("transaction:participant")
             && !state
                 .data
-                .entries::<(std::ops::Bound<&str>, std::ops::Bound<&str>)>((std::ops::Bound::Included("transaction:coordinator:"), std::ops::Bound::Unbounded))
+                .entries::<(std::ops::Bound<&str>, std::ops::Bound<&str>)>((
+                    std::ops::Bound::Included("transaction:coordinator:"),
+                    std::ops::Bound::Unbounded
+                ))
                 .take_while(|(key, _)| key.starts_with("transaction:coordinator:"))
                 .any(|(_, value)| value.get("complete").and_then(Value::as_bool) != Some(true)),
         "RETENTION_TRANSACTION_ACTIVE: complete outstanding distributed transactions before changing retry admission"

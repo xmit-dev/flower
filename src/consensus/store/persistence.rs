@@ -53,10 +53,10 @@ pub(super) struct Persistence {
 fn interval() -> std::time::Duration {
     static INTERVAL: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
     *INTERVAL.get_or_init(|| {
-        super::super::limits::Limits::from_env()
-            .map_or_else(|_| super::super::limits::Limits::default().persist_interval, |limits| {
-                limits.persist_interval
-            })
+        super::super::limits::Limits::from_env().map_or_else(
+            |_| super::super::limits::Limits::default().persist_interval,
+            |limits| limits.persist_interval,
+        )
     })
 }
 

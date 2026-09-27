@@ -79,11 +79,10 @@ impl DependencyCertificate {
                         Bound::Included(lower),
                         Bound::Excluded(upper),
                     ));
-                    let unchanged = entries.iter().all(|expected| {
-                        found
-                            .next()
-                            .is_some_and(|actual| *expected == actual)
-                    }) && found.next().is_none();
+                    let unchanged = entries
+                        .iter()
+                        .all(|expected| found.next().is_some_and(|actual| *expected == actual))
+                        && found.next().is_none();
                     if unchanged {
                         *marker = current;
                     }

@@ -1,6 +1,6 @@
 //! Cold preparation stages only; the ordinary prepared-image hit stays untouched.
 use anyhow::Result;
-use opentelemetry::{global, metrics::Histogram, KeyValue};
+use opentelemetry::{KeyValue, global, metrics::Histogram};
 use std::{sync::OnceLock, time::Instant};
 
 struct Observation {

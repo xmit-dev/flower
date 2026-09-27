@@ -287,8 +287,10 @@ impl Runtime {
             bytes.extend_from_slice(&chunk);
         }
         if !status.is_success() {
-            if matches!(status, reqwest::StatusCode::UNPROCESSABLE_ENTITY | reqwest::StatusCode::FORBIDDEN)
-                && let Some(failure) = super::remote_failure(&bytes)
+            if matches!(
+                status,
+                reqwest::StatusCode::UNPROCESSABLE_ENTITY | reqwest::StatusCode::FORBIDDEN
+            ) && let Some(failure) = super::remote_failure(&bytes)
             {
                 return Err(failure);
             }

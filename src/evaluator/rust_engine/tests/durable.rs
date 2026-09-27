@@ -216,7 +216,11 @@ fn indexed_methods_overlay_pending_writes_and_remove_old_entries() {
     assert_eq!(result.value, json!([{"shop":"a"}]));
     apply(&mut data, result);
     assert_eq!(index_entries(&data).len(), 2);
-    assert!(index_entries(&data).iter().all(|id| !id.ends_with(":deleted")));
+    assert!(
+        index_entries(&data)
+            .iter()
+            .all(|id| !id.ends_with(":deleted"))
+    );
     deploy_schema(&mut data, json!({}), Schema::default(), &fixture);
     assert!(index_entries(&data).is_empty());
     assert!(data.get("schema").is_none());
@@ -261,7 +265,14 @@ fn a_query_reading_an_aggregate_depends_on_the_rows_it_counts_not_only_on_member
     // Declared, not materialized: every query computes it from its bucket's rows.
     deploy_schema(&mut data, json!({"writes":writes}), schema(true), &fixture);
     let read = |data: &Records| {
-        let result = run(data.clone(), json!({"name":"read","args":"a"}), "query", None, &fixture).unwrap();
+        let result = run(
+            data.clone(),
+            json!({"name":"read","args":"a"}),
+            "query",
+            None,
+            &fixture,
+        )
+        .unwrap();
         assert!(result.query_cacheable);
         (result.value, result.query_certificate.unwrap())
     };
@@ -272,10 +283,13 @@ fn a_query_reading_an_aggregate_depends_on_the_rows_it_counts_not_only_on_member
     let written: Vec<String> = result.puts.keys().cloned().collect();
     apply(&mut data, result);
     assert!(!certificate.valid(&data), "the cached total is stale");
-    let observed: Vec<String> = certificate.observations().map(|observation| match observation {
-        Observation::Key(id) => id.to_owned(),
-        Observation::Range { marker, .. } => marker.to_owned(),
-    }).collect();
+    let observed: Vec<String> = certificate
+        .observations()
+        .map(|observation| match observation {
+            Observation::Key(id) => id.to_owned(),
+            Observation::Range { marker, .. } => marker.to_owned(),
+        })
+        .collect();
     assert!(
         written.iter().any(|key| {
             let mut ids = Vec::new();

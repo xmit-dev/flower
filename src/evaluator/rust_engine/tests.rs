@@ -281,10 +281,12 @@ fn preview_reads_own_writes_and_collects_temporary_roots() {
     assert_eq!(result.value, json!([6, 8]));
     assert_eq!(result.puts[&source_id("input", "a")], 5);
     assert_eq!(result.puts["clock"], 100);
-    assert!(!result
-        .puts
-        .keys()
-        .any(|id| id.starts_with("cell:") || id.starts_with("root:")));
+    assert!(
+        !result
+            .puts
+            .keys()
+            .any(|id| id.starts_with("cell:") || id.starts_with("root:"))
+    );
     assert_eq!(result.evaluated.len(), 2);
 }
 
@@ -599,22 +601,26 @@ fn deep_temporary_values_are_allowed_once_but_not_committed() {
             }) as Callback,
         ),
     ]);
-    assert!(run(
-        Records::default(),
-        json!({"name":"read","args":128}),
-        "query",
-        None,
-        &fixture
-    )
-    .is_ok());
-    assert!(run(
-        Records::default(),
-        json!({"name":"retain","args":123,"requestId":"r"}),
-        "mutation",
-        None,
-        &fixture
-    )
-    .is_ok());
+    assert!(
+        run(
+            Records::default(),
+            json!({"name":"read","args":128}),
+            "query",
+            None,
+            &fixture
+        )
+        .is_ok()
+    );
+    assert!(
+        run(
+            Records::default(),
+            json!({"name":"retain","args":123,"requestId":"r"}),
+            "mutation",
+            None,
+            &fixture
+        )
+        .is_ok()
+    );
     assert_eq!(
         run(
             Records::default(),

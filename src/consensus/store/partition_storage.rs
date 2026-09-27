@@ -1,7 +1,7 @@
 use super::*;
+use crate::consensus::backing::{UNSEQUENCED, encode};
 use crate::consensus::{PartitionCommand, PartitionPhase};
 use std::collections::BTreeSet;
-use crate::consensus::backing::{UNSEQUENCED, encode};
 use std::ops::Bound;
 
 #[derive(Serialize, Deserialize)]
@@ -177,9 +177,10 @@ pub(super) fn serve_partitions(
     round: Option<u64>,
 ) -> anyhow::Result<()> {
     let transaction = db.begin_read()?;
-    let open = |definition: PairTable| -> anyhow::Result<Arc<crate::consensus::backing::PairTable>> {
-        Ok(Arc::new(transaction.open_table(definition)?))
-    };
+    let open =
+        |definition: PairTable| -> anyhow::Result<Arc<crate::consensus::backing::PairTable>> {
+            Ok(Arc::new(transaction.open_table(definition)?))
+        };
     let (data, requests, base_data, base_requests, chunks) = (
         open(tables.partition_data)?,
         open(tables.partition_requests)?,
@@ -188,7 +189,10 @@ pub(super) fn serve_partitions(
         open(tables.partition_chunks)?,
     );
     let backing = |table: &Arc<crate::consensus::backing::PairTable>, id: &str| {
-        Arc::new(crate::consensus::backing::Backing::pair(table.clone(), id.to_owned()))
+        Arc::new(crate::consensus::backing::Backing::pair(
+            table.clone(),
+            id.to_owned(),
+        ))
     };
     let select = |position: usize, state: &PartitionState| {
         !unwritten(&state.info.partition)
@@ -199,10 +203,14 @@ pub(super) fn serve_partitions(
     partitions.update_some(select, |state| {
         let id = state.info.partition.clone();
         state.snapshot.data.rebase(backing(&data, &id), persisted);
-        state.snapshot.requests.rebase(backing(&requests, &id), persisted);
+        state
+            .snapshot
+            .requests
+            .rebase(backing(&requests, &id), persisted);
         if let Some(base) = &mut state.base {
             base.data.rebase(backing(&base_data, &id), persisted);
-            base.requests.rebase(backing(&base_requests, &id), persisted);
+            base.requests
+                .rebase(backing(&base_requests, &id), persisted);
         }
         state.chunks.rebase(backing(&chunks, &id), persisted);
         Ok(())
@@ -417,7 +425,11 @@ pub(super) fn write_partitions(
             }
             for key in &write.requests {
                 if let Some(value) = state.snapshot.requests.get(key) {
-                    let version = state.snapshot.requests.version(key).expect("stored receipt");
+                    let version = state
+                        .snapshot
+                        .requests
+                        .version(key)
+                        .expect("stored receipt");
                     requests.insert(
                         (id.as_bytes(), key.as_bytes()),
                         encode(version, &profile.encode(value)?).as_slice(),

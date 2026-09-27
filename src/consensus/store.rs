@@ -196,8 +196,12 @@ fn stored_backings(
 ) -> anyhow::Result<(Arc<super::backing::Backing>, Arc<super::backing::Backing>)> {
     let transaction = db.begin_read()?;
     Ok((
-        Arc::new(super::backing::Backing::plain(transaction.open_table(tables.data)?)),
-        Arc::new(super::backing::Backing::plain(transaction.open_table(tables.requests)?)),
+        Arc::new(super::backing::Backing::plain(
+            transaction.open_table(tables.data)?,
+        )),
+        Arc::new(super::backing::Backing::plain(
+            transaction.open_table(tables.requests)?,
+        )),
     ))
 }
 
@@ -235,8 +239,11 @@ impl ApplicationDelta {
         for (key, value) in self.data {
             match value {
                 Some(value) => {
-                    let version = versions.map_or_else(super::next_version, |versions| versions.data[&key]);
-                    state.data.insert_versioned(key.clone(), Arc::new(value), version);
+                    let version =
+                        versions.map_or_else(super::next_version, |versions| versions.data[&key]);
+                    state
+                        .data
+                        .insert_versioned(key.clone(), Arc::new(value), version);
                 }
                 None => {
                     state.data.remove(&key);
@@ -249,8 +256,11 @@ impl ApplicationDelta {
             state.requests.stamp(&key, sequence);
         }
         for (key, receipt) in self.requests {
-            let version = versions.map_or_else(super::next_version, |versions| versions.requests[&key]);
-            state.requests.insert_versioned(key.clone(), Arc::new(receipt), version);
+            let version =
+                versions.map_or_else(super::next_version, |versions| versions.requests[&key]);
+            state
+                .requests
+                .insert_versioned(key.clone(), Arc::new(receipt), version);
             state.requests.stamp(&key, sequence);
         }
         state.revision = self.revision;
@@ -336,7 +346,9 @@ struct PendingAppend {
 
 impl PendingAppend {
     fn publish(logs: &AppendingLogs, entries: Arc<Vec<Entry<TypeConfig>>>) -> Self {
-        logs.write().expect("appending log lock").push(entries.clone());
+        logs.write()
+            .expect("appending log lock")
+            .push(entries.clone());
         Self {
             logs: logs.clone(),
             entries,
@@ -347,7 +359,10 @@ impl PendingAppend {
 impl Drop for PendingAppend {
     fn drop(&mut self) {
         let mut logs = self.logs.write().expect("appending log lock");
-        if let Some(position) = logs.iter().position(|entries| Arc::ptr_eq(entries, &self.entries)) {
+        if let Some(position) = logs
+            .iter()
+            .position(|entries| Arc::ptr_eq(entries, &self.entries))
+        {
             drop(logs.remove(position));
         }
     }
@@ -628,7 +643,11 @@ impl Store {
             }),
             raft_lifetime: None,
         };
-        lazy_flush::spawn(Arc::downgrade(&store.inner), store.inner.holders.clone(), lazy);
+        lazy_flush::spawn(
+            Arc::downgrade(&store.inner),
+            store.inner.holders.clone(),
+            lazy,
+        );
         Ok(store)
     }
 
@@ -920,10 +939,10 @@ impl Store {
         let guard = self.inner.io.clone().lock_owned().await;
         profile.phase(StoragePhase::IoQueue);
         let pending = self.inner.pending.begin();
-        let submitted = self
-            .inner
-            .shared
-            .submit(durable, profile, self.raft_lifetime.clone(), write);
+        let submitted =
+            self.inner
+                .shared
+                .submit(durable, profile, self.raft_lifetime.clone(), write);
         drop(guard);
         // Count it as pending until it commits, even if this caller is cancelled.
         tokio::spawn(async move {
@@ -988,18 +1007,17 @@ impl Store {
             })
             .await;
             let submitted = match encoded {
-                Ok((Ok(encoded), profile)) => Ok(shared.submit(
-                    !deferred,
-                    profile,
-                    lifetime,
-                    move |transaction, _| {
-                        let mut table = transaction.open_table(tables.logs)?;
-                        for (index, entry) in &encoded {
-                            table.insert(*index, entry.as_slice())?;
-                        }
-                        Ok(())
-                    },
-                )),
+                Ok((Ok(encoded), profile)) => {
+                    Ok(
+                        shared.submit(!deferred, profile, lifetime, move |transaction, _| {
+                            let mut table = transaction.open_table(tables.logs)?;
+                            for (index, entry) in &encoded {
+                                table.insert(*index, entry.as_slice())?;
+                            }
+                            Ok(())
+                        }),
+                    )
+                }
                 Ok((Err(error), profile)) => {
                     profile.report(false);
                     Err(error)
@@ -1126,7 +1144,11 @@ fn io_error(subject: ErrorSubject<u64>, verb: ErrorVerb, error: impl Display) ->
 
 /// Refuse a database whose index entries use an older layout, which this
 /// binary would misread; mark a new one.
-fn check_index_layout(transaction: &WriteTransaction, tables: Tables, new: bool) -> anyhow::Result<()> {
+fn check_index_layout(
+    transaction: &WriteTransaction,
+    tables: Tables,
+    new: bool,
+) -> anyhow::Result<()> {
     let mut meta = transaction.open_table(tables.meta)?;
     if meta.get(INDEX_LAYOUT_META)?.is_none() {
         anyhow::ensure!(
@@ -1524,8 +1546,9 @@ impl RaftLogStorage<TypeConfig> for Store {
                     .and_then(|result| result)
                 {
                     Ok(()) => lazy.hold(last_index, callback),
-                    Err(error) => callback
-                        .log_io_completed(Err(std::io::Error::other(error.to_string()))),
+                    Err(error) => {
+                        callback.log_io_completed(Err(std::io::Error::other(error.to_string())))
+                    }
                 }
             });
             return Ok(());
@@ -1909,7 +1932,11 @@ impl RaftStateMachine<TypeConfig> for Store {
         // No apply can queue another state while this guard is held. An older
         // queued state must not land after the installed one.
         self.inner.persistence.drain().await.map_err(|error| {
-            io_error(ErrorSubject::Snapshot(Some(meta.signature())), ErrorVerb::Write, error)
+            io_error(
+                ErrorSubject::Snapshot(Some(meta.signature())),
+                ErrorVerb::Write,
+                error,
+            )
         })?;
         profile.phase(StoragePhase::StateLock);
         profile.application(
@@ -1945,8 +1972,19 @@ impl RaftStateMachine<TypeConfig> for Store {
             // Serve the installed tables rather than the decoded state.
             let mut next = next;
             next.application = stored_application(db, tables, next.application.revision)?;
-            partition_storage::serve_partitions(db, tables, &mut next.partitions, &|_| false, super::backing::UNSEQUENCED, None)?;
-            inner.replaced_partitions.lock().expect("replaced partitions lock").clear();
+            partition_storage::serve_partitions(
+                db,
+                tables,
+                &mut next.partitions,
+                &|_| false,
+                super::backing::UNSEQUENCED,
+                None,
+            )?;
+            inner
+                .replaced_partitions
+                .lock()
+                .expect("replaced partitions lock")
+                .clear();
             inner
                 .backing_persisted
                 .store(inner.persistence.persisted_count(), Ordering::Release);

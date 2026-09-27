@@ -92,11 +92,18 @@ struct Refreshed {
 /// access decision read raise their signals, and freshness doubts every
 /// watch's; time changes either only at the instant its evaluation declared.
 /// Only a bare ctx.now() read makes a watch poll.
-fn wake_at(app: &App, validity: Validity, committed: u64) -> Result<Option<tokio::time::Instant>, ApiError> {
+fn wake_at(
+    app: &App,
+    validity: Validity,
+    committed: u64,
+) -> Result<Option<tokio::time::Instant>, ApiError> {
     Ok(match validity {
         Validity::Stable => None,
         Validity::Polled => Some(
-            tokio::time::Instant::now() + super::tuning::settings().map_err(unavailable)?.watch_refresh,
+            tokio::time::Instant::now()
+                + super::tuning::settings()
+                    .map_err(unavailable)?
+                    .watch_refresh,
         ),
         Validity::Until(time) => {
             let now = app.clock.sample_after(committed).map_err(unavailable)?;
@@ -206,7 +213,11 @@ pub(super) async fn watch(
             let _ = terminal.send(error_event(error));
         }
     });
-    let mut response = Response::new(Body::from_stream(events(receiver, terminal_receiver, draining)));
+    let mut response = Response::new(Body::from_stream(events(
+        receiver,
+        terminal_receiver,
+        draining,
+    )));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/event-stream"),

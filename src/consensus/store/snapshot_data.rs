@@ -253,7 +253,9 @@ impl SnapshotData {
                     Some(position)
                 }
                 (Data::Deferred(image), SeekFrom::Current(0)) => {
-                    self.data = Data::Streaming(Stream::start(image.take().expect("deferred snapshot image")));
+                    self.data = Data::Streaming(Stream::start(
+                        image.take().expect("deferred snapshot image"),
+                    ));
                     Some(0)
                 }
                 (Data::Streaming(stream), SeekFrom::Start(position)) => {
@@ -303,7 +305,9 @@ impl AsyncRead for SnapshotData {
             ready!(self.poll_position(cx))?;
         }
         if let Data::Deferred(image) = &mut self.data {
-            self.data = Data::Streaming(Stream::start(image.take().expect("deferred snapshot image")));
+            self.data = Data::Streaming(Stream::start(
+                image.take().expect("deferred snapshot image"),
+            ));
         }
         if let Data::Streaming(stream) = &mut self.data {
             let result = ready!(stream.poll_read(cx, buf));
@@ -439,10 +443,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut state = StoredState::default();
         for n in 0..40 {
-            state
-                .application
-                .data
-                .insert(format!("value-{n:02}"), serde_json::json!(format!("{n}").repeat(40_000)));
+            state.application.data.insert(
+                format!("value-{n:02}"),
+                serde_json::json!(format!("{n}").repeat(40_000)),
+            );
         }
         let bytes = serde_json::to_vec(&state).unwrap();
         let mut data = SnapshotData::deferred(DeferredImage {
@@ -458,7 +462,13 @@ mod tests {
             data.seek(SeekFrom::Start(offset)).await.unwrap();
             let mut buf = Vec::with_capacity(segment);
             while buf.len() < segment {
-                if (&mut data).take((segment - buf.len()) as u64).read_to_end(&mut buf).await.unwrap() == 0 {
+                if (&mut data)
+                    .take((segment - buf.len()) as u64)
+                    .read_to_end(&mut buf)
+                    .await
+                    .unwrap()
+                    == 0
+                {
                     break;
                 }
             }

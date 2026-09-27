@@ -146,7 +146,9 @@ impl Backing {
     /// Stored records for tests: `records` written into a table of an
     /// in-memory database, with their versions.
     #[cfg(test)]
-    pub(crate) fn in_memory<'a>(records: impl IntoIterator<Item = (&'a str, u64, Vec<u8>)>) -> Self {
+    pub(crate) fn in_memory<'a>(
+        records: impl IntoIterator<Item = (&'a str, u64, Vec<u8>)>,
+    ) -> Self {
         use redb::ReadableDatabase;
         const TABLE: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new("data");
         let database = redb::Database::builder()
@@ -383,9 +385,14 @@ impl Run {
     /// The records of block `block`, in order.
     fn block(&self, block: usize) -> Vec<(String, Vec<u8>)> {
         let start = self.index[block].1;
-        let stop = self.index.get(block + 1).map_or(self.end, |(_, offset)| *offset);
+        let stop = self
+            .index
+            .get(block + 1)
+            .map_or(self.end, |(_, offset)| *offset);
         let mut bytes = vec![0; usize::try_from(stop - start).expect("spool block size")];
-        self.file.read_exact_at(&mut bytes, start).expect("spool read");
+        self.file
+            .read_exact_at(&mut bytes, start)
+            .expect("spool read");
         let mut records = Vec::with_capacity(RUN_STRIDE);
         let mut rest = bytes.as_slice();
         let take = |rest: &mut &[u8]| {
@@ -436,7 +443,9 @@ impl RunRange {
             Bound::Unbounded => 0,
         };
         let back = match upper {
-            Bound::Included(key) => run.index.partition_point(|(first, _)| first.as_str() <= key),
+            Bound::Included(key) => run
+                .index
+                .partition_point(|(first, _)| first.as_str() <= key),
             Bound::Excluded(key) => run.index.partition_point(|(first, _)| first.as_str() < key),
             Bound::Unbounded => run.index.len(),
         };
@@ -686,4 +695,3 @@ where
         }
     }
 }
-

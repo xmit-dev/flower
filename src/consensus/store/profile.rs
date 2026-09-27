@@ -4,9 +4,8 @@
 
 use super::{Entry, EntryPayload, RaftCommand, Serialize, TypeConfig};
 use opentelemetry::{
-    global,
+    KeyValue, global,
     metrics::{Counter, Histogram},
-    KeyValue,
 };
 use std::{sync::OnceLock, time::Instant};
 

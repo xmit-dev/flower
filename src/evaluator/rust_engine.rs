@@ -5,7 +5,9 @@
 
 mod dependencies;
 mod graph;
-pub use dependencies::{DependencyCertificate, MutationCertificate, Observation, touched, touches_everything};
+pub use dependencies::{
+    DependencyCertificate, MutationCertificate, Observation, touched, touches_everything,
+};
 mod metadata;
 pub(crate) use metadata::{ReactiveIndex, update_memberships};
 mod access;
@@ -928,7 +930,8 @@ impl Engine<'_> {
             self.count_operations(rows.len())?;
             let rows = match &access {
                 Some(access) => {
-                    let rows = self.looking_up(|lookup| access.filter(rows, &query.fields, lookup))?;
+                    let rows =
+                        self.looking_up(|lookup| access.filter(rows, &query.fields, lookup))?;
                     self.settle_access(access)?;
                     rows
                 }
@@ -1524,7 +1527,9 @@ impl Engine<'_> {
                 0
             } else {
                 // Both properties include their leading comma, key and colon.
-                9 + encoded_len(&result.value) + 19 + if result.query_cacheable { 4 } else { 5 }
+                9 + encoded_len(&result.value)
+                    + 19
+                    + if result.query_cacheable { 4 } else { 5 }
                     + time_fields_len(result.query_clock_polled, result.query_changes_at)
             };
         if bytes > output_limit {

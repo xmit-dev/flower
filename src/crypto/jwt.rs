@@ -4,22 +4,22 @@
 //! RFC 6979 implementation. This module never obtains a clock or a nonce.
 use std::fmt;
 
-use anyhow::{bail, ensure, Context, Result};
-use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+use anyhow::{Context, Result, bail, ensure};
+use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use base64::{
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use p256::{
-    ecdsa::{signature::Signer, Signature, SigningKey},
+    ecdsa::{Signature, SigningKey, signature::Signer},
     pkcs8::DecodePrivateKey,
 };
 use serde::{
-    de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize,
+    de::{self, MapAccess, SeqAccess, Visitor},
 };
-use serde_json::{json, Map, Number, Value};
+use serde_json::{Map, Number, Value, json};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -876,13 +876,15 @@ mod tests {
             );
             let mut verify_der = verify_options.clone();
             verify_der.key_format = KeyFormat::Der;
-            assert!(verify(
-                token,
-                &decode_segment(public_der).unwrap(),
-                &verify_der,
-                1_000_000
-            )
-            .is_ok());
+            assert!(
+                verify(
+                    token,
+                    &decode_segment(public_der).unwrap(),
+                    &verify_der,
+                    1_000_000
+                )
+                .is_ok()
+            );
         }
     }
 
@@ -909,13 +911,15 @@ mod tests {
             assert!(decrypt(&parts.join("."), &[7; 32], &decryption(), 1_000_000).is_err());
         }
         assert!(decrypt(JWE, &[8; 32], &decryption(), 1_000_000).is_err());
-        assert!(decrypt(
-            &JWE.replacen("..", ".AA.", 1),
-            &[7; 32],
-            &decryption(),
-            1_000_000
-        )
-        .is_err());
+        assert!(
+            decrypt(
+                &JWE.replacen("..", ".AA.", 1),
+                &[7; 32],
+                &decryption(),
+                1_000_000
+            )
+            .is_err()
+        );
         assert!(encrypt(&claims(), &[7; 31], &[3; 12], &EncryptOptions::default()).is_err());
         assert!(encrypt(&claims(), &[7; 32], &[3; 11], &EncryptOptions::default()).is_err());
         assert!(decrypt(JWE, &[7; 32], &decryption(), 2_000_000).is_err());
@@ -968,7 +972,15 @@ mod tests {
         let other = signed(&value);
         let (_, signature) = HS.rsplit_once('.').unwrap();
         let (message, _) = other.rsplit_once('.').unwrap();
-        assert!(verify(&format!("{message}.{signature}"), &[7; 32], &opts, 1_000_000).is_err());
+        assert!(
+            verify(
+                &format!("{message}.{signature}"),
+                &[7; 32],
+                &opts,
+                1_000_000
+            )
+            .is_err()
+        );
         assert!(verify(&other, &[7; 32], &opts, 1_000_000).is_ok());
     }
 
@@ -1033,28 +1045,32 @@ mod tests {
             r#"{"alg":"HS256","jwk":{}}"#,
             r#"{"alg":"HS256","typ":3}"#,
         ] {
-            assert!(verify(
-                &hs_raw(header, &claims().to_string()),
-                &[7; 32],
-                &opts,
-                1_000_000
-            )
-            .is_err());
+            assert!(
+                verify(
+                    &hs_raw(header, &claims().to_string()),
+                    &[7; 32],
+                    &opts,
+                    1_000_000
+                )
+                .is_err()
+            );
         }
         assert!(sign(&claims(), &[7; 31], &hs_options()).is_err());
         let mut invalid_pem = KEYS[0].1.as_bytes().to_vec();
         invalid_pem.push(0xff);
-        assert!(sign(
-            &claims(),
-            &invalid_pem,
-            &SignOptions {
-                algorithm: Algorithm::RS256,
-                key_format: KeyFormat::Pem,
-                kid: None,
-                typ: None
-            }
-        )
-        .is_err());
+        assert!(
+            sign(
+                &claims(),
+                &invalid_pem,
+                &SignOptions {
+                    algorithm: Algorithm::RS256,
+                    key_format: KeyFormat::Pem,
+                    kid: None,
+                    typ: None
+                }
+            )
+            .is_err()
+        );
         let mutated = HS.replacen("eyJhdWQi", "eyJhdWQj", 1);
         assert!(verify(&mutated, &[7; 32], &opts, 1_000_000).is_err());
         assert!(verify(&format!("{HS}.extra"), &[7; 32], &opts, 1_000_000).is_err());
@@ -1080,21 +1096,25 @@ mod tests {
             "7",
             "\"text\"",
         ] {
-            assert!(verify(
-                &hs_raw(r#"{"alg":"HS256","typ":"JWT"}"#, payload),
+            assert!(
+                verify(
+                    &hs_raw(r#"{"alg":"HS256","typ":"JWT"}"#, payload),
+                    &[7; 32],
+                    &opts,
+                    1_000_000
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            verify(
+                &hs_raw(r#"{"alg":"HS256","alg":"HS256"}"#, &claims().to_string()),
                 &[7; 32],
                 &opts,
                 1_000_000
             )
-            .is_err());
-        }
-        assert!(verify(
-            &hs_raw(r#"{"alg":"HS256","alg":"HS256"}"#, &claims().to_string()),
-            &[7; 32],
-            &opts,
-            1_000_000
-        )
-        .is_err());
+            .is_err()
+        );
         assert!(verify(&format!("{HS}="), &[7; 32], &opts, 1_000_000).is_err());
         assert!(sign(&json!([]), &[7; 32], &hs_options()).is_err());
         assert!(encrypt(&Value::Null, &[7; 32], &[3; 12], &EncryptOptions::default()).is_err());
@@ -1104,10 +1124,10 @@ mod tests {
     fn strict_options_have_explicit_algorithms_and_key_formats() {
         assert!(serde_json::from_value::<VerifyOptions>(json!({"keyFormat":"raw"})).is_err());
         assert!(serde_json::from_value::<SignOptions>(json!({"algorithm":"HS256"})).is_err());
-        assert!(serde_json::from_value::<SignOptions>(
-            json!({"algorithm":"none","keyFormat":"raw"})
-        )
-        .is_err());
+        assert!(
+            serde_json::from_value::<SignOptions>(json!({"algorithm":"none","keyFormat":"raw"}))
+                .is_err()
+        );
         assert!(
             serde_json::from_value::<DecryptOptions>(json!({"ignoreExpiration":true})).is_err()
         );

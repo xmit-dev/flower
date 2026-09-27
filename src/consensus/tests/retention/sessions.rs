@@ -40,9 +40,11 @@ async fn retention_owner_derivation_is_lazy_without_weakening_session_admission(
     use crate::consensus::Snapshot;
     use std::cell::Cell;
 
-    policy::validate_request_owner_with(&Snapshot::default(), "legacy-intent", || -> &'static str {
-        panic!("Legacy requests have no session owner")
-    })
+    policy::validate_request_owner_with(
+        &Snapshot::default(),
+        "legacy-intent",
+        || -> &'static str { panic!("Legacy requests have no session owner") },
+    )
     .unwrap();
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(1, directory.path().into()).await.unwrap();

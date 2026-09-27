@@ -88,17 +88,19 @@ impl Schema {
             .fold(policies, |bytes, (name, rule)| {
                 bytes.saturating_add(128 + name.len() + rule.allocation_cost())
             });
-        policies.saturating_add(self.indexes.iter().chain(self.aggregates.values()).fold(
-            self.aggregates
-                .keys()
-                .fold(0usize, |bytes, name| bytes.saturating_add(128 + name.len())),
-            |bytes, index| {
-                index.fields.iter().fold(
-                    bytes.saturating_add(192 + index.collection.len()),
-                    |bytes, field| bytes.saturating_add(32 + field.len()),
-                )
-            },
-        ))
+        policies.saturating_add(
+            self.indexes.iter().chain(self.aggregates.values()).fold(
+                self.aggregates
+                    .keys()
+                    .fold(0usize, |bytes, name| bytes.saturating_add(128 + name.len())),
+                |bytes, index| {
+                    index.fields.iter().fold(
+                        bytes.saturating_add(192 + index.collection.len()),
+                        |bytes, field| bytes.saturating_add(32 + field.len()),
+                    )
+                },
+            ),
+        )
     }
 
     pub(super) fn validate(mut self) -> EngineResult<Self> {

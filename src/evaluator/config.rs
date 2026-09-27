@@ -1,6 +1,6 @@
 //! Process-wide operator budgets. Parse once before constructing an engine;
 //! every request and every disposable guest uses the same validated settings.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::{
     sync::OnceLock,
     time::{Duration, Instant},

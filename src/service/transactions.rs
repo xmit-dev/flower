@@ -545,8 +545,10 @@ async fn remote_contact(
             continue;
         }
         if !status.is_success() {
-            if matches!(status, StatusCode::UNPROCESSABLE_ENTITY | StatusCode::FORBIDDEN)
-                && let Some(failure) = remote_failure(&body)
+            if matches!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY | StatusCode::FORBIDDEN
+            ) && let Some(failure) = remote_failure(&body)
             {
                 return Err(evaluation_error(failure));
             }

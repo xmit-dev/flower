@@ -223,15 +223,17 @@ fn deadline_stops_infinite_loop_even_when_guest_catches() {
     // Warm compilation separately; the measured limit covers only invocation.
     cache::runtime().unwrap().prepare(&code, limits()).unwrap();
     let start = Instant::now();
-    assert!(execute(
-        &code,
-        "test",
-        &Value::Null,
-        "query",
-        &mut |_, _| Ok(Value::Null),
-        Limits::new(start + Duration::from_millis(50), MAX_MEMORY_BYTES)
-    )
-    .is_err());
+    assert!(
+        execute(
+            &code,
+            "test",
+            &Value::Null,
+            "query",
+            &mut |_, _| Ok(Value::Null),
+            Limits::new(start + Duration::from_millis(50), MAX_MEMORY_BYTES)
+        )
+        .is_err()
+    );
     assert!(start.elapsed() < Duration::from_secs(2));
 }
 
@@ -277,24 +279,26 @@ fn aggregate_linear_memory_counts_simultaneous_nested_guests() {
         false,
     );
     let shared = Limits::new(Instant::now() + Duration::from_secs(30), 8 * 1024 * 1024);
-    assert!(execute(
-        &code,
-        "test",
-        &Value::Null,
-        "query",
-        &mut |_, _| {
-            execute(
-                &code,
-                "test",
-                &Value::Null,
-                "query",
-                &mut |_, _| Ok(Value::Null),
-                shared.clone(),
-            )
-        },
-        shared.clone()
-    )
-    .is_err());
+    assert!(
+        execute(
+            &code,
+            "test",
+            &Value::Null,
+            "query",
+            &mut |_, _| {
+                execute(
+                    &code,
+                    "test",
+                    &Value::Null,
+                    "query",
+                    &mut |_, _| Ok(Value::Null),
+                    shared.clone(),
+                )
+            },
+            shared.clone()
+        )
+        .is_err()
+    );
     assert!(shared.check().is_err());
 }
 
@@ -340,15 +344,17 @@ fn large_guest_c_frames_cannot_corrupt_the_shadow_stack_or_hide_failure() {
         false,
     );
     let shared = limits();
-    assert!(execute(
-        &code,
-        "test",
-        &Value::Null,
-        "query",
-        &mut |_, _| Ok(Value::Null),
-        shared.clone()
-    )
-    .is_err());
+    assert!(
+        execute(
+            &code,
+            "test",
+            &Value::Null,
+            "query",
+            &mut |_, _| Ok(Value::Null),
+            shared.clone()
+        )
+        .is_err()
+    );
     assert!(shared.check().is_err());
     assert_eq!(
         run(&bundle("()=>1", false), Value::Null).unwrap()["value"],

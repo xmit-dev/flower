@@ -248,14 +248,18 @@ async fn run_actor(
                 let Some(app) = weak.upgrade() else { return };
                 // What the run will read. A commit applied while it runs, by
                 // another writer, may move a due time the run never saw.
-                let before = progress.as_mut().map(|progress| progress.borrow_and_update().applied);
+                let before = progress
+                    .as_mut()
+                    .map(|progress| progress.borrow_and_update().applied);
                 let mut committed = false;
                 let outcome = if app.consensus.metrics().state == openraft::ServerState::Leader {
                     let outcome = maintain(&app).await;
                     if let Err(error) = &outcome {
                         tracing::warn!(%error, "application maintenance did not commit");
                     }
-                    committed = outcome.as_ref().is_ok_and(|maintained| maintained.committed);
+                    committed = outcome
+                        .as_ref()
+                        .is_ok_and(|maintained| maintained.committed);
                     Some(outcome.map(|maintained| maintained.next))
                 } else {
                     None
@@ -1123,8 +1127,7 @@ async fn prepare_candidate_inner(
     // Most of a queue worker's mutations are empty claims. Methods declared
     // with `receipt: false` never keep one. Retry sessions acknowledge every
     // sequence number, so theirs keep receipts.
-    let wrote = !evaluation.deletes.is_empty()
-        || evaluation.puts.keys().any(|key| key != "clock");
+    let wrote = !evaluation.deletes.is_empty() || evaluation.puts.keys().any(|key| key != "clock");
     let declined = method.as_ref().is_some_and(|method| !method.receipt);
     let receiptless = (!wrote || declined) && !deployment && !request_id.starts_with("f2:");
     let mut prepared = Prepared {
@@ -1588,7 +1591,8 @@ async fn prepare_group_inner<'a>(
                     // All methods in a wave share one logical clock. Advancing
                     // it here would invalidate otherwise independent siblings.
                     let rerun = Instant::now();
-                    let prepared = prepare_serial_at(app, state, entry, &mut admission, Some(now)).await;
+                    let prepared =
+                        prepare_serial_at(app, state, entry, &mut admission, Some(now)).await;
                     observability::stage("conflict_rerun", rerun.elapsed(), "batch");
                     prepared
                 }

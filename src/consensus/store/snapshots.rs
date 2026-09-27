@@ -193,7 +193,10 @@ mod tests {
             receiving.write_all(chunk).await.unwrap();
         }
         receiving.flush().await.unwrap();
-        follower.install_snapshot(&built.meta, receiving).await.unwrap();
+        follower
+            .install_snapshot(&built.meta, receiving)
+            .await
+            .unwrap();
         assert_eq!(follower.snapshot().await, expected);
         // The checkpoint holds metadata only, regardless of image size.
         {
@@ -202,11 +205,19 @@ mod tests {
             assert!(table.get(CHECKPOINT_KEY).unwrap().unwrap().value().len() < 1024);
         }
         // A truncated or trailing incoming stream cannot replace the state.
-        for invalid in [&wire[..wire.len() - 1], &[wire.as_slice(), b"junk"].concat()] {
+        for invalid in [
+            &wire[..wire.len() - 1],
+            &[wire.as_slice(), b"junk"].concat(),
+        ] {
             let mut receiving = follower.begin_receiving_snapshot().await.unwrap();
             receiving.write_all(invalid).await.unwrap();
             receiving.flush().await.unwrap();
-            assert!(follower.install_snapshot(&built.meta, receiving).await.is_err());
+            assert!(
+                follower
+                    .install_snapshot(&built.meta, receiving)
+                    .await
+                    .is_err()
+            );
             assert_eq!(follower.snapshot().await, expected);
         }
         drop(follower);

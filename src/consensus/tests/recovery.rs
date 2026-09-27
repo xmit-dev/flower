@@ -305,9 +305,12 @@ async fn recovered_leader_serves_no_fence_before_tail_replay_in_a_new_term() {
     // Its term's first entry, and with it any fence, waits for the held
     // replication while acknowledged application state is still missing.
     assert!(
-        tokio::time::timeout(Duration::from_millis(300), leader.raft.ensure_linearizable())
-            .await
-            .is_err()
+        tokio::time::timeout(
+            Duration::from_millis(300),
+            leader.raft.ensure_linearizable()
+        )
+        .await
+        .is_err()
     );
     assert_eq!(leader.local_snapshot().await.revision, 0);
 
@@ -356,7 +359,10 @@ async fn recovered_leader_serves_no_fence_before_tail_replay_in_a_new_term() {
             )
         })
         .count();
-    assert!(barriers <= 1, "concurrent readers share one recovery barrier");
+    assert!(
+        barriers <= 1,
+        "concurrent readers share one recovery barrier"
+    );
     assert_eq!(leader.local_snapshot().await.requests.len(), 2);
     for node in &mut nodes {
         node.stop().await;

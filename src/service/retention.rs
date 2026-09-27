@@ -303,7 +303,10 @@ pub(super) async fn run(weak: Weak<App>) {
     }
 }
 
-async fn step(app: &App, watched: &mut Option<(String, u64, Instant)>) -> Result<Duration, ApiError> {
+async fn step(
+    app: &App,
+    watched: &mut Option<(String, u64, Instant)>,
+) -> Result<Duration, ApiError> {
     const IDLE: Duration = Duration::from_secs(1);
     if app.consensus.metrics().state != openraft::ServerState::Leader {
         *watched = None;
@@ -315,10 +318,13 @@ async fn step(app: &App, watched: &mut Option<(String, u64, Instant)>) -> Result
         return Ok(IDLE);
     };
     if !status.gc_complete {
-        control(app, protocol::Action::Collect {
-            incarnation: status.incarnation,
-            limit: COLLECT_LIMIT,
-        })
+        control(
+            app,
+            protocol::Action::Collect {
+                incarnation: status.incarnation,
+                limit: COLLECT_LIMIT,
+            },
+        )
         .await?;
         return Ok(Duration::ZERO);
     }
@@ -336,11 +342,14 @@ async fn step(app: &App, watched: &mut Option<(String, u64, Instant)>) -> Result
                 return Ok((epoch_ms - waited).min(IDLE));
             }
             let current_epoch = status.current_epoch + 1;
-            control(app, protocol::Action::Advance {
-                incarnation: status.incarnation,
-                current_epoch,
-                min_epoch: rotation.min_epoch(current_epoch).max(status.min_epoch),
-            })
+            control(
+                app,
+                protocol::Action::Advance {
+                    incarnation: status.incarnation,
+                    current_epoch,
+                    min_epoch: rotation.min_epoch(current_epoch).max(status.min_epoch),
+                },
+            )
             .await?;
             *watched = None;
             Ok(Duration::ZERO)
@@ -391,16 +400,23 @@ mod tests {
         let write = |request_id: String, value: u64| {
             let app = app.clone();
             async move {
-                super::super::commit_method(app, json!({"name":"write","args":value,"requestId":request_id}), false)
-                    .await
-                    .unwrap()
+                super::super::commit_method(
+                    app,
+                    json!({"name":"write","args":value,"requestId":request_id}),
+                    false,
+                )
+                .await
+                .unwrap()
             }
         };
         let _ = write("before retention".into(), 1).await;
         let state = app.consensus.read().await.unwrap();
-        let initialize = serde_json::to_value(protocol::initialize(state.revision, None).unwrap()).unwrap();
+        let initialize =
+            serde_json::to_value(protocol::initialize(state.revision, None).unwrap()).unwrap();
         commit(app.clone(), initialize).await.unwrap();
-        let status = protocol::status(&app.consensus.read().await.unwrap()).unwrap().unwrap();
+        let status = protocol::status(&app.consensus.read().await.unwrap())
+            .unwrap()
+            .unwrap();
         let settled = |check: fn(&Snapshot, &protocol::State) -> bool| {
             let app = app.clone();
             async move {

@@ -1,11 +1,11 @@
 //! Deployed WebAssembly guests (GUEST_ABI.md). Check the declared surface
 //! before compiling anything, then expose every mutable global so a pristine
 //! image can restore them; reset_surface validates the final image.
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use std::collections::BTreeMap;
 use wasm_encoder::{
-    reencode::{self, Reencode},
     ExportKind, ExportSection, Module,
+    reencode::{self, Reencode},
 };
 use wasmparser::{ExternalKind, FuncType, Parser, Payload, TypeRef, ValType};
 

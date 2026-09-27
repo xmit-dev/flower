@@ -108,7 +108,7 @@ fn opaque_shared_bridge_rejects_numeric_copied_and_proxy_handles_without_resolut
 
 #[test]
 fn managed_jwt_routing_extracts_only_a_scoped_selector() {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA","kid":"flower.key-a.3"}"#);
     let args = json!({"operation":"jwt.verify","key":{"kind":"key","name":"sessions","algorithm":"Ed25519","usages":["verify"]}});
     let code = bundle(
@@ -173,7 +173,12 @@ fn managed_jwt_validation_declares_expiry_instead_of_polling() {
     let mut catalog = None;
     for (algorithm, usages, seal, open) in [
         ("Ed25519", ["sign", "verify"], "jwt.sign", "jwt.verify"),
-        ("A256GCM", ["encrypt", "decrypt"], "jwt.encrypt", "jwt.decrypt"),
+        (
+            "A256GCM",
+            ["encrypt", "decrypt"],
+            "jwt.encrypt",
+            "jwt.decrypt",
+        ),
     ] {
         let (keys, _) = managed::prepare(
             catalog.as_ref(),
@@ -185,8 +190,7 @@ fn managed_jwt_validation_declares_expiry_instead_of_polling() {
             &json!({"operation":"bind","name":open,"key":algorithm,"usages":usages}),
         )
         .unwrap();
-        let declaration =
-            json!({"kind":"key","name":open,"algorithm":algorithm,"usages":usages});
+        let declaration = json!({"kind":"key","name":open,"algorithm":algorithm,"usages":usages});
         let mut calls = Vec::new();
         let result = execute(
             &code,
@@ -213,7 +217,11 @@ fn managed_jwt_validation_declares_expiry_instead_of_polling() {
         assert_eq!(result["value"]["claims"]["sub"], "a", "{open}: {result}");
         let names: Vec<_> = calls.iter().map(|(name, _)| name.as_str()).collect();
         // ctx.clock() keeps the result's certificate; ctx.now() would poll.
-        assert_eq!(names, ["managedKey", "managedKey", "clock", "changesAt"], "{open}");
+        assert_eq!(
+            names,
+            ["managedKey", "managedKey", "clock", "changesAt"],
+            "{open}"
+        );
         assert_eq!(calls[3].1, json!([20_000]), "{open}");
         catalog = Some(keys);
     }
@@ -258,10 +266,12 @@ fn entropy_is_mutation_only_and_not_frozen_in_snapshots() {
     let query = bundle(compute, true);
     let rejected = run(&query, Value::Null).unwrap();
     assert_eq!(rejected["ok"], false);
-    assert!(rejected["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("only in mutations"));
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("only in mutations")
+    );
     let mutation = query
         .replace("kind:'queryMethod'", "kind:'mutationMethod'")
         .replace("kind:'query'", "kind:'mutation'");
@@ -298,10 +308,12 @@ fn entropy_is_mutation_only_and_not_frozen_in_snapshots() {
         )
         .unwrap();
         assert_eq!(rejected["ok"], false);
-        assert!(rejected["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("only in mutations"));
+        assert!(
+            rejected["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("only in mutations")
+        );
     }
     for marker in ["", STATIC_INIT_MARKER] {
         let code = format!("{marker}const secret=__flowerCrypto(0,32);{mutation}");
@@ -349,10 +361,12 @@ fn nested_derived_callback_does_not_inherit_mutation_entropy_rights() {
     .unwrap();
     assert_eq!(result["ok"], true);
     assert_eq!(result["value"]["ok"], false);
-    assert!(result["value"]["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("only in mutations"));
+    assert!(
+        result["value"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("only in mutations")
+    );
 }
 
 #[test]
@@ -413,10 +427,12 @@ fn jwt_bridge_uses_tracked_invocation_clock_and_standard_tokens() {
     )
     .unwrap();
     assert_eq!(expired["ok"], false);
-    assert!(expired["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("JWT expired"));
+    assert!(
+        expired["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("JWT expired")
+    );
 }
 
 #[test]

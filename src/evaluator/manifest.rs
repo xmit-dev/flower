@@ -2,10 +2,10 @@
 //! maintenance and authorization methods, key declarations and index schema
 //! Flower stores. Every guest kind goes through these same checks.
 use super::{
-    rust_engine::{validate_targets, IndexSpec, Policy, Rule, Schema},
     AuthorizationMethod, HttpMethod, MaintenanceMethod, Manifest, MethodKind, QueryConsistency,
+    rust_engine::{IndexSpec, Policy, Rule, Schema, validate_targets},
 };
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{Result, anyhow, bail, ensure};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -437,11 +437,22 @@ mod tests {
             json!({"stream": {"name": "stream", "kind": "mutation", "receipt": false}})
         );
         for (definition, alias) in [
-            (json!({"kind": "mutation", "receipt": false}), json!({"name": "m", "kind": "mutation"})),
-            (json!({"kind": "query", "receipt": false}), json!({"name": "m", "kind": "query", "receipt": false})),
-            (json!({"kind": "mutation", "receipt": "no"}), json!({"name": "m", "kind": "mutation", "receipt": "no"})),
+            (
+                json!({"kind": "mutation", "receipt": false}),
+                json!({"name": "m", "kind": "mutation"}),
+            ),
+            (
+                json!({"kind": "query", "receipt": false}),
+                json!({"name": "m", "kind": "query", "receipt": false}),
+            ),
+            (
+                json!({"kind": "mutation", "receipt": "no"}),
+                json!({"name": "m", "kind": "mutation", "receipt": "no"}),
+            ),
         ] {
-            assert!(validate(&json!({"definitions": {"m": definition}, "http": {"m": alias}})).is_err());
+            assert!(
+                validate(&json!({"definitions": {"m": definition}, "http": {"m": alias}})).is_err()
+            );
         }
         let minimal = validate(&json!({"definitions": {}, "http": {}})).unwrap();
         assert!(
