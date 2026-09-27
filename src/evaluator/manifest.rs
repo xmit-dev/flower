@@ -2,7 +2,7 @@
 //! maintenance and authorization methods, key declarations and index schema
 //! Flower stores. Every guest kind goes through these same checks.
 use super::{
-    rust_engine::{IndexSpec, Schema},
+    rust_engine::{IndexSpec, Policy, Schema},
     AuthorizationMethod, HttpMethod, MaintenanceMethod, Manifest, MethodKind, QueryConsistency,
 };
 use anyhow::{anyhow, bail, ensure, Result};
@@ -140,14 +140,24 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
     };
     let (mut indexes, mut identities, mut declared) =
         (Vec::new(), BTreeSet::new(), BTreeSet::new());
+    let mut policies = BTreeMap::new();
     for value in collections {
         let collection = object(Some(value), "Collection declaration")?;
         let name = text(collection, "name");
         let Some(name) = name.filter(|name| {
-            only(collection, &["name", "indexes"]) && !name.is_empty() && declared.insert(*name)
+            only(collection, &["name", "indexes", "access"])
+                && !name.is_empty()
+                && declared.insert(*name)
         }) else {
             bail!("Invalid or duplicate collection declaration");
         };
+        if let Some(access) = collection.get("access") {
+            let policy = serde_json::from_value::<Policy>(access.clone())
+                .map_err(|error| error.to_string())
+                .and_then(|policy| policy.validate().map(|()| policy))
+                .map_err(|error| anyhow!("Invalid access policy for collection {name}: {error}"))?;
+            policies.insert(name.to_owned(), policy);
+        }
         for (index, fields) in object(collection.get("indexes"), "Collection indexes")? {
             ensure!(!index.is_empty(), "Index names must be nonempty");
             let fields = index_fields(Some(fields))?;
@@ -190,6 +200,7 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
     Ok(Schema {
         indexes,
         aggregates,
+        policies,
     })
 }
 
@@ -498,6 +509,14 @@ mod tests {
             (
                 json!({"definitions": definitions, "http": {}, "collections": [{"name": "a", "indexes": {"i": []}}]}),
                 "Index fields must be distinct nonempty strings",
+            ),
+            (
+                json!({"definitions": definitions, "http": {}, "collections": [{"name": "a", "indexes": {}, "access": {"read": {"exists": {"ref": ["next", "x"]}}}}]}),
+                "Invalid access policy for collection a: read: next.x cannot be used here",
+            ),
+            (
+                json!({"definitions": definitions, "http": {}, "collections": [{"name": "a", "indexes": {}, "access": {"read": true}}]}),
+                "Invalid access policy for collection a",
             ),
             (
                 json!({"definitions": {"t": {"kind": "query", "aggregate": {"collection": "a", "fields": ["x"]}}}, "http": {}}),

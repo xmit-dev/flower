@@ -139,7 +139,7 @@ Entropy (opcode 0) is available only to mutations.
                      "consistency": "replica-local", "receipt": false}},
   "maintenance": {"name": "…", "kind": "mutation", "onError": {…}} ,
   "authorize": {"name": "…"},
-  "collections": [{"name": "…", "indexes": {"index": ["field", …]}}],
+  "collections": [{"name": "…", "indexes": {"index": ["field", …]}, "access": {…}}],
   "keys": [{"kind": "key", "name": "…", "algorithm": "…", "usages": ["…"]}]
 }
 ```
@@ -149,6 +149,12 @@ maintenance and authorization must name definitions of the right kind, an
 alias's `consistency` (queries) and `receipt` (mutations) must match its
 definition's, and
 names starting with `$flower.` are reserved for SDK-generated definitions.
+A collection's optional `access` holds its policy: `read`, `insert`, `update`
+and `delete` rules plus per-field `read`/`write` rules, each a JSON rule tree
+(`const`, `all`, `any`, `not`, `eq`, `ne`, `in`, `exists` over `{"ref": path}`
+and `{"value": json}` operands). The host enforces it on the collection
+operations of queries and mutations that have a caller; see
+`src/evaluator/rust_engine/access.rs`.
 
 ## Resource limits
 

@@ -4,6 +4,7 @@ import { buildBundle } from "./bundle.ts";
 import { FlowerClient, FlowerError } from "./client.ts";
 import type { AliasOf, ApiOf, ArgsOf, ArgsParameter, Failure, FlowerModule, MutationAliasOf, Principal, QueryAliasOf, ResultOf } from "./core.ts";
 import { canonicalJson, type Json } from "./json.ts";
+import { enforceAccess } from "./access.ts";
 
 type Engine = { flowerInvoke(data: Record<string, Json>, invocation: Json, method: Function, cell: Function, now?: number): { puts: Record<string, Json>; deletes: string[]; value: Json } };
 type Manifest = FlowerModule<any>;
@@ -97,9 +98,9 @@ export class TestDatabase<App = FlowerModule> {
       const store = this.store(partition);
       let output;
       try {
-        output = this.run(store.data, "mutation", maintenance.name, null, null);
+        output = this.run(store.data, "mutation", maintenance.name, null, null, false);
       } catch (error) {
-        output = this.run(store.data, "mutation", maintenance.onError.name, { error: failureOf(error) as unknown as Json, failedAt: this.now }, null);
+        output = this.run(store.data, "mutation", maintenance.onError.name, { error: failureOf(error) as unknown as Json, failedAt: this.now }, null, false);
       }
       if (Object.keys(output.puts).every((key) => key === "clock") && !output.deletes.length) break;
       this.commit(store, output);
@@ -173,7 +174,7 @@ export class TestDatabase<App = FlowerModule> {
     let principal: Principal;
     try {
       principal = plain(this.run(store.data, "query", hook.name,
-        { credentials, method: alias, args, partition: partition || null, delegation } as unknown as Json, null).value) as unknown as Principal;
+        { credentials, method: alias, args, partition: partition || null, delegation } as unknown as Json, null, false).value) as unknown as Principal;
     } catch (error) {
       throw new FlowerError("Authorization denied", 403, "FORBIDDEN", failureOf(error));
     }
@@ -192,7 +193,8 @@ export class TestDatabase<App = FlowerModule> {
     }
   }
 
-  private run(data: Record<string, Json>, kind: "query" | "mutation", name: string, args: Json, principal: Principal | null) {
+  /** `caller` is false for maintenance and the authorization hook, which see every row. */
+  private run(data: Record<string, Json>, kind: "query" | "mutation", name: string, args: Json, principal: Principal | null, caller = true) {
     const definitions = this.module.definitions as Record<string, any>;
     const identity = principal === null ? null : this.local(principal);
     const declared = new Set((this.module.collections ?? []).flatMap((entry) =>
@@ -216,7 +218,9 @@ export class TestDatabase<App = FlowerModule> {
     });
     const method = (method: string, input: Json, ctx: any) => {
       if (!Object.hasOwn(definitions, method)) throw Object.assign(new Error(`Unknown definition ${method}`), { code: "DEFINITION_MISSING" });
-      return definitions[method].compute(withIdentity(ctx), input);
+      // Methods see collections as their caller may, like on the server.
+      const host = withIdentity(ctx);
+      return definitions[method].compute(caller ? enforceAccess(host, this.module.collections ?? [], identity as unknown as Json) : host, input);
     };
     const cell = (cellName: string, input: Json, ctx: any) => {
       const definition = definitions[cellName];

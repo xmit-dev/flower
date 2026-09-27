@@ -21,6 +21,7 @@ fn install(data: &mut Records, fixture: &Fixture) {
         None,
         fixture,
         Some(Schema {
+            policies: Default::default(),
             indexes: vec![IndexSpec {
                 collection: "items".into(),
                 fields: vec!["tenant".into(), "score".into()],
@@ -865,6 +866,7 @@ fn undeclared_equality_queries_rerun_only_for_their_bucket() {
     );
     // Declaring the index keeps the same dependency and precision.
     let schema = Schema {
+        policies: Default::default(),
         indexes: vec![IndexSpec {
             collection: "items".into(),
             fields: vec!["state".into()],

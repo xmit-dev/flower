@@ -43,6 +43,8 @@ interface Runtime {
   /** Collections whose triggers only observe rows appearing or disappearing. */
   readonly existence: ReadonlySet<string>;
   readonly sessions: Map<object, Session>;
+  /** Collections whose access policy the manifest carries, so the server enforces it. */
+  guarded: ReadonlySet<string>;
 }
 
 // Flower publishes the contexts it will pass to callbacks before initializing
@@ -128,6 +130,14 @@ function bind(host: Host, runtime: Runtime): Session {
     if (runtime.existence.has(reference.name)) exists.set(identity(reference, raw), value !== null);
     return value;
   }
+  // A policy the server never received protects nothing: refuse to touch a collection
+  // declared with access but missing from define({ collections }).
+  function guard(reference: unknown) {
+    const owner = (reference as { kind?: unknown })?.kind === "collection" ? reference as Collection<any, any, any> : rangeOwner(reference);
+    if (owner && collectionInfo(owner)?.access && !runtime.guarded.has(owner.name)) {
+      throw new TypeError(`Collection ${JSON.stringify(owner.name)} declares access; list it in define({ collections }) so the server enforces it`);
+    }
+  }
   function track(reference: Collection<any, any, any>, raw: string) {
     const triggers = runtime.triggers.get(reference.name);
     if (!triggers) return;
@@ -149,25 +159,29 @@ function bind(host: Host, runtime: Runtime): Session {
     },
     get(reference: any, key?: unknown) {
       if (reference?.kind === "collection") {
+        guard(reference);
         const raw = encodeKey(reference, key);
         return observe(reference, raw, host.get(reference, raw));
       }
       return host.get(reference, key === undefined ? null : key);
     },
     scan(reference: any, options?: Record<string, unknown>) {
+      guard(reference);
       if (!collectionInfo(reference)?.key) return options === undefined ? host.scan(reference) : host.scan(reference, options);
       const translated = keyScan(reference, options);
       const rows = translated === undefined ? host.scan(reference) : host.scan(reference, translated);
       return rows.map((row: { key: string; value: Json }) => ({ key: JSON.parse(row.key), value: row.value }));
     },
-    query: (reference: any) => host.query(reference),
+    query: (reference: any) => { guard(reference); return host.query(reference); },
     range(reference: any) {
+      guard(reference);
       const page = host.range(reference);
       const owner = rangeOwner(reference);
       if (!owner || !collectionInfo(owner)?.key) return page;
       return { rows: page.rows.map((row: { key: string; value: Json }) => ({ key: JSON.parse(row.key), value: row.value })), cursor: page.cursor };
     },
     set(reference: any, key: unknown, value: unknown) {
+      guard(reference);
       const raw = encodeKey(reference, key);
       const schema = collectionInfo(reference)?.value;
       if (schema) {
@@ -184,6 +198,7 @@ function bind(host: Host, runtime: Runtime): Session {
       observe(reference, raw, true);
     },
     delete(reference: any, key: unknown) {
+      guard(reference);
       const raw = encodeKey(reference, key);
       track(reference, raw);
       host.delete(reference, raw);
@@ -509,7 +524,7 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
     triggers.set(each.source.name, list);
   }
   const existence = new Set([...triggers].filter(([, list]) => list.every((each) => existenceTriggers.has(each))).map(([name]) => name));
-  const runtime: Runtime = { triggers, existence, sessions: new Map() };
+  const runtime: Runtime = { triggers, existence, sessions: new Map(), guarded: new Set() };
   if (typeof __flowerContexts !== "undefined") {
     for (const host of __flowerContexts) runtime.sessions.set(host, bind(host, runtime));
   }
@@ -533,6 +548,7 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
   const authenticator = auth?.authenticate;
   const keys = keyManifest([...flat.keys, ...(authenticator && typeof authenticator === "object" ? authenticator.keys : [])]);
   const manifest = collectionManifest(collections);
+  runtime.guarded = new Set(manifest.filter((entry) => entry.access).map((entry) => entry.name));
   return Object.freeze({
     definitions: Object.freeze(definitions),
     http: Object.freeze(http),

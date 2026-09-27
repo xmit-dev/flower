@@ -814,6 +814,7 @@ fn live_graph_and_evaluation_counts_are_governed_by_memory() {
     assert_eq!(error.code, "EVALUATION_BUDGET");
 }
 
+mod access;
 mod dependencies;
 mod durable;
 mod managed_keys;

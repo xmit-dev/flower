@@ -44,12 +44,18 @@ export function collectionManifest(references: Iterable<Collection<any, any, any
       requireName(index, "Index name");
       indexes[index] = fields(columns);
     }
-    const entry = Object.freeze({ name: reference.name, indexes: Object.freeze(indexes) });
+    const access = collectionInfo(reference)?.access;
+    const entry: CollectionManifest = Object.freeze({ name: reference.name, indexes: Object.freeze(indexes), ...(access ? { access } : {}) });
     const previous = byName.get(reference.name);
     if (previous && canonicalJson(previous.indexes) !== canonicalJson(entry.indexes)) {
       throw new TypeError(`Collection ${JSON.stringify(reference.name)} is declared with different indexes`);
     }
-    byName.set(reference.name, previous ?? entry);
+    // Access belongs to the collection: references without it (in a trigger, say) don't
+    // conflict, but two different policies do.
+    if (previous?.access && entry.access && canonicalJson(previous.access as unknown as Json) !== canonicalJson(entry.access as unknown as Json)) {
+      throw new TypeError(`Collection ${JSON.stringify(reference.name)} is declared with different access`);
+    }
+    byName.set(reference.name, previous?.access || !entry.access ? previous ?? entry : entry);
   }
   return [...byName.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }

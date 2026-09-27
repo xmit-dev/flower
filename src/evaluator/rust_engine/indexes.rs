@@ -22,6 +22,9 @@ pub struct Schema {
     pub indexes: Vec<IndexSpec>,
     #[serde(default)]
     pub aggregates: BTreeMap<String, IndexSpec>,
+    /// Access policies by collection name, enforced on methods' reads and writes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub policies: BTreeMap<String, super::Policy>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,7 +76,10 @@ impl Schema {
     }
 
     pub(super) fn allocation_cost(&self) -> usize {
-        self.indexes.iter().chain(self.aggregates.values()).fold(
+        let policies = self.policies.iter().fold(0usize, |bytes, (name, policy)| {
+            bytes.saturating_add(128 + name.len() + policy.allocation_cost())
+        });
+        policies.saturating_add(self.indexes.iter().chain(self.aggregates.values()).fold(
             self.aggregates
                 .keys()
                 .fold(0usize, |bytes, name| bytes.saturating_add(128 + name.len())),
@@ -83,7 +89,7 @@ impl Schema {
                     |bytes, field| bytes.saturating_add(32 + field.len()),
                 )
             },
-        )
+        ))
     }
 
     pub(super) fn validate(mut self) -> EngineResult<Self> {
@@ -106,6 +112,14 @@ impl Schema {
                 ));
             }
         }
+        for (name, policy) in &self.policies {
+            if name.is_empty() {
+                return Err(EngineError::new("INPUT_INVALID", "Malformed access policy"));
+            }
+            policy.validate().map_err(|error| {
+                EngineError::new("INPUT_INVALID", format!("Malformed access policy: {error}"))
+            })?;
+        }
         Ok(self)
     }
     pub(super) fn load(value: Option<&Value>) -> EngineResult<Self> {
@@ -120,7 +134,7 @@ impl Schema {
             .validate()
     }
     pub(super) fn empty(&self) -> bool {
-        self.indexes.is_empty() && self.aggregates.is_empty()
+        self.indexes.is_empty() && self.aggregates.is_empty() && self.policies.is_empty()
     }
 }
 

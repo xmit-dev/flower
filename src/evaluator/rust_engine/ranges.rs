@@ -532,7 +532,15 @@ impl Engine<'_> {
     /// changes only with the collection's keys, and undeclared field order
     /// with any row; a declared index stamps just its window's entries.
     /// Returned rows are stamped individually either way.
-    pub(super) fn range_rows(&mut self, query: &RangeQuery) -> EngineResult<Scanned> {
+    /// A range page or scan. With `caller`, a method's, rows the caller may
+    /// not read are skipped before limit, offset and cursor apply, so pages
+    /// stay full and a cursor never points at a hidden row.
+    pub(super) fn range_rows(&mut self, query: &RangeQuery, caller: bool) -> EngineResult<Scanned> {
+        let access = if caller {
+            self.read_access(&query.collection)
+        } else {
+            None
+        };
         let indexed = query.indexed(self);
         if query.source_keys {
             let collection = collection_id(&query.collection);
@@ -540,7 +548,7 @@ impl Engine<'_> {
         } else if !indexed {
             self.marker_read(collection_id(&query.collection));
         }
-        let scanned = self.scan_rows(query);
+        let scanned = self.scan_rows(query, access.as_deref());
         if indexed {
             match scanned.as_ref().map(|scanned| &scanned.dependency) {
                 Ok(Dependency::None) => {}
@@ -558,7 +566,12 @@ impl Engine<'_> {
         scanned
     }
 
-    fn scan_rows(&mut self, query: &RangeQuery) -> EngineResult<Scanned> {
+    fn scan_rows(&mut self, query: &RangeQuery, access: Option<&access::Access>) -> EngineResult<Scanned> {
+        // A row found through an index field the caller can't read stays hidden.
+        let selecting: &[String] = if query.source_keys { &[] } else { &query.fields };
+        let visible = |key: &str, value: &Value| {
+            access.is_none_or(|access| access.visible(key, value, selecting))
+        };
         if query.lower >= query.upper || query.limit == 0 {
             return Ok(Scanned {
                 rows: if query.scan {
@@ -615,7 +628,7 @@ impl Engine<'_> {
                 let (_, key) = source_pair(id)?;
                 if let Some(id) = query
                     .entry(&spec, &key, value)
-                    .filter(|id| query.includes(id))
+                    .filter(|id| query.includes(id) && visible(&key, value))
                 {
                     retain(&mut found, &mut bytes, id, key, value.clone());
                 }
@@ -708,6 +721,9 @@ impl Engine<'_> {
                         })?;
                     (id.clone(), key.to_owned(), value.clone())
                 };
+                if !visible(&key, &value) {
+                    continue;
+                }
                 if skip > 0 {
                     skip -= 1;
                     continue;
@@ -745,7 +761,7 @@ impl Engine<'_> {
                 let (_, key) = source_pair(id)?;
                 if let Some(id) = query
                     .entry(&spec, &key, value)
-                    .filter(|id| query.includes(id))
+                    .filter(|id| query.includes(id) && visible(&key, value))
                 {
                     retain(&mut found, &mut bytes, id, key, value.clone());
                 }
@@ -805,10 +821,20 @@ impl Engine<'_> {
             Some(None) => Dependency::None,
             None => Dependency::Marker(query.dependency(self)),
         };
-        let rows = if query.reverse {
+        let rows: Vec<(String, Arc<Value>)> = if query.reverse {
             found.into_values().rev().collect()
         } else {
             found.into_values().collect()
+        };
+        let rows = match access {
+            Some(access) => rows
+                .into_iter()
+                .map(|(key, value)| {
+                    let shown = access.redact(&key, &value);
+                    (key, shown)
+                })
+                .collect(),
+            None => rows,
         };
         let rows = self.rows_for_host(rows)?;
         if query.scan {

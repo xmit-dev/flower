@@ -8,10 +8,12 @@ mod graph;
 pub use dependencies::{DependencyCertificate, MutationCertificate, Observation, touched, touches_everything};
 mod metadata;
 pub(crate) use metadata::{ReactiveIndex, update_memberships};
+mod access;
 mod indexes;
 mod ranges;
 mod reducers;
 mod windows;
+pub use access::Policy;
 pub use indexes::{IndexSpec, Schema};
 pub(crate) use indexes::{staged_entries, staged_prefixes, staged_schema, staged_schema_bytes};
 mod json;
@@ -147,6 +149,11 @@ struct Engine<'a> {
     staged: Records,
     mode: &'a str,
     principal: Value,
+    /// No caller: maintenance, the authorization hook, deployments. Access
+    /// policies apply only to invocations with one, even an anonymous one.
+    system: bool,
+    /// Each collection's policy specialized for this invocation's caller.
+    access: HashMap<String, Option<Arc<access::Access>>>,
     now: u64,
     has_time: bool,
     graph_ready: bool,
@@ -345,6 +352,8 @@ fn run_with_limit_and_schema(
         staged: data,
         mode,
         principal: invocation.get("$principal").cloned().unwrap_or(Value::Null),
+        system: invocation.get("$principal").is_none(),
+        access: HashMap::new(),
         now: fixed_now,
         has_time,
         graph_ready: false,
@@ -893,6 +902,12 @@ impl Engine<'_> {
     }
 
     fn query_rows(&mut self, query: &Query, derived: bool) -> EngineResult<Value> {
+        // Derived values have no caller; methods see what their caller may.
+        let access = if derived {
+            None
+        } else {
+            self.read_access(&query.collection)
+        };
         if self.has_index(query) {
             self.marker_read(indexes::bucket_id(
                 &query.collection,
@@ -907,6 +922,10 @@ impl Engine<'_> {
                 self.count_reads(1 + rows.len())?;
             }
             self.count_operations(rows.len())?;
+            let rows = match &access {
+                Some(access) => access.filter(rows, &query.fields),
+                None => rows,
+            };
             let values: Vec<_> = rows.into_iter().map(|(_, value)| value).collect();
             return self.query_values(values);
         }
@@ -968,25 +987,33 @@ impl Engine<'_> {
                 None
             }
         };
-        let values: Vec<Arc<Value>> = if let Some(position) = position {
+        let rows: Vec<(String, Arc<Value>)> = if let Some(position) = position {
             self.query_indexes[position]
                 .buckets
                 .get(&canonical_json(&query.expected))
-                .map(|rows| rows.values().cloned().collect())
+                .map(|rows| {
+                    rows.iter()
+                        .map(|(key, value)| (key.0.clone(), value.clone()))
+                        .collect()
+                })
                 .unwrap_or_default()
         } else {
             self.rows
                 .as_ref()
                 .and_then(|rows| rows.get(&query.collection))
                 .map(|rows| {
-                    rows.values()
-                        .filter(|value| query.matches(value))
-                        .cloned()
+                    rows.iter()
+                        .filter(|(_, value)| query.matches(value))
+                        .map(|(key, value)| (key.0.clone(), value.clone()))
                         .collect()
                 })
                 .unwrap_or_default()
         };
-        self.query_values(values)
+        let rows = match &access {
+            Some(access) => access.filter(rows, &query.fields),
+            None => rows,
+        };
+        self.query_values(rows.into_iter().map(|(_, value)| value).collect())
     }
 
     fn query_values(&mut self, values: Vec<Arc<Value>>) -> EngineResult<Value> {
@@ -1053,9 +1080,14 @@ impl Engine<'_> {
                     let id = source_id(collection, key);
                     self.record_read(&id);
                     let value = self.source(&id).cloned();
-                    match value {
-                        Some(value) => self.copy_for_host(&value),
-                        None => Ok(Value::Null),
+                    match (value, self.read_access(collection)) {
+                        (Some(value), None) => self.copy_for_host(&value),
+                        (Some(value), Some(access)) if access.visible(key, &value, &[]) => {
+                            let shown = access.redact(key, &value);
+                            self.copy_for_host(&shown)
+                        }
+                        // A hidden row reads as absent.
+                        _ => Ok(Value::Null),
                     }
                 } else {
                     let name = reference_name(reference, "derived")?.to_owned();
@@ -1077,7 +1109,7 @@ impl Engine<'_> {
             "scan" => {
                 if let Some(options) = arguments.get(1) {
                     let query = ranges::RangeQuery::parse_scan(argument(0), options)?;
-                    let rows = self.range_rows(&query)?.rows;
+                    let rows = self.range_rows(&query, true)?.rows;
                     self.count_operations(rows.as_array().expect("scan rows").len())?;
                     return Ok(rows);
                 }
@@ -1085,11 +1117,15 @@ impl Engine<'_> {
                 self.marker_read(collection_id(collection));
                 let rows = self.collection_rows(collection)?;
                 self.count_operations(rows.len())?;
+                let rows = match self.read_access(collection) {
+                    Some(access) => access.filter(rows, &[]),
+                    None => rows,
+                };
                 self.rows_for_host(rows)
             }
             "range" => {
                 let query = ranges::RangeQuery::parse(argument(0))?;
-                Ok(self.range_rows(&query)?.rows)
+                Ok(self.range_rows(&query, true)?.rows)
             }
             "query" => {
                 let query = Query::parse(argument(0))?;
@@ -1116,6 +1152,17 @@ impl Engine<'_> {
                     Some(normalize(value.take(), "INVALID_VALUE")?)
                 } else {
                     None
+                };
+                let value = match self.write_access(collection) {
+                    None => value,
+                    Some(access) => {
+                        // The decision depends on the stored row: an optimistic
+                        // mutation must conflict with a concurrent change to it.
+                        let id = source_id(collection, key);
+                        self.record_read(&id);
+                        let previous = self.source(&id).cloned();
+                        access.admit(key, previous.as_deref(), value)?
+                    }
                 };
                 self.write_source(collection, key, value)?;
                 Ok(Value::Null)

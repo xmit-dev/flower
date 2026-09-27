@@ -51,6 +51,32 @@ export default app;</code></pre></div>
 <li>The check reads a fresh snapshot, but it runs before the mutation. Recheck anything that can change in between inside the mutation, like <code>note.write</code> does.</li>
 </ul>
 </section>
+<section id="collections">
+<h2>Guard collections</h2>
+<p>Method access decides who may call a method. Collection access decides what a method can see and change for its caller, whatever its code does. The server enforces it on every read and write.</p>
+<div class="code-block"><div class="code-head"><span>notes.ts</span><button class="copy-button" type="button" aria-label="Copy notes.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, mutation, query, v } from "@flower-js/sdk";
+
+const notes = collection("notes", v.object({ owner: v.string(), text: v.string(), secret: v.optional(v.string()) }))
+  .access(({ principal, row, next }) =&gt; ({
+    read: row("owner").eq(principal.subject),
+    write: next("owner").eq(principal.subject),
+    delete: row("owner").eq(principal.subject),
+    fields: { secret: { read: principal.claim("role").eq("admin") } },
+  }));
+
+const list = query("note.list", (ctx) =&gt; ctx.scan(notes)); // Only the caller's notes, without secret.
+const write = mutation("note.write", { args: v.object({ id: v.string(), text: v.string() }) }, (ctx, { id, text }) =&gt; {
+  ctx.set(notes, id, { owner: ctx.principal()!.subject, text }); // ACCESS_DENIED over someone else's note.
+  return null;
+});</code></pre></div>
+<ul>
+<li>Rows the caller can't read look absent: <code>get</code> returns <code>null</code>, and scans, queries and pages skip them.</li>
+<li>Fields the caller can't read are left out, and kept as they are when the caller writes the row back.</li>
+<li>A write the rules deny fails with <code>ACCESS_DENIED</code>. Operations without a rule are denied.</li>
+<li>Derived values and maintenance run without a caller and see every row.</li>
+</ul>
+<p>Every rule is in the <a href="../reference/access.html#collection-access">collection access reference</a>.</p>
+</section>
 <section id="authenticate">
 <h2>Authenticate your own way</h2>
 <p><code>authenticate</code> can be any function of the credentials. Return a principal <code>{ subject, tenant?, claims? }</code>, return <code>null</code> for an anonymous caller, or <code>fail()</code> to reject the call.</p>

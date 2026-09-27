@@ -645,7 +645,7 @@ impl Engine<'_> {
         observed: &mut BTreeSet<Key>,
         query: &ranges::RangeQuery,
     ) -> EngineResult<Value> {
-        match self.range_rows(query) {
+        match self.range_rows(query, false) {
             Ok(scanned) => {
                 if let Some(dependency) = scanned.dependency.id() {
                     self.observe(observed, dependency)?;

@@ -1,6 +1,7 @@
 import { canonicalJson, type Json } from "./json.ts";
 import { schema as adopt, ValidationError, type Infer, type Schema, type SchemaLike } from "./schema.ts";
 import type { ManagedKey } from "./keys.ts";
+import { compileAccess, type AccessManifest, type CollectionAccess } from "./access.ts";
 
 export type { Json };
 
@@ -103,9 +104,15 @@ export interface Collection<T = Json, K extends Json = string, I extends IndexMa
   /** A new reference whose keys are validated JSON values, stored as canonical JSON. */
   key<K2 extends Json>(schema: SchemaLike<K2>): Collection<T, K2, I>;
   by<N extends Extract<keyof I, string>>(name: N): Index<T, K, I[N]>;
+  /**
+   * A new reference whose rows and fields the server guards on every query and
+   * mutation's behalf: hidden rows read as absent, hidden fields are left out,
+   * and denied writes fail with ACCESS_DENIED. Derived values and maintenance see everything.
+   */
+  access<U extends T>(this: Collection<U, K, I>, rules: CollectionAccess<U>): Collection<U, K, I>;
 }
 
-export interface CollectionInfo { readonly key: Schema<Json> | null; readonly value: Schema<unknown> | null }
+export interface CollectionInfo { readonly key: Schema<Json> | null; readonly value: Schema<unknown> | null; readonly access?: AccessManifest }
 const collectionInfos = new WeakMap<object, CollectionInfo>();
 const rangeOwners = new WeakMap<object, Collection<any, any, any>>();
 
@@ -165,7 +172,9 @@ class IndexReference {
     if (this.fields.length > 1 && (!Array.isArray(value) || value.length !== this.fields.length)) {
       throw new TypeError(`Index ${JSON.stringify(this.index)} requires a ${this.fields.length}-element tuple`);
     }
-    return Object.freeze({ kind: "query" as const, collection: this.owner.name, fields: this.fields, value });
+    const query = Object.freeze({ kind: "query" as const, collection: this.owner.name, fields: this.fields, value });
+    rangeOwners.set(query, this.owner as unknown as Collection<any, any, any>);
+    return query;
   }
 }
 
@@ -191,6 +200,11 @@ class CollectionReference {
   }
   key(keySchema: SchemaLike<Json>): CollectionReference {
     return new CollectionReference(this.name, Object.assign(Object.create(null), this.indexes), { ...collectionInfos.get(this)!, key: adopt(keySchema) });
+  }
+  access(rules: CollectionAccess<unknown>): CollectionReference {
+    const info = collectionInfos.get(this)!;
+    if (info.access) throw new TypeError(`Access to ${this.name} is already declared`);
+    return new CollectionReference(this.name, Object.assign(Object.create(null), this.indexes), { ...info, access: compileAccess(rules, this.name) });
   }
   by(indexName: string): IndexReference {
     if (!Object.hasOwn(this.indexes, indexName)) throw new TypeError(`Unknown index ${JSON.stringify(indexName)} on ${this.name}`);
@@ -415,7 +429,7 @@ export function transaction(name: string, specOrPlan: unknown, maybePlan?: unkno
 /** A committed transaction: each call's result, and the plan's value when it has one. */
 export interface TransactionResult<V = Json> { results: Json[]; value?: V }
 export interface ManifestMethod { readonly name: string; readonly kind: "query" | "mutation" | "transaction"; readonly consistency?: "replica-local"; readonly receipt?: false }
-export interface CollectionManifest { readonly name: string; readonly indexes: Readonly<Record<string, readonly string[]>> }
+export interface CollectionManifest { readonly name: string; readonly indexes: Readonly<Record<string, readonly string[]>>; readonly access?: AccessManifest }
 export interface FlowerModule<H extends HttpMap = HttpMap> {
   readonly definitions: Readonly<Record<string, Definition>>;
   readonly http: { readonly [K in keyof H]: ManifestMethod };
