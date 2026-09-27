@@ -106,7 +106,9 @@ try {
   await denied(mutate(alice, "put", { id: "b9", note: { owner: "bob", rank: 9, text: "forged" } }));
   await denied(mutate(alice, "put", { id: "b1", note: { owner: "alice", rank: 2, text: "taken" } }));
   await denied(mutate(alice, "put", { id: "a1", note: { owner: "alice", rank: 1, text: "one", secret: "mine now" } }));
-  await denied(mutate(alice, "remove", "b1"));
+  // A denied delete of a row alice can't see acts like deleting a missing key.
+  await mutate(alice, "remove", "b1");
+  assert.equal((await value(rootUser.query("get", "b1"))).owner, "bob");
   await assert.rejects(mutate(alice, "edit", { id: "b1", text: "hi" }), (error) => error.failure?.code === "NOT_FOUND");
   // Editing a redacted row keeps the field the caller couldn't see.
   await mutate(alice, "edit", { id: "a1", text: "edited" });

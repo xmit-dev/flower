@@ -150,7 +150,9 @@ test("the test database enforces access like the server", async () => {
   denied(() => db.mutate("put", { id: "b9", note: { owner: "bob", rank: 9, text: "forged" } }, as("alice")));
   denied(() => db.mutate("put", { id: "b1", note: { owner: "alice", rank: 2, text: "taken" } }, as("alice")));
   denied(() => db.mutate("put", { id: "a1", note: { owner: "alice", rank: 1, text: "one", secret: "mine now" } }, as("alice")));
-  denied(() => db.mutate("remove", "b1", as("alice")));
+  // Deleting a row you can't see is a no-op, like deleting a missing key.
+  db.mutate("remove", "b1", as("alice"));
+  assert.deepEqual(db.query("get", "b1", as("root")), { owner: "bob", rank: 2, text: "two", secret: "s2" });
   db.mutate("edit", { id: "a1", text: "edited" }, as("alice"));
   assert.deepEqual(db.query("get", "a1", as("root")), { owner: "alice", rank: 1, text: "edited", secret: "s1" });
   db.mutate("remove", "a2", as("alice"));

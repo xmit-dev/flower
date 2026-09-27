@@ -397,15 +397,18 @@ fn writes_follow_insert_update_and_delete_rules() {
         json!({"owner":"alice","rank":1,"text":"one","secret":"s9"}),
         admin(),
     ));
-    // Delete: only your rows; deleting nothing is a no-op.
-    denied(call(
+    // Delete: only your rows; deleting nothing is a no-op, and so is deleting
+    // a row you can't see, so the outcome doesn't reveal that it exists.
+    let hidden = call(
         &data,
         &fixture,
         "mutation",
         "delete",
         json!("b1"),
         Some(alice()),
-    ));
+    )
+    .unwrap();
+    assert!(hidden.deletes.is_empty() && hidden.puts.is_empty());
     let deleted = call(
         &data,
         &fixture,
@@ -736,4 +739,44 @@ fn clear_removes_hidden_fields_when_their_write_rule_allows() {
             .expect("invalid");
         assert_eq!(error.code, "INVALID_VALUE");
     }
+}
+
+#[test]
+fn denied_deletes_of_visible_rows_fail_and_write_only_rows_stay_deletable() {
+    // Everyone reads, only owners delete: a visible row's denial is an error.
+    let owner = json!({"eq":[{"ref":["row","owner"]},{"ref":["principal","subject"]}]});
+    let (data, fixture) = with_policy(json!({"read":{"const":true},"delete":owner}), None);
+    let error = call(
+        &data,
+        &fixture,
+        "mutation",
+        "delete",
+        json!("b1"),
+        Some(alice()),
+    )
+    .err()
+    .expect("denied");
+    assert_eq!(error.code, "ACCESS_DENIED");
+    // Write-only rows (presence, say): nobody reads them, owners still delete theirs.
+    let (data, fixture) = with_policy(json!({"read":{"const":false},"delete":owner}), None);
+    let deleted = call(
+        &data,
+        &fixture,
+        "mutation",
+        "delete",
+        json!("a1"),
+        Some(alice()),
+    )
+    .unwrap();
+    assert!(deleted.deletes.contains(&source_id("notes", "a1")));
+    let skipped = call(
+        &data,
+        &fixture,
+        "mutation",
+        "delete",
+        json!("b1"),
+        Some(alice()),
+    )
+    .unwrap();
+    assert!(skipped.deletes.is_empty());
 }

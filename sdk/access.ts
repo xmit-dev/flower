@@ -402,6 +402,8 @@ function holds(rule: RuleJson, caller: Json, subject: Subject, clock: Clock): bo
   }
 }
 
+const skip = Symbol("flower.skip");
+
 class Guard {
   readonly collection: string;
   readonly policy: AccessManifest;
@@ -434,11 +436,14 @@ class Guard {
   rows(rows: Row[], fields: readonly string[] = []): Row[] {
     return rows.filter((row) => this.visible(row.key, row.value, fields)).map((row) => ({ key: row.key, value: this.redact(row.key, row.value) }));
   }
-  admit(key: string, previous: Json, next: Json | undefined, clear: readonly string[] = []): Json | undefined {
+  /** The value to store (undefined deletes), or `skip` to leave the row alone. */
+  admit(key: string, previous: Json, next: Json | undefined, clear: readonly string[] = []): Json | undefined | typeof skip {
     const denied = () => Object.assign(new Error(`Access policy denies this write to ${this.collection}`), { code: "ACCESS_DENIED" });
     if (previous === null && next === undefined) return undefined;
     if (next === undefined) {
       if (this.check(this.policy.delete, { key, row: previous })) return undefined;
+      // A denied delete of a row the caller can't see acts like deleting a missing key.
+      if (!this.check(this.policy.read, { key, row: previous })) return skip;
       throw denied();
     }
     const fields = this.policy.fields ?? {};
@@ -540,11 +545,11 @@ export function enforceAccess(host: Host, collections: readonly { name: string; 
     },
     set(reference: any, key: any, value: Json, options?: { clear?: readonly string[] }) {
       const access = guard(reference?.name);
-      return host.set(reference, key, access ? access.admit(key, host.get(reference, key), value, options?.clear) : value);
+      return host.set(reference, key, access ? access.admit(key, host.get(reference, key), value, options?.clear) as Json : value);
     },
     delete(reference: any, key: any) {
       const access = guard(reference?.name);
-      if (access) access.admit(key, host.get(reference, key), undefined);
+      if (access && access.admit(key, host.get(reference, key), undefined) === skip) return null;
       return host.delete(reference, key);
     },
   });

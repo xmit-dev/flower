@@ -768,7 +768,9 @@ impl Access {
     }
 
     /// Admit a write of `next` (`None` deletes) over `previous`, returning the
-    /// value to store. Fields the caller can't read and didn't write keep
+    /// value to store, or `Skip` to leave the row alone: a denied delete of a
+    /// row the caller can't see acts like deleting a missing key, so it
+    /// doesn't reveal that the key exists. Fields the caller can't read and didn't write keep
     /// their stored values, so a read-modify-write of a redacted row preserves
     /// them, except those in `clear` (`ctx.set(…, {clear: ["token"]})`): the
     /// write removes them, which their write rules must allow. Denied inserts
@@ -779,7 +781,7 @@ impl Access {
         previous: Option<&Value>,
         next: Option<Value>,
         clear: &[String],
-    ) -> EngineResult<Option<Value>> {
+    ) -> EngineResult<Admitted> {
         let denied = || {
             EngineError::new(
                 "ACCESS_DENIED",
@@ -788,11 +790,13 @@ impl Access {
         };
         let parts = OnceCell::new();
         let (previous, mut next) = match (previous, next) {
-            (None, None) => return Ok(None),
+            (None, None) => return Ok(Admitted::Write(None)),
             (Some(previous), None) => {
                 let subject = self.subject(key, &parts, Some(previous), None);
                 return if self.delete.holds(subject) {
-                    Ok(None)
+                    Ok(Admitted::Write(None))
+                } else if !self.read.holds(subject) {
+                    Ok(Admitted::Skip)
                 } else {
                     Err(denied())
                 };
@@ -838,11 +842,17 @@ impl Access {
                 }
         });
         if row.holds(subject) && fields {
-            Ok(Some(next))
+            Ok(Admitted::Write(Some(next)))
         } else {
             Err(denied())
         }
     }
+}
+
+/// What a guarded write does: store a value (`None` deletes), or nothing.
+pub(super) enum Admitted {
+    Write(Option<Value>),
+    Skip,
 }
 
 impl Engine<'_> {

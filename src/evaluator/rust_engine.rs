@@ -1184,7 +1184,10 @@ impl Engine<'_> {
                         let previous = self.source(&id).cloned();
                         let admitted = access.admit(key, previous.as_deref(), value, &clear);
                         self.settle_access(&access)?;
-                        admitted?
+                        match admitted? {
+                            access::Admitted::Write(value) => value,
+                            access::Admitted::Skip => return Ok(Value::Null),
+                        }
                     }
                 };
                 self.write_source(collection, key, value)?;
