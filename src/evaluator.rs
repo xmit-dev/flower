@@ -745,10 +745,13 @@ const CELL_RUNNER: &str = r#"
         range: (query) => host(6, query)
     };
     const writers = {
-        set: (collection, key, value) => host(8, ref(collection), key, value),
+        set: (collection, key, value, options) => options === undefined
+            ? host(8, ref(collection), key, value)
+            : host(8, ref(collection), key, value, options),
         delete: (collection, key) => host(9, ref(collection), key),
         materialize: (definition, args = null) => host(10, ref(definition), args),
-        unmaterialize: (definition, args = null) => host(11, ref(definition), args)
+        unmaterialize: (definition, args = null) => host(11, ref(definition), args),
+        definer: (on) => host(14, on)
     };
     // Each cell gets a fresh Wasm image. Immutable context objects can therefore
     // be prepared in the trusted image and cannot retain mutations into any

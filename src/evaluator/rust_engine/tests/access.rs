@@ -63,6 +63,32 @@ fn fixture() -> Fixture {
             (|args, host| host("delete", json!([notes(), args]))) as Callback,
         ),
         (
+            "definerScan",
+            (|_, host| {
+                host("definer", json!([true]))?;
+                host("definer", json!([true]))?;
+                host("definer", json!([false]))?;
+                let all = host("scan", json!([notes()]))?;
+                host("definer", json!([false]))?;
+                let mine = host("scan", json!([notes()]))?;
+                Ok(json!({"all": all, "mine": mine}))
+            }) as Callback,
+        ),
+        (
+            "definerWrite",
+            (|args, host| {
+                host("definer", json!([true]))?;
+                host(
+                    "set",
+                    json!([notes(), args, {"owner":"bob","rank":0,"text":"audit"}]),
+                )
+            }) as Callback,
+        ),
+        (
+            "definerUnmatched",
+            (|args, host| host("definer", json!([args]))) as Callback,
+        ),
+        (
             "setWith",
             (|args, host| {
                 host(
@@ -779,4 +805,64 @@ fn denied_deletes_of_visible_rows_fail_and_write_only_rows_stay_deletable() {
     )
     .unwrap();
     assert!(skipped.deletes.is_empty());
+}
+
+#[test]
+fn definer_brackets_act_with_the_applications_rights() {
+    let (data, fixture) = setup();
+    // Inside definer(true) … definer(false), nested, the caller's policy doesn't
+    // apply: triggers see every row and field. Afterwards it does again.
+    let both = call(
+        &data,
+        &fixture,
+        "mutation",
+        "definerScan",
+        Value::Null,
+        Some(alice()),
+    )
+    .unwrap()
+    .value;
+    assert_eq!(keys(&both["all"]), ["a1", "a2", "a3", "b1", "b2", "x"]);
+    assert_eq!(both["all"][0]["value"]["secret"], "s1");
+    assert_eq!(keys(&both["mine"]), ["a1", "a2", "a3"]);
+    // Writes too: alice can't write bob's rows, but a trigger acting for the app can.
+    let written = call(
+        &data,
+        &fixture,
+        "mutation",
+        "definerWrite",
+        json!("audit"),
+        Some(alice()),
+    )
+    .unwrap();
+    assert!(written.puts.contains_key(&source_id("notes", "audit")));
+    for (argument, message) in [
+        (json!(false), "without a matching"),
+        (json!(1), "true or false"),
+    ] {
+        let error = call(
+            &data,
+            &fixture,
+            "mutation",
+            "definerUnmatched",
+            argument,
+            Some(alice()),
+        )
+        .err()
+        .expect("invalid");
+        assert_eq!(error.code, "INVALID_VALUE");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+    // Only mutations run triggers, so only they may act as the definer.
+    let error = call(
+        &data,
+        &fixture,
+        "query",
+        "definerScan",
+        Value::Null,
+        Some(alice()),
+    )
+    .err()
+    .expect("query");
+    assert_eq!(error.code, "QUERY_WRITE_FORBIDDEN");
 }

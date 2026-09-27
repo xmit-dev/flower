@@ -22,8 +22,8 @@ async function denied(promise) {
 
 // `read` is the knob the redeploy turns: owners and admins first, then any signed-in caller.
 function source(read) {
-  return `import { collection, define, derive, fail, mutation, query, v } from ${JSON.stringify(join(root, "sdk/index.ts"))};
-const notes = collection("notes", v.object({ owner: v.string(), rank: v.int(), text: v.string(), secret: v.optional(v.string()) }))
+  return `import { collection, define, derive, fail, mutation, query, trigger, v } from ${JSON.stringify(join(root, "sdk/index.ts"))};
+const notes = collection("notes", v.object({ owner: v.string(), rank: v.int(), text: v.string(), secret: v.optional(v.string()), token: v.optional(v.string()) }))
   .index("owner", ["owner"])
   .index("rank", ["rank"])
   .access(({ principal, row, next }) => {
@@ -34,9 +34,16 @@ const notes = collection("notes", v.object({ owner: v.string(), rank: v.int(), t
       insert: next("owner").eq(principal.subject).or(admin),
       update: mine.and(next("owner").eq(row("owner"))).or(admin),
       delete: mine.or(admin),
-      fields: { secret: { read: admin } },
+      // token is write-only for its owner: admins read it, owners set or clear it.
+      fields: { secret: { read: admin }, token: { read: admin, write: mine.or(next("owner").eq(principal.subject)).or(admin) } },
     };
   });
+// Triggers act with the application's rights: they see the hidden secret and write an
+// audit only admins read.
+const audit = collection("audit").access(({ principal }) => ({ read: principal.claim("role").eq("admin") }));
+const log = trigger("log", notes, (ctx, change) => {
+  ctx.set(audit, String(ctx.scan(audit).length).padStart(3, "0"), { by: ctx.principal()?.subject ?? null, secret: (change.after ?? change.before).secret ?? null });
+});
 const total = derive("total", (ctx) => ctx.scan(notes).length);
 const id = v.string({ min: 1 });
 const open = { access: "public" };
@@ -54,15 +61,23 @@ const edit = mutation("edit", { args: v.object({ id, text: v.string() }) }, (ctx
   return null;
 });
 const remove = mutation("remove", { args: id }, (ctx, key) => { ctx.delete(notes, key); return null; });
+const clearToken = mutation("clearToken", { args: id }, (ctx, key) => {
+  const note = ctx.get(notes, key);
+  if (!note) fail("NOT_FOUND", "No such note");
+  ctx.set(notes, key, note, { clear: ["token"] });
+  return null;
+});
+const entries = query("audit", open, (ctx) => ctx.scan(audit).map((row) => row.value));
 export default define({
-  collections: [notes],
+  collections: [notes, audit],
   definitions: [total],
+  triggers: [log],
   auth: {
     authenticate: (_ctx, credentials) => typeof credentials === "string"
       ? { subject: credentials, claims: credentials === "root" ? { role: "admin" } : {} }
       : null,
   },
-  http: { get, list, mine, page, count, put, edit, remove },
+  http: { get, list, mine, page, count, put, edit, remove, clearToken, audit: entries },
 });`;
 }
 
@@ -115,6 +130,17 @@ try {
   assert.deepEqual(await value(rootUser.query("get", "a1")), { owner: "alice", rank: 1, text: "edited", secret: "s1" });
   await mutate(alice, "remove", "a2");
   assert.deepEqual(await value(rootUser.query("list")), ["a1", "a3", "b1", "b2"]);
+  // A write-only field: alice sets it without seeing it, then clears it by name, while
+  // the hidden secret keeps its value.
+  await mutate(alice, "put", { id: "a1", note: { owner: "alice", rank: 1, text: "edited", token: "t1" } });
+  assert.deepEqual(await value(alice.query("get", "a1")), { owner: "alice", rank: 1, text: "edited" });
+  assert.equal((await value(rootUser.query("get", "a1"))).token, "t1");
+  await mutate(alice, "clearToken", "a1");
+  assert.deepEqual(await value(rootUser.query("get", "a1")), { owner: "alice", rank: 1, text: "edited", secret: "s1" });
+  // The trigger saw alice's hidden secret and wrote an audit she can't read.
+  const trail = await value(rootUser.query("audit"));
+  assert.deepEqual(trail.at(-1), { by: "alice", secret: "s1" });
+  assert.deepEqual(await value(alice.query("audit")), []);
 
   // A policy-only redeploy takes effect at once, cached results included.
   await writeFile(fixture, source(`principal.authenticated`));
@@ -122,7 +148,7 @@ try {
   assert.deepEqual(await value(alice.query("list")), ["a1", "a3", "b1", "b2"]);
   assert.deepEqual(await value(alice.query("get", "b1")), { owner: "bob", rank: 2, text: "two" });
   assert.deepEqual(await value(anonymous.query("list")), []);
-  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, and follow policy redeploys");
+  console.log("PASS: collection access policies hide rows and fields, fill pages, guard inserts, updates and deletes, keep redacted fields on edit, clear them by name, give triggers the application's rights, and follow policy redeploys");
 } catch (error) {
   console.error(error);
   console.error(cluster.logTails());

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collection, define, derive, fail, FlowerError, mutation, query, v } from "./index.ts";
+import { collection, define, derive, fail, FlowerError, mutation, query, trigger, v } from "./index.ts";
 import { testDatabase } from "./testing.ts";
 
 const noteSchema = v.object({ owner: v.string(), rank: v.int(), text: v.string(), secret: v.optional(v.string()) });
@@ -248,6 +248,70 @@ test("clear removes hidden fields where their write rules allow, and keeps the r
     ctx.set(accounts, "a", { owner: "alice", name: "A" }, { clear: ["tokn"] });
     return null;
   });
+});
+
+test("triggers act with the application's rights: full before and after values, and writes callers can't make", async () => {
+  type Doc = { owner: string; text: string; secret?: string };
+  const docs = collection<Doc>("docs").access(({ principal, row, next }) => {
+    const admin = principal.claim("role").eq("admin");
+    const mine = row("owner").eq(principal.subject);
+    return { read: mine.or(admin), insert: next("owner").eq(principal.subject).or(admin), update: mine.or(admin), fields: { secret: { read: admin } } };
+  });
+  type Entry = { by: string | null; before: Doc | null; after: Doc | null; others: number };
+  const audit = collection<Entry>("audit").access(({ principal }) => ({ read: principal.claim("role").eq("admin") }));
+  const log = trigger("log", docs, (ctx, change) => {
+    ctx.set(audit, String(ctx.scan(audit).length).padStart(3, "0"), { by: ctx.principal()?.subject ?? null, before: change.before, after: change.after, others: ctx.scan(docs).length });
+  });
+  // Rows nobody reads, which their owners still add and remove, each with a materialized value.
+  const presence = collection<{ at: number }>("presence").access(({ principal, key }) => ({ read: false, write: key.eq(principal.subject) }));
+  const seen = derive("seen", (ctx, id: string) => ctx.get(presence, id)?.at ?? null, { materialize: { each: presence } });
+  const app = define({
+    collections: [docs, audit, presence],
+    definitions: [seen],
+    triggers: [log],
+    auth: { authenticate: (_ctx, credentials) => typeof credentials === "string" ? { subject: credentials, claims: { role: credentials === "root" ? "admin" : "user" } } : null },
+    http: {
+      put: mutation("put", { args: v.object({ id: v.string(), doc: v.json() }) }, (ctx, { id, doc }) => { ctx.set(docs, id, doc as Doc); return null; }),
+      edit: mutation("edit", { args: v.object({ id: v.string(), text: v.string() }) }, (ctx, { id, text }) => {
+        const doc = ctx.get(docs, id)!;
+        ctx.set(docs, id, { ...doc, text });
+        return null;
+      }),
+      audit: query("audit", { access: "public" }, (ctx) => ctx.scan(audit).map((row) => row.value)),
+      arrive: mutation("arrive", { args: v.string() }, (ctx, id) => { ctx.set(presence, id, { at: ctx.now() }); return null; }),
+      leave: mutation("leave", { args: v.string() }, (ctx, id) => {
+        // A read first: the caller sees nothing, which must not fool the trigger.
+        ctx.get(presence, id);
+        ctx.delete(presence, id);
+        return null;
+      }),
+    },
+  });
+  const db = await testDatabase(app);
+  const as = (credentials: string) => ({ credentials });
+  db.mutate("put", { id: "a", doc: { owner: "alice", text: "one", secret: "s1" } }, as("root"));
+  db.mutate("put", { id: "b", doc: { owner: "bob", text: "two" } }, as("root"));
+  db.mutate("edit", { id: "a", text: "edited" }, as("alice"));
+  const entries = db.query("audit", null, as("root")) as Entry[];
+  assert.equal(entries.length, 3);
+  // The trigger saw the hidden field and every row, and wrote an audit alice can't.
+  assert.deepEqual(entries[2], {
+    by: "alice",
+    before: { owner: "alice", text: "one", secret: "s1" },
+    after: { owner: "alice", text: "edited", secret: "s1" },
+    others: 2,
+  });
+  // Back in the caller's view afterwards.
+  assert.deepEqual(db.query("audit", null, as("alice")), []);
+  const roots = () => Object.keys(db.data).filter((id) => id.startsWith('root:["seen"')).sort();
+  db.mutate("arrive", "alice", as("alice"));
+  db.mutate("arrive", "bob", as("bob"));
+  assert.deepEqual(roots(), ['root:["seen","alice"]', 'root:["seen","bob"]']);
+  db.mutate("leave", "alice", as("alice"));
+  assert.deepEqual(roots(), ['root:["seen","bob"]']);
+  // Leaving for someone else is a no-op: their row and its value stay.
+  db.mutate("leave", "bob", as("alice"));
+  assert.deepEqual(roots(), ['root:["seen","bob"]']);
 });
 
 test("a collection with access must be declared, and callers' views never reach the auth hook", async () => {

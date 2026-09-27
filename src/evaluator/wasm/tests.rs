@@ -385,7 +385,7 @@ fn snapshotted_api_functions_are_isolated_and_application_freeze_hooks_are_not_c
     // local to a single fresh Wasm invocation.
     let expected = json!({"ok":true,"value":{
         "before":null,"freezes":0,"frozen":true,
-        "keys":["now","clock","changesAt","principal","history","get","scan","query","range","set","delete","materialize","unmaterialize"]
+        "keys":["now","clock","changesAt","principal","history","get","scan","query","range","set","delete","materialize","unmaterialize","definer"]
     }});
     for _ in 0..3 {
         assert_eq!(run(&code, Value::Null).unwrap(), expected);

@@ -9,7 +9,8 @@
 //!
 //! Only public calls have a caller. Derived values, maintenance tasks and the
 //! authorization hook run without one and see every row, like SQL's
-//! `SECURITY DEFINER` views: expose them deliberately.
+//! `SECURITY DEFINER` views: expose them deliberately. Triggers act with the
+//! same rights: the SDK brackets them with the `definer` host operation.
 //!
 //! Rules are data, not guest code, so the host evaluates them natively. Each
 //! invocation folds its principal into a collection's rules once: a rule that
@@ -857,9 +858,10 @@ pub(super) enum Admitted {
 
 impl Engine<'_> {
     /// The caller's view of a collection's policy, or `None` when none
-    /// applies: invocations without a caller, and collections without one.
+    /// applies: invocations without a caller, code running with definer
+    /// rights (triggers), and collections without one.
     fn access(&mut self, collection: &str) -> Option<Arc<Access>> {
-        if self.system || self.schema.policies.is_empty() {
+        if self.system || self.definer > 0 || self.schema.policies.is_empty() {
             return None;
         }
         if let Some(access) = self.access.get(collection) {

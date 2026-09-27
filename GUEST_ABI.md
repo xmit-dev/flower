@@ -111,12 +111,17 @@ malformed arguments; unknown operations and resource failures trap instead.
 | 5 | scan | collection, options? | `[{key, value}]` | all |
 | 6 | range | range | `{rows: [{key, value}], cursor}` | all |
 | 7 | query | query | `[value]` | all |
-| 8 | set | collection, key, value | null | mutations |
+| 8 | set | collection, key, value, options? | null | mutations |
 | 9 | delete | collection, key | null | mutations |
 | 10 | materialize | derived, args | null | mutations |
 | 11 | unmaterialize | derived, args | null | mutations |
 | 12 | clock | none | milliseconds | all |
 | 13 | changesAt | milliseconds or null | null | all |
+| 14 | definer | true or false | null | mutations |
+
+`definer(true)` and `definer(false)` bracket code that acts with the
+application's rights, such as triggers: collection access policies don't apply
+between them. They nest, and an unmatched `definer(false)` fails.
 
 A `target` is a collection name, `{"kind": "collection", "name": string}` or
 `{"kind": "derived", "name": string}`. Scan options, range and query shapes are

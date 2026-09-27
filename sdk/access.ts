@@ -498,14 +498,22 @@ export function enforceAccess(host: Host, collections: readonly { name: string; 
     now: () => host.now() as number,
     note: (flip) => { if (flip !== undefined) host.changesAt(flip); },
   };
+  // Triggers run between definer(true) and definer(false), with the application's rights.
+  let definer = 0;
   const guard = (name: unknown) => {
-    const policy = typeof name === "string" ? policies.get(name) : undefined;
+    const policy = typeof name === "string" && definer === 0 ? policies.get(name) : undefined;
     return policy ? new Guard(name as string, policy, caller, clock) : undefined;
   };
   const name = (reference: any): string | undefined =>
     typeof reference?.collection === "string" ? reference.collection : reference?.collection?.name ?? reference?.name;
   return Object.freeze({
     ...host,
+    definer(on: unknown) {
+      if (on === true) definer++;
+      else if (on === false && definer > 0) definer--;
+      else throw Object.assign(new Error(on === false ? "definer(false) without a matching definer(true)" : "definer takes true or false"), { code: "INVALID_VALUE" });
+      return null;
+    },
     get(reference: any, key: any) {
       const value = host.get(reference, key);
       const access = reference?.kind === "collection" ? guard(reference.name) : undefined;

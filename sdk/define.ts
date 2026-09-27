@@ -136,8 +136,12 @@ function bind(host: Host, runtime: Runtime): Session {
   // Row existence this mutation has observed or written, for existence-only collections.
   const exists = new Map<string, boolean>();
   const identity = (reference: Collection<any, any, any>, raw: string) => reference.name + "\u0000" + raw;
+  // A guarded collection's reads show the caller's view, where hidden rows look absent and
+  // skipped deletes leave rows in place, so existence is read afresh there, as the definer.
+  const cached = (reference: Collection<any, any, any>) =>
+    runtime.existence.has(reference.name) && !runtime.guarded.has(reference.name);
   function observe(reference: Collection<any, any, any>, raw: string, value: Json) {
-    if (runtime.existence.has(reference.name)) exists.set(identity(reference, raw), value !== null);
+    if (cached(reference)) exists.set(identity(reference, raw), value !== null);
     return value;
   }
   // A policy the server never received protects nothing: refuse to touch a collection
@@ -148,14 +152,23 @@ function bind(host: Host, runtime: Runtime): Session {
       throw new TypeError(`Collection ${JSON.stringify(owner.name)} declares access; list it in define({ collections }) so the server enforces it`);
     }
   }
+  // Triggers act with the application's rights, like derived values: they see rows and
+  // fields the caller can't, and their writes aren't checked against the caller's policy.
+  // Only apps with guarded collections need it, and only servers that enforce them offer it.
+  function definer<T>(run: () => T): T {
+    if (runtime.guarded.size === 0 || typeof host.definer !== "function") return run();
+    host.definer(true);
+    try { return run(); }
+    finally { host.definer(false); }
+  }
   function track(reference: Collection<any, any, any>, raw: string) {
     const triggers = runtime.triggers.get(reference.name);
     if (!triggers) return;
     const id = identity(reference, raw);
     if (touched.has(id)) return;
-    const before = runtime.existence.has(reference.name)
-      ? exists.get(id) ?? host.get(reference, raw) !== null
-      : host.get(reference, raw);
+    const before = definer(() => runtime.existence.has(reference.name)
+      ? (cached(reference) ? exists.get(id) : undefined) ?? host.get(reference, raw) !== null
+      : host.get(reference, raw));
     touched.set(id, { reference, raw, before, triggers });
   }
   const ctx: MutationContext = Object.freeze({
@@ -222,6 +235,9 @@ function bind(host: Host, runtime: Runtime): Session {
   }) as MutationContext;
   hosts.set(ctx, host);
   function flush() {
+    if (touched.size) definer(settle);
+  }
+  function settle() {
     for (let round = 0; touched.size; round++) {
       if (round === 32) fail("TRIGGER_LOOP", "Triggers kept changing records for 32 rounds");
       // Read every after value before any trigger of this round runs: a trigger's own writes are
@@ -229,7 +245,9 @@ function bind(host: Host, runtime: Runtime): Session {
       const batch = [...touched.values()].map((entry) => ({
         ...entry,
         after: runtime.existence.has(entry.reference.name)
-          ? exists.get(identity(entry.reference, entry.raw)) === true
+          ? cached(entry.reference)
+            ? exists.get(identity(entry.reference, entry.raw)) === true
+            : host.get(entry.reference, entry.raw) !== null
           : host.get(entry.reference, entry.raw) as Json,
       }));
       touched.clear();

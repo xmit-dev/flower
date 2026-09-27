@@ -50,6 +50,7 @@ fn operation(op: i32) -> Result<&'static str> {
         11 => "unmaterialize",
         12 => "clock",
         13 => "changesAt",
+        14 => "definer",
         _ => bail!("unknown host operation {op}"),
     })
 }
@@ -113,7 +114,8 @@ mod tests {
         assert_eq!(super::operation(11).unwrap(), "unmaterialize");
         assert_eq!(super::operation(12).unwrap(), "clock");
         assert_eq!(super::operation(13).unwrap(), "changesAt");
-        for op in [0, 14, -1, i32::MAX] {
+        assert_eq!(super::operation(14).unwrap(), "definer");
+        for op in [0, 15, -1, i32::MAX] {
             assert!(super::operation(op).is_err(), "{op}");
         }
     }

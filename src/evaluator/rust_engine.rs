@@ -154,6 +154,9 @@ struct Engine<'a> {
     system: bool,
     /// Each collection's policy specialized for this invocation's caller.
     access: HashMap<String, Option<Arc<access::Access>>>,
+    /// Nesting of `definer(true)`: while positive, a mutation acts with the
+    /// application's rights, as the SDK runs triggers, and policies don't apply.
+    definer: u32,
     now: u64,
     has_time: bool,
     graph_ready: bool,
@@ -354,6 +357,7 @@ fn run_with_limit_and_schema(
         principal: invocation.get("$principal").cloned().unwrap_or(Value::Null),
         system: invocation.get("$principal").is_none(),
         access: HashMap::new(),
+        definer: 0,
         now: fixed_now,
         has_time,
         graph_ready: false,
@@ -1077,6 +1081,26 @@ impl Engine<'_> {
             }
             "changesAt" => {
                 self.declare_change(argument(0))?;
+                Ok(Value::Null)
+            }
+            "definer" => {
+                self.writable()?;
+                match argument(0) {
+                    Value::Bool(true) => self.definer += 1,
+                    Value::Bool(false) if self.definer > 0 => self.definer -= 1,
+                    Value::Bool(false) => {
+                        return Err(EngineError::new(
+                            "INVALID_VALUE",
+                            "definer(false) without a matching definer(true)",
+                        ));
+                    }
+                    _ => {
+                        return Err(EngineError::new(
+                            "INVALID_VALUE",
+                            "definer takes true or false",
+                        ));
+                    }
+                }
                 Ok(Value::Null)
             }
             "get" => {
