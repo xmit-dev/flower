@@ -33,7 +33,9 @@ tokio-util = "0.7"
 libc = "0.2"
 
 [dev-dependencies]
+fastrand = "2"
 flower-worker = { path = ".", features = ["testing"] }
+tempfile = "3"
 sha2 = "0.11"
 tokio = { version = "1", features = ["full", "test-util"] }
 parking_lot = "0.12"
