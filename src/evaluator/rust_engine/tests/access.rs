@@ -81,7 +81,29 @@ fn fixture() -> Fixture {
                 host(
                     "set",
                     json!([notes(), args, {"owner":"bob","rank":0,"text":"audit"}]),
+                )?;
+                host("definer", json!([false]))
+            }) as Callback,
+        ),
+        (
+            // Takes definer rights and returns with them, having written as the app.
+            "definerLeft",
+            (|args, host| {
+                host("definer", json!([true]))?;
+                host("definer", json!([true]))?;
+                host("definer", json!([false]))?;
+                host(
+                    "set",
+                    json!([notes(), args, {"owner":"bob","rank":0,"text":"left"}]),
                 )
+            }) as Callback,
+        ),
+        (
+            // Fails while elevated.
+            "definerFailed",
+            (|_, host| {
+                host("definer", json!([true]))?;
+                Err(EngineError::new("TRIGGER_FAILED", "failed as the definer"))
             }) as Callback,
         ),
         (
@@ -959,6 +981,69 @@ fn definer_brackets_act_with_the_applications_rights() {
     .err()
     .expect("query");
     assert_eq!(error.code, "QUERY_WRITE_FORBIDDEN");
+}
+
+#[test]
+fn a_method_that_returns_acting_as_the_definer_fails() {
+    let (data, fixture) = setup();
+    // Definer rights end with the code that took them: returning elevated fails
+    // the whole invocation, so its unchecked write never commits.
+    let error = call(
+        &data,
+        &fixture,
+        "mutation",
+        "definerLeft",
+        json!("left"),
+        Some(alice()),
+    )
+    .err()
+    .expect("unbalanced");
+    assert_eq!(error.code, "DEFINER_UNBALANCED");
+    assert!(
+        error.message.contains("definerLeft") && error.message.ends_with("by 1"),
+        "{}",
+        error.message
+    );
+    // Without a caller too: maintenance must balance its brackets like any method.
+    let error = call(
+        &data,
+        &fixture,
+        "mutation",
+        "definerLeft",
+        json!("left"),
+        None,
+    )
+    .err()
+    .expect("unbalanced without a caller");
+    assert_eq!(error.code, "DEFINER_UNBALANCED");
+    // A method failing while elevated reports its own error.
+    let error = call(
+        &data,
+        &fixture,
+        "mutation",
+        "definerFailed",
+        Value::Null,
+        Some(alice()),
+    )
+    .err()
+    .expect("failed");
+    assert_eq!(error.code, "TRIGGER_FAILED");
+    // Nothing carries over: the next invocation starts with the caller's rights.
+    let error = call(
+        &data,
+        &fixture,
+        "mutation",
+        "set",
+        json!({"key":"b9","value":{"owner":"bob","rank":9,"text":"forged"}}),
+        Some(alice()),
+    )
+    .err()
+    .expect("denied");
+    assert_eq!(error.code, "ACCESS_DENIED");
+    assert_eq!(
+        keys(&query(&data, &fixture, "scan", Value::Null, Some(alice()))),
+        ["a1", "a2", "a3"]
+    );
 }
 
 #[test]

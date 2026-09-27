@@ -158,6 +158,7 @@ struct Engine<'a> {
     access: HashMap<String, Option<Arc<access::Access>>>,
     /// Nesting of `definer(true)`: while positive, a mutation acts with the
     /// application's rights, as the SDK runs triggers, and policies don't apply.
+    /// A method must return with it back at 0 (`DEFINER_UNBALANCED`).
     definer: u32,
     now: u64,
     has_time: bool,
@@ -444,6 +445,19 @@ fn run_with_limit_and_schema(
         let value = execute.execute(mode, name, &args, &mut host);
         engine.check_fatal()?;
         let value = value?;
+        // Definer rights end with the code that took them: a method that
+        // returns still elevated fails rather than leave anything unchecked.
+        // (A failing method fails anyway, and every invocation starts from a
+        // fresh engine at 0.)
+        if engine.definer != 0 {
+            return engine.abort(
+                "DEFINER_UNBALANCED",
+                format!(
+                    "{name} returned acting as the definer: definer(true) outnumbers definer(false) by {}",
+                    engine.definer
+                ),
+            );
+        }
         if allocation_cost(&value) > retained_limit {
             return engine.abort(
                 "EVALUATION_BUDGET",

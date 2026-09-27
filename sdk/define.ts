@@ -37,7 +37,18 @@ export interface ModuleConfig<H extends HttpMap = HttpMap> extends ComponentPart
 // ---- Context binding: typed keys, record schemas and triggers over the host context
 
 type Host = Record<string, (...args: any[]) => any>;
-interface Session { readonly ctx: MutationContext; readonly flush: () => void }
+/** The runner's capability to act with the application's rights: host operation 14. */
+type Elevate = (on: boolean) => unknown;
+interface Session {
+  readonly ctx: MutationContext;
+  readonly flush: () => void;
+  /**
+   * Run one callback with this invocation's definer capability: the runner's third
+   * argument, or null where there is none (queries, derived values). Undefined leaves
+   * older servers' host.definer in use.
+   */
+  readonly within: <T>(elevate: Elevate | null | undefined, run: () => T) => T;
+}
 interface Runtime {
   readonly triggers: ReadonlyMap<string, readonly Trigger[]>;
   /** Collections whose triggers only observe rows appearing or disappearing. */
@@ -45,6 +56,8 @@ interface Runtime {
   readonly sessions: Map<object, Session>;
   /** Collections whose access policy the manifest carries, so the server enforces it. */
   guarded: ReadonlySet<string>;
+  /** The server enforces rules (collection policies, derived access) this app declares. */
+  enforced: boolean;
 }
 
 // Flower publishes the contexts it will pass to callbacks before initializing
@@ -53,7 +66,11 @@ interface Runtime {
 // its session is already built and its trigger bookkeeping already empty.
 declare const __flowerContexts: readonly Host[] | undefined;
 interface Touch {
-  readonly reference: Collection<any, any, any>;
+  /** A frozen plain reference the SDK built: host calls as the definer take no app object. */
+  readonly target: { readonly kind: "collection"; readonly name: string };
+  readonly name: string;
+  /** The collection has JSON keys (collection.key(schema)): triggers get them decoded. */
+  readonly keyed: boolean;
   readonly raw: string;
   readonly triggers: readonly Trigger[];
   /** The row before this round, or, for existence-only collections, whether it existed. */
@@ -62,16 +79,33 @@ interface Touch {
 /** Internal triggers that need only a row's existence, run as (ctx, key, exists). */
 const existenceTriggers = new WeakMap<Trigger, (ctx: MutationContext, key: Json, exists: boolean) => void>();
 const hosts = new WeakMap<object, Host>();
+/** Each bound context's raw host, without any definer capability. */
+const raws = new WeakMap<object, Host>();
 const flushes = new WeakMap<object, () => void>();
+const definers = new WeakMap<object, <T>(run: () => T) => T>();
 
 /** Run pending triggers now instead of at the end of the mutation. */
 function settleTriggers(ctx: object): void {
   flushes.get(ctx)?.();
 }
 
-/** The raw host context behind a bound context, for SDK internals that need encoded keys. */
+/**
+ * The raw host context behind a bound context, for SDK internals that need encoded keys.
+ * It never carries the definer capability, even on servers whose host context does.
+ */
 export function hostContext(ctx: object): Host {
-  return hosts.get(ctx) ?? (ctx as Host);
+  return raws.get(ctx) ?? (ctx as Host);
+}
+
+/**
+ * SDK internals only (not exported to applications): run `run` with the application's
+ * rights when `ctx` is a mutation's context in an app whose rules the server enforces,
+ * else as the caller. Keep app-supplied objects and callbacks out of `run`: whatever runs
+ * inside acts for the application.
+ */
+export function asDefiner<T>(ctx: object, run: () => T): T {
+  const definer = definers.get(ctx);
+  return definer ? definer(run) : run();
 }
 
 export function encodeKey(reference: Collection<any, any, any>, key: unknown): string {
@@ -154,22 +188,38 @@ function bind(host: Host, runtime: Runtime): Session {
   }
   // Triggers act with the application's rights, like derived values: they see rows and
   // fields the caller can't, and their writes aren't checked against the caller's policy.
-  // Only apps with guarded collections need it, and only servers that enforce them offer it.
+  // Only apps with rules need it, and only servers that enforce them offer it: as the
+  // third argument of this invocation's compute (`within` sets it), or, on older
+  // servers, as host.definer. No context an application holds carries it.
+  let elevate: Elevate | null | undefined;
   function definer<T>(run: () => T): T {
-    if (runtime.guarded.size === 0 || typeof host.definer !== "function") return run();
-    host.definer(true);
+    const lift = elevate !== undefined ? elevate
+      : typeof host.definer === "function" ? (on: boolean) => host.definer(on) : null;
+    if (!runtime.enforced || lift === null) return run();
+    lift(true);
     try { return run(); }
-    finally { host.definer(false); }
+    finally { lift(false); }
+  }
+  function within<T>(capability: Elevate | null | undefined, run: () => T): T {
+    const previous = elevate;
+    elevate = capability;
+    try { return run(); }
+    finally { elevate = previous; }
   }
   function track(reference: Collection<any, any, any>, raw: string) {
-    const triggers = runtime.triggers.get(reference.name);
+    // Read what the method passed in once, as the caller: nothing it supplied (a getter,
+    // a proxy) runs with the application's rights below or when triggers settle.
+    const name = reference.name;
+    const triggers = runtime.triggers.get(name);
     if (!triggers) return;
-    const id = identity(reference, raw);
+    const id = name + "\u0000" + raw;
     if (touched.has(id)) return;
-    const before = definer(() => runtime.existence.has(reference.name)
-      ? (cached(reference) ? exists.get(id) : undefined) ?? host.get(reference, raw) !== null
-      : host.get(reference, raw));
-    touched.set(id, { reference, raw, before, triggers });
+    const target = Object.freeze({ kind: "collection" as const, name });
+    const keyed = Boolean(collectionInfo(reference)?.key);
+    const existence = runtime.existence.has(name);
+    const known = existence && !runtime.guarded.has(name) ? exists.get(id) : undefined;
+    const before = known ?? definer(() => existence ? host.get(target, raw) !== null : host.get(target, raw));
+    touched.set(id, { target, name, keyed, raw, before, triggers });
   }
   const ctx: MutationContext = Object.freeze({
     now: () => host.now(),
@@ -234,6 +284,10 @@ function bind(host: Host, runtime: Runtime): Session {
     unmaterialize: (definition: any, args?: unknown) => { host.unmaterialize(definition, args === undefined ? null : args); },
   }) as MutationContext;
   hosts.set(ctx, host);
+  const raw: Host = { ...host };
+  delete raw.definer;
+  raws.set(ctx, Object.freeze(raw));
+  definers.set(ctx, definer);
   function flush() {
     if (touched.size) definer(settle);
   }
@@ -244,45 +298,55 @@ function bind(host: Host, runtime: Runtime): Session {
       // tracked for the next round, so reading them here too would report overlapping changes.
       const batch = [...touched.values()].map((entry) => ({
         ...entry,
-        after: runtime.existence.has(entry.reference.name)
-          ? cached(entry.reference)
-            ? exists.get(identity(entry.reference, entry.raw)) === true
-            : host.get(entry.reference, entry.raw) !== null
-          : host.get(entry.reference, entry.raw) as Json,
+        after: runtime.existence.has(entry.name)
+          ? !runtime.guarded.has(entry.name)
+            ? exists.get(entry.name + "\u0000" + entry.raw) === true
+            : host.get(entry.target, entry.raw) !== null
+          : host.get(entry.target, entry.raw) as Json,
       }));
       touched.clear();
       for (const entry of batch) {
-        if (runtime.existence.has(entry.reference.name)) {
+        const key = () => entry.keyed ? JSON.parse(entry.raw) as Json : entry.raw;
+        if (runtime.existence.has(entry.name)) {
           if (entry.before === entry.after) continue;
-          const key = decodeKey(entry.reference, entry.raw);
-          for (const each of entry.triggers) existenceTriggers.get(each)!(ctx, key, entry.after as boolean);
+          for (const each of entry.triggers) existenceTriggers.get(each)!(ctx, key(), entry.after as boolean);
           continue;
         }
         const after = entry.after as Json;
         if (sameValue(entry.before as Json, after)) continue;
-        const change = Object.freeze({ key: decodeKey(entry.reference, entry.raw), before: entry.before as Json, after });
+        const change = Object.freeze({ key: key(), before: entry.before as Json, after });
         for (const each of entry.triggers) each.run(ctx, change);
       }
     }
   }
   flushes.set(ctx, flush);
-  return { ctx, flush };
+  return { ctx, flush, within };
 }
 
-function bound(definition: Definition, runtime: Runtime): (ctx: any, args: any) => any {
+function bound(definition: Definition, runtime: Runtime): (ctx: any, args: any, elevate?: Elevate) => any {
   const compute = definition.compute as (ctx: unknown, args: unknown) => unknown;
   if (definition.kind === "derived" && definition.aggregate) return compute;
   const session = (host: Host) => runtime.sessions.get(host) ?? bind(host, runtime);
   if (definition.kind === "mutationMethod") {
-    return (host: Host, args: unknown) => {
+    // Servers that enforce access rules pass the definer capability as a third argument,
+    // for this invocation only; the application's compute never sees it. Without one
+    // (older servers), host.definer stays in use.
+    return (host: Host, args: unknown, elevate?: Elevate) => {
       if (hosts.has(host)) return compute(host, args);
-      const { ctx, flush } = session(host);
-      const value = compute(ctx, args);
-      flush();
-      return value;
+      const { ctx, flush, within } = session(host);
+      return within(typeof elevate === "function" ? elevate : undefined, () => {
+        const value = compute(ctx, args);
+        flush();
+        return value;
+      });
     };
   }
-  return (host: Host, args: unknown) => compute(host && !hosts.has(host) ? session(host).ctx : host, args);
+  // Queries, transaction plans and derived values never act as the definer.
+  return (host: Host, args: unknown) => {
+    if (!host || hosts.has(host)) return compute(host, args);
+    const { ctx, within } = session(host);
+    return within(null, () => compute(ctx, args));
+  };
 }
 
 // ---- Maintenance: one host handler pair selecting among every task, earliest due first
@@ -555,7 +619,7 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
     triggers.set(each.source.name, list);
   }
   const existence = new Set([...triggers].filter(([, list]) => list.every((each) => existenceTriggers.has(each))).map(([name]) => name));
-  const runtime: Runtime = { triggers, existence, sessions: new Map(), guarded: new Set() };
+  const runtime: Runtime = { triggers, existence, sessions: new Map(), guarded: new Set(), enforced: false };
   if (typeof __flowerContexts !== "undefined") {
     for (const host of __flowerContexts) runtime.sessions.set(host, bind(host, runtime));
   }
@@ -582,6 +646,8 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
   const manifest = collectionManifest(collections);
   checkReadable(manifest);
   runtime.guarded = new Set(manifest.filter((entry) => entry.access).map((entry) => entry.name));
+  // Triggers and SDK bookkeeping must also read derived values whose rule the caller fails.
+  runtime.enforced = runtime.guarded.size > 0 || Object.values(definitions).some((definition) => Object.hasOwn(definition, "access"));
   return Object.freeze({
     definitions: Object.freeze(definitions),
     http: Object.freeze(http),

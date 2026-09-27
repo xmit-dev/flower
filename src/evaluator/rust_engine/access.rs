@@ -10,7 +10,9 @@
 //! Only public calls have a caller. Derived values, maintenance tasks and the
 //! authorization hook run without one and see every row, like SQL's
 //! `SECURITY DEFINER` views: expose them deliberately. Triggers act with the
-//! same rights: the SDK brackets them with the `definer` host operation.
+//! same rights: the SDK brackets them with the `definer` host operation, which
+//! the JavaScript runner hands only to mutation computes, as their third
+//! argument, never through a context; a method returning elevated fails.
 //!
 //! Rules are data, not guest code, so the host evaluates them natively. Each
 //! invocation folds its principal into a collection's rules once: a rule that

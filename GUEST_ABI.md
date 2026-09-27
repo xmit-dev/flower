@@ -120,8 +120,14 @@ malformed arguments; unknown operations and resource failures trap instead.
 | 14 | definer | true or false | null | mutations |
 
 `definer(true)` and `definer(false)` bracket code that acts with the
-application's rights, such as triggers: collection access policies don't apply
-between them. They nest, and an unmatched `definer(false)` fails.
+application's rights, such as triggers: collection access policies and derived
+access rules don't apply between them. They nest, and an unmatched
+`definer(false)` fails with `INVALID_VALUE`. A mutation that returns with more
+`definer(true)` than `definer(false)` calls fails with `DEFINER_UNBALANCED`,
+and nothing it wrote commits. JavaScript bundles don't see this operation on
+any context: the runner passes mutation and transaction computes a third
+argument, `elevate(on)`, that calls it (the SDK keeps it to itself), and
+queries and derived values get none.
 
 A `target` is a collection name, `{"kind": "collection", "name": string}` or
 `{"kind": "derived", "name": string}`. Scan options, range and query shapes are

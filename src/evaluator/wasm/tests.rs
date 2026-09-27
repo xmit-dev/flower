@@ -391,10 +391,98 @@ fn snapshotted_api_functions_are_isolated_and_application_freeze_hooks_are_not_c
     // local to a single fresh Wasm invocation.
     let expected = json!({"ok":true,"value":{
         "before":null,"freezes":0,"frozen":true,
-        "keys":["now","clock","changesAt","principal","history","get","scan","query","range","set","delete","materialize","unmaterialize","definer"]
+        "keys":["now","clock","changesAt","principal","history","get","scan","query","range","set","delete","materialize","unmaterialize"]
     }});
     for _ in 0..3 {
         assert_eq!(run(&code, Value::Null).unwrap(), expected);
+    }
+}
+
+#[test]
+fn only_mutation_and_transaction_computes_get_definer_rights_as_their_third_argument() {
+    // No context carries host operation 14 (definer): not the ones published
+    // as __flowerContexts, not the one a callback gets. Mutations and
+    // transactions get it as `elevate`, their third argument; queries and
+    // derived values get nothing.
+    let probe = "function(ctx,args,elevate){const found=[typeof ctx.definer,typeof __flowerContexts[0].definer,typeof __flowerContexts[1].definer,typeof elevate,arguments.length];if(typeof elevate==='function'){found.push(Object.isFrozen(elevate),elevate(true),elevate(false))}return found}";
+    for static_init in [false, true] {
+        let source = format!(
+            "{}var __flowerBundle={{default:{{definitions:{{
+                child:{{name:'child',kind:'derived',compute:{probe}}},
+                read:{{name:'read',kind:'queryMethod',compute:{probe}}},
+                write:{{name:'write',kind:'mutationMethod',compute:{probe}}},
+                plan:{{name:'plan',kind:'transactionMethod',compute:{probe}}}
+            }},http:{{}}}}}};",
+            if static_init { STATIC_INIT_MARKER } else { "" },
+        );
+        for (name, kind, expected) in [
+            (
+                "child",
+                "derived",
+                json!(["undefined", "undefined", "undefined", "undefined", 2]),
+            ),
+            (
+                "read",
+                "query",
+                json!(["undefined", "undefined", "undefined", "undefined", 2]),
+            ),
+            (
+                "write",
+                "mutation",
+                json!([
+                    "undefined",
+                    "undefined",
+                    "undefined",
+                    "function",
+                    3,
+                    true,
+                    "on",
+                    null
+                ]),
+            ),
+            (
+                "plan",
+                "transaction",
+                json!([
+                    "undefined",
+                    "undefined",
+                    "undefined",
+                    "function",
+                    3,
+                    true,
+                    "on",
+                    null
+                ]),
+            ),
+        ] {
+            let mut calls = Vec::new();
+            let result = execute(
+                &source,
+                name,
+                &Value::Null,
+                kind,
+                &mut |method, payload| {
+                    calls.push((method.to_owned(), payload.clone()));
+                    Ok(if payload == json!([true]) {
+                        json!("on")
+                    } else {
+                        Value::Null
+                    })
+                },
+                limits(),
+            )
+            .unwrap();
+            assert_eq!(result, json!({"ok":true,"value":expected}), "{name}");
+            let expected_calls = if expected[3] == "function" {
+                vec![
+                    ("definer".to_owned(), json!([true])),
+                    ("definer".to_owned(), json!([false])),
+                ]
+            } else {
+                vec![]
+            };
+            assert_eq!(calls, expected_calls, "{name}");
+        }
     }
 }
 

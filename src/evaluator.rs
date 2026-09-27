@@ -753,9 +753,13 @@ const CELL_RUNNER: &str = r#"
             : host(8, ref(collection), key, value, options),
         delete: (collection, key) => host(9, ref(collection), key),
         materialize: (definition, args = null) => host(10, ref(definition), args),
-        unmaterialize: (definition, args = null) => host(11, ref(definition), args),
-        definer: (on) => host(14, on)
+        unmaterialize: (definition, args = null) => host(11, ref(definition), args)
     };
+    // Acting with the application's rights (host operation 14) is no context
+    // member: only mutation and transaction computes get it, as a third
+    // argument the SDK keeps to itself, so no module can reach it through
+    // __flowerContexts. The host fails an invocation that returns elevated.
+    const elevate = Object.freeze((on) => host(14, on));
     // Each cell gets a fresh Wasm image. Immutable context objects can therefore
     // be prepared in the trusted image and cannot retain mutations into any
     // subsequent cell.
@@ -771,7 +775,9 @@ const CELL_RUNNER: &str = r#"
         const expectedKind = kind === 3 ? 'derived' : kinds[kind] + 'Method';
         if (definitions[name].kind !== expectedKind)
             throw Object.assign(new Error('Definition ' + name + ' is not a ' + kinds[kind] + ' method'), {code: 'METHOD_KIND_MISMATCH'});
-        return definitions[name].compute(kind === 3 ? derivedContext : methodContext, args);
+        if (kind === 3) return definitions[name].compute(derivedContext, args);
+        if (kind === 0) return definitions[name].compute(methodContext, args);
+        return definitions[name].compute(methodContext, args, elevate);
     };
     const describe = (kind, e) => {
         const message = String(e && e.message || e);
@@ -1013,6 +1019,46 @@ mod tests {
         assert!(!mutation.puts.contains_key("bundle"));
         assert!(!mutation.deletes.iter().any(|key| key == "bundle"));
         assert_eq!(data["bundle"], bundle);
+    }
+
+    #[test]
+    fn definer_rights_reach_mutations_only_as_a_balanced_third_argument() {
+        let code = fixture_bundle(
+            r#"var __flowerBundle = {default: {
+          probe: {kind:'mutationMethod', compute: (ctx, _, elevate) => [typeof ctx.definer, typeof __flowerContexts[1].definer, typeof elevate]},
+          peek: {kind:'queryMethod', compute: (ctx, _, elevate) => [typeof ctx.definer, typeof __flowerContexts[1].definer, typeof elevate]},
+          balanced: {kind:'mutationMethod', compute: (ctx, _, elevate) => {
+            elevate(true); elevate(true); elevate(false);
+            try { elevate(false); elevate(false); } catch (error) { return error.code; }
+          }},
+          leave: {kind:'mutationMethod', compute: (ctx, _, elevate) => { elevate(true); ctx.set({kind:'collection',name:'input'}, 'b', 1); return null; }}
+        }};"#,
+        );
+        let data = BTreeMap::from([(
+            "bundle".into(),
+            json!({"hash":hash(code.as_bytes()),"javascript":code}),
+        )]);
+        let mutate = |name: &str| {
+            invoke(
+                data.clone(),
+                json!({"name":name,"requestId":name}),
+                "mutation",
+            )
+        };
+        assert_eq!(
+            mutate("probe").unwrap().value,
+            json!(["undefined", "undefined", "function"])
+        );
+        assert_eq!(
+            invoke(data.clone(), json!({"name":"peek"}), "query")
+                .unwrap()
+                .value,
+            json!(["undefined", "undefined", "undefined"])
+        );
+        // An unmatched elevate(false) is a business error the method may catch.
+        assert_eq!(mutate("balanced").unwrap().value, json!("INVALID_VALUE"));
+        let error = mutate("leave").unwrap_err().to_string();
+        assert!(error.contains("DEFINER_UNBALANCED"), "{error}");
     }
 
     #[test]

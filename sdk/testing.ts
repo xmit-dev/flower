@@ -220,7 +220,16 @@ export class TestDatabase<App = FlowerModule> {
       if (!Object.hasOwn(definitions, method)) throw Object.assign(new Error(`Unknown definition ${method}`), { code: "DEFINITION_MISSING" });
       // Methods see collections as their caller may, like on the server.
       const host = withIdentity(ctx);
-      return definitions[method].compute(caller ? enforceAccess(host, this.module.collections ?? [], identity as unknown as Json, definitions) : host, input);
+      const enforced = caller ? enforceAccess(host, this.module.collections ?? [], identity as unknown as Json, definitions) : enforceAccess(host, [], null);
+      // Like the server's runner: only mutations get the definer capability, as a third
+      // argument no context carries, and must return with it balanced.
+      if (kind !== "mutation") return definitions[method].compute(enforced.host, input);
+      const value = definitions[method].compute(enforced.host, input, enforced.elevate);
+      if (enforced.depth() !== 0) {
+        throw Object.assign(new Error(`${method} returned acting as the definer: definer(true) outnumbers definer(false) by ${enforced.depth()}`),
+          { code: "DEFINER_UNBALANCED" });
+      }
+      return value;
     };
     const cell = (cellName: string, input: Json, ctx: any) => {
       const definition = definitions[cellName];

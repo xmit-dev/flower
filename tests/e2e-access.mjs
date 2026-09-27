@@ -103,6 +103,8 @@ const share = mutation("share", { args: v.object({ id, private: v.boolean() }) }
   ctx.set(sessions, id, { ...row, private: hidden });
   return null;
 });
+// What a mutation can find of definer rights: nothing, on servers that hand them to the SDK alone.
+const probe = mutation("probe", open, (ctx) => [typeof ctx.definer, typeof globalThis.__flowerContexts?.[0]?.definer, typeof globalThis.__flowerContexts?.[1]?.definer]);
 export default define({
   collections: [notes, audit, sessions, events],
   definitions: [total, countFor],
@@ -112,7 +114,7 @@ export default define({
       ? { subject: credentials, claims: credentials === "root" ? { role: "admin" } : {} }
       : null,
   },
-  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share },
+  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries, timeline, start, append, share, probe },
 });`;
 }
 
@@ -123,6 +125,12 @@ try {
   await writeFile(fixture, source(`mine.or(admin)`));
   const bundle = await buildBundle(fixture, { initialization: "static" });
   await admin().deploy(bundle, { requestId: "access-deploy" });
+
+  // No context offers definer rights. E2E_OLD_RUNNER=1 runs this against a server from before
+  // the runner handed them to the SDK alone, whose raw method context still carries them: the
+  // bundle's triggers must act as the definer there too (the audit checks below).
+  const exposed = process.env.E2E_OLD_RUNNER === "1" ? "function" : "undefined";
+  assert.deepEqual(await value(mutate(alice, "probe", null)), ["undefined", "undefined", exposed]);
 
   // Admins may write anything; everyone else only their own rows.
   const seed = [

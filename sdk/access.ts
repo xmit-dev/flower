@@ -558,6 +558,19 @@ function matches(value: Json, fields: readonly string[], expected: Json): boolea
   });
 }
 
+/** A method's context as the server enforces access for its caller, and its definer capability. */
+export interface EnforcedAccess {
+  /** The raw context (collection references and encoded keys) the method gets. */
+  readonly host: Host;
+  /**
+   * What the server passes mutation computes as their third argument: between elevate(true)
+   * and elevate(false), which nest, the method acts with the application's rights.
+   */
+  readonly elevate: (on: unknown) => null;
+  /** How many elevate(true) calls are unmatched: a method must return with none. */
+  readonly depth: () => number;
+}
+
 /**
  * A method's database context, as the server enforces collection access for its caller.
  * `host` is the raw context (collection references and encoded keys).
@@ -567,10 +580,19 @@ export function enforceAccess(
   collections: readonly { name: string; access?: AccessManifest }[],
   principal: Json,
   definitions: Readonly<Record<string, { readonly kind: string; readonly access?: Json }>> = {},
-): Host {
+): EnforcedAccess {
+  // Triggers run between elevate(true) and elevate(false), with the application's rights.
+  let definer = 0;
+  const elevate = (on: unknown) => {
+    if (on === true) definer++;
+    else if (on === false && definer > 0) definer--;
+    else throw Object.assign(new Error(on === false ? "definer(false) without a matching definer(true)" : "definer takes true or false"), { code: "INVALID_VALUE" });
+    return null;
+  };
+  const depth = () => definer;
   const policies = new Map(collections.filter((entry) => entry.access).map((entry) => [entry.name, entry.access!]));
   const derived = new Map(Object.entries(definitions).filter(([, entry]) => entry.kind === "derived" && entry.access !== undefined).map(([name, entry]) => [name, entry.access as RuleJson]));
-  if (!policies.size && !derived.size) return host;
+  if (!policies.size && !derived.size) return { host, elevate, depth };
   const anonymous = principal === null || typeof principal !== "object" || Array.isArray(principal) ||
     (principal as Record<string, Json>).subject === "$anonymous";
   const caller: Json = anonymous
@@ -590,22 +612,14 @@ export function enforceAccess(
     const row = host.get({ kind: "collection", name: collection }, key) as Json;
     return row !== null && row !== undefined && holds(policy.read as RuleJson, caller, { key, row }, clock, noRows);
   };
-  // Triggers run between definer(true) and definer(false), with the application's rights.
-  let definer = 0;
   const guard = (name: unknown) => {
     const policy = typeof name === "string" && definer === 0 ? policies.get(name) : undefined;
     return policy ? new Guard(name as string, policy, caller, clock, readable) : undefined;
   };
   const name = (reference: any): string | undefined =>
     typeof reference?.collection === "string" ? reference.collection : reference?.collection?.name ?? reference?.name;
-  return Object.freeze({
+  return { elevate, depth, host: Object.freeze({
     ...host,
-    definer(on: unknown) {
-      if (on === true) definer++;
-      else if (on === false && definer > 0) definer--;
-      else throw Object.assign(new Error(on === false ? "definer(false) without a matching definer(true)" : "definer takes true or false"), { code: "INVALID_VALUE" });
-      return null;
-    },
     get(reference: any, key: any) {
       const rule = reference?.kind === "derived" && definer === 0 ? derived.get(reference.name) : undefined;
       if (rule && !holds(rule, caller, { key: "", row: key ?? null }, clock, noRows)) {
@@ -656,5 +670,5 @@ export function enforceAccess(
       if (access && access.admit(key, host.get(reference, key), undefined) === skip) return null;
       return host.delete(reference, key);
     },
-  });
+  }) };
 }
