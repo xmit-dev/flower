@@ -56,7 +56,7 @@ libc = "0.2"
 # Guest modules build separately for wasm32-unknown-unknown; plain cargo
 # commands at the root still select only the server.
 [workspace]
-members = ["crates/flower-sdk", "examples/goblin-pizza-rs"]
+members = ["crates/flower-sdk", "crates/flower-client", "crates/flower-worker", "examples/goblin-pizza-rs"]
 
 [profile.release]
 lto = "thin"
