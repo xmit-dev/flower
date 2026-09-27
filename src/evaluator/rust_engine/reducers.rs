@@ -34,8 +34,15 @@ impl Engine<'_> {
                 .cloned()
                 .unwrap_or_default()
         } else {
-            self.indexed_rows(&query)?
-                .into_iter()
+            let rows = self.indexed_rows(&query)?;
+            // The cell depends on its bucket, which graph maintenance feeds
+            // every row change within, but a certificate checks the bucket by
+            // its index entries, which a row changing in place leaves alone.
+            // Certify the rows themselves, as a query over the bucket would.
+            for (key, _) in &rows {
+                self.record_read(source_id(&query.collection, key));
+            }
+            rows.into_iter()
                 .map(|(key, value)| indexes::SourceDelta {
                     key,
                     previous: None,

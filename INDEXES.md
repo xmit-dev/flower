@@ -37,7 +37,7 @@ export default define({
 });
 ```
 
-Only those HTTP methods are public. The same `read` method can be watched over SSE. Materializing `total` retains its accumulator; a materialized derived value that reads it also retains it. An unmaterialized aggregate computed only for a query can be rebuilt from matching rows for that query.
+Only those HTTP methods are public. The same `read` method can be watched over SSE. Materializing `total` retains its accumulator; a materialized derived value that reads it also retains it. An unmaterialized aggregate computed only for a query can be rebuilt from matching rows for that query; that query's cached result and watches then depend on those rows, so a row changing within the group invalidates it, not only a row joining or leaving.
 
 `.index(name, fields)` returns a new collection reference; keep and pass the one that carries the index. Index names and fields are checked against the record type, and `orders.by("byShop").eq(shop)` takes a value of the `shop` field's type.
 

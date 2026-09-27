@@ -1,5 +1,6 @@
 use super::*;
 use crate::evaluator::rust_engine::indexes::IndexSpec;
+use crate::evaluator::{Observation, touched};
 
 fn schema(aggregate: bool) -> Schema {
     let index = IndexSpec {
@@ -250,6 +251,45 @@ fn composite_index_distinguishes_absent_and_null_and_canonicalizes_objects() {
     );
     let result = run(data, json!({"name":"read"}), "query", None, &fixture).unwrap();
     assert_eq!(result.value, json!([{"shop":{"a":1,"b":2},"active":null}]));
+}
+
+#[test]
+fn a_query_reading_an_aggregate_depends_on_the_rows_it_counts_not_only_on_membership() {
+    let fixture = Reducer::default();
+    let mut data = Records::default();
+    let writes: Vec<_> = (0..3).map(|key| json!({"collection":"orders","key":key.to_string(),"value":{"shop":"a","cents":10}})).collect();
+    // Declared, not materialized: every query computes it from its bucket's rows.
+    deploy_schema(&mut data, json!({"writes":writes}), schema(true), &fixture);
+    let read = |data: &Records| {
+        let result = run(data.clone(), json!({"name":"read","args":"a"}), "query", None, &fixture).unwrap();
+        assert!(result.query_cacheable);
+        (result.value, result.query_certificate.unwrap())
+    };
+    let (value, certificate) = read(&data);
+    assert_eq!(value, 30);
+    // A row changes inside the bucket: its membership stays, the total does not.
+    let result = run(data.clone(), json!({"name":"change","requestId":"inside","args":[{"key":"1","value":{"shop":"a","cents":25}}]}), "mutation", None, &fixture).unwrap();
+    let written: Vec<String> = result.puts.keys().cloned().collect();
+    apply(&mut data, result);
+    assert!(!certificate.valid(&data), "the cached total is stale");
+    let observed: Vec<String> = certificate.observations().map(|observation| match observation {
+        Observation::Key(id) => id.to_owned(),
+        Observation::Range { marker, .. } => marker.to_owned(),
+    }).collect();
+    assert!(
+        written.iter().any(|key| {
+            let mut ids = Vec::new();
+            touched(key, |id| ids.push(id.to_owned()));
+            ids.iter().any(|id| observed.contains(id))
+        }),
+        "a watch wakes: {written:?} touch none of {observed:?}"
+    );
+    let (value, certificate) = read(&data);
+    assert_eq!(value, 45);
+    // Another bucket's rows leave it alone.
+    let result = run(data.clone(), json!({"name":"change","requestId":"elsewhere","args":[{"key":"9","value":{"shop":"b","cents":5}}]}), "mutation", None, &fixture).unwrap();
+    apply(&mut data, result);
+    assert!(certificate.valid(&data), "an unrelated bucket is unchanged");
 }
 
 #[test]
