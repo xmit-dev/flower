@@ -153,3 +153,34 @@ Admin calls send `authorization: Bearer <token>`, never retry, and use the same 
 `MockTransport::new([Step::..])` (scripted replies in order, then hangs), `Step::{Reply(MockReply), Fail(FlowerError), Hang, Handle(..)}`,
 `MockReply::{ok, result, json, failure, text, events, event_stream, stream}`, `StreamHandle::{push, close, error, cancelled}`,
 `mock.requests() -> Vec<Recorded { method, url, headers, body, json, lane }>` with `.aborted()`.
+
+## Notes for dependents
+
+- Turn on `serde_json/float_roundtrip` in your own crate if you parse Flower values and hash or
+  re-canonicalize them (this crate leaves it off; see `DEVIATIONS.md`). Never enable
+  `preserve_order`/`arbitrary_precision` anywhere in a build that includes this crate
+  (`tests/guard.rs` fails if they are unified in).
+- A client makes two kinds of connections per origin: unary calls (`connections`) and watches
+  (`watch_connections`). Share one `FlowerClient` (or one `Arc<dyn Transport>`) per process.
+- `FlowerError::is_transient()` is the retry predicate; `kind` tells timeouts, cancels, transport,
+  decode and invalid-argument errors apart without parsing codes.
+
+## Tests
+
+```sh
+cargo test -p flower-client                      # everything; the server test skips when it can't run
+cargo test -p flower-client --test server -- --nocapture
+node crates/flower-client/parity/canonical.ts > crates/flower-client/tests/vectors/canonical.json   # regenerate goldens
+```
+
+- `tests/json.rs`, `tests/guard.rs`: canonical JSON against goldens made by `sdk/json.ts` in Node
+  (470 cases incl. 400 seeded random doubles), feature guards.
+- `tests/client.rs`, `tests/watch.rs`: ports of `client.test.ts` / `watch.test.ts` on
+  `MockTransport` with paused time, SSE chunk-boundary fuzzing.
+- `tests/transport.rs`: ports of `http2.test.ts` against in-process hyper h2c/HTTP/1.1, raw h2 and
+  TLS (tokio-rustls) servers.
+- `tests/server.rs`: the real server (`$FLOWER_BIN`, default `~/src/flower/target/release/flower`),
+  one node that is its own partition catalog, `FLOWER_ADMIN_TOKEN` and a 0600
+  `FLOWER_KEYRING_FILE`; bundles with the SDK (`$FLOWER_SDK_DIR`, this checkout's `sdk/`, or
+  `~/src/flower/sdk`, whichever has `node_modules/esbuild`). Skips (and passes) when the binary,
+  Node or esbuild is missing.
