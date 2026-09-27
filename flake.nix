@@ -240,9 +240,13 @@
         flower-sdk = self.packages.${final.stdenv.hostPlatform.system}.sdk;
       };
 
-      # services.flower: a Flower node under systemd. See nix/module.nix.
+      # services.flower.instances.<name>: Flower nodes under systemd. See nix/module.nix.
       nixosModules = {
-        flower = import ./nix/module.nix self;
+        # A key, so importing it twice (say, from Trinity's module and a host's config) declares it once.
+        flower = {
+          key = "github:xmit-dev/flower#nixosModules.flower";
+          imports = [ (import ./nix/module.nix self) ];
+        };
         default = self.nixosModules.flower;
       };
 

@@ -82,21 +82,22 @@ cargo build
 
 On Nix, `nix develop -c cargo build` uses the pinned Rust 1.98.1 toolchain; the development shell also includes Node 26.10.0. `nix build` builds the standalone server without Node.
 
-`nix build .#sdk` builds `@flower-js/sdk` as npm installs it, under `lib/node_modules/@flower-js/sdk`, with the SDK's own `flower` command in `bin/` (`nix run .#cli -- --help`). Other flakes get both packages from `overlays.default` (`pkgs.flower`, `pkgs.flower-sdk`). A NixOS host can run a node with `nixosModules.default`:
+`nix build .#sdk` builds `@flower-js/sdk` as npm installs it, under `lib/node_modules/@flower-js/sdk`, with the SDK's own `flower` command in `bin/` (`nix run .#cli -- --help`). Other flakes get both packages from `overlays.default` (`pkgs.flower`, `pkgs.flower-sdk`). A NixOS host runs any number of nodes with `nixosModules.default`:
 
 ```nix
 {
   imports = [ flower.nixosModules.default ];
-  services.flower = {
-    enable = true;
-    listen = "127.0.0.1:7101";
-    adminTokenFile = "/run/secrets/flower-admin-token"; # kept out of the Nix store
-    initialize = true; # bootstrap a one-member cluster on first start
+  services.flower.instances = {
+    main = {
+      listen = "127.0.0.1:7101";
+      initialize = true; # bootstrap a one-member cluster on first start
+    };
+    staging.listen = "127.0.0.1:7102";
   };
 }
 ```
 
-Data and a generated keyring (unless `keyringFile` names one) live in `/var/lib/flower`. `nix flake check` builds both packages and, on Linux, boots a VM that bootstraps a node, deploys `examples/orders.ts` with the packaged SDK and calls it.
+Each instance is a `flower-<name>` service with its data in `/var/lib/private/flower-<name>`, and generates its operator token and keyring there unless `adminTokenFile` and `keyringFile` name files kept out of the Nix store. The `flower-<name>` command is the SDK's, aimed at the instance, with its operator token for root: `sudo flower-main deploy app.ts`. Modules that deploy read `services.flower.instances.<name>.url` and `.adminTokenPath` (for systemd's LoadCredential). `nix flake check` builds both packages and, on Linux, boots a VM that runs two instances, deploys `examples/orders.ts` to each with the packaged SDK, and checks that they keep their data apart and across restarts.
 
 [OpenTelemetry reporting](TELEMETRY.md) adds opt-in request traces and detailed query, writer, evaluator, storage, and Raft metrics. The [benchmark profiler](bench/README.md#opentelemetry-reporting) captures a local report without a separate collector service.
 
