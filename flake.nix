@@ -105,6 +105,47 @@
           meta.platforms = supportedSystems;
         };
 
+      lib = nixpkgs.lib;
+      version = (lib.importTOML ./Cargo.toml).package.version;
+
+      # Only what each build reads, so edits to docs, benchmarks or the other
+      # half of the repository don't rebuild it.
+      serverSrc = lib.fileset.toSource {
+        root = ./.;
+        fileset = lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./src
+          # Workspace members: Cargo reads their manifests to resolve the lockfile.
+          ./crates
+          ./examples/goblin-pizza-rs
+          ./vendor/openraft
+          ./vendor/quickjs-ng/quickjs.wasm
+          ./runtime/engine.js
+        ];
+      };
+
+      sdkSrc = lib.fileset.toSource {
+        root = ./.;
+        fileset = lib.fileset.unions [
+          ./package.json
+          ./package-lock.json
+          ./tsconfig.json
+          ./tsconfig.build.json
+          ./scripts/build-sdk.mjs
+          ./sdk
+          ./runtime/engine.js
+          ./README.md
+          ./LICENSE-MIT
+        ];
+      };
+
+      commonMeta = pkgs: {
+        homepage = "https://github.com/xmit-dev/flower";
+        license = pkgs.lib.licenses.mit;
+        platforms = supportedSystems;
+      };
+
       mkFlower =
         pkgs:
         let
@@ -116,23 +157,47 @@
         })
           {
             pname = "flower";
-            version = "0.1.0";
+            inherit version;
 
-            src = ./.;
+            src = serverSrc;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [
               "--bin"
               "flower"
             ];
+            # The Rust suite (cargo test, tests/*.rs) runs from a checkout; some of
+            # its timing-sensitive cases would make the package flaky to build.
+            doCheck = false;
 
-            meta = {
+            meta = commonMeta pkgs // {
               description = "A Raft-backed database of reactive TypeScript values";
-              homepage = "https://github.com/xmit-dev/flower";
-              license = pkgs.lib.licenses.mit;
               mainProgram = "flower";
-              platforms = supportedSystems;
             };
           };
+
+      # @flower-js/sdk as npm would install it: dist/, package.json and its
+      # runtime dependency (esbuild), under lib/node_modules/@flower-js/sdk.
+      # bin/flower is the SDK's command (build, deploy, init, call…), not the server.
+      mkSdk =
+        pkgs:
+        pkgs.buildNpmPackage {
+          pname = "flower-sdk";
+          inherit version;
+
+          src = sdkSrc;
+          nodejs = pkgs.nodejs_26;
+          # Straight from package-lock.json's integrity hashes: no npmDepsHash to update.
+          npmDeps = pkgs.importNpmLock {
+            package = lib.importJSON ./package.json;
+            packageLock = lib.importJSON ./package-lock.json;
+          };
+          inherit (pkgs.importNpmLock) npmConfigHook;
+
+          meta = commonMeta pkgs // {
+            description = "TypeScript SDK and command for the Flower reactive database";
+            mainProgram = "flower";
+          };
+        };
     in
     {
       packages = forAllSystems (
@@ -143,6 +208,7 @@
         {
           inherit flower;
           default = flower;
+          sdk = mkSdk pkgs;
           wasi-sdk = mkWasiSdk pkgs;
         }
       );
@@ -150,17 +216,35 @@
       apps = forAllSystems (
         pkgs:
         let
-          flower = mkFlower pkgs;
-          app = {
+          packages = self.packages.${pkgs.stdenv.hostPlatform.system};
+          server = {
             type = "app";
-            program = "${flower}/bin/flower";
+            program = "${packages.flower}/bin/flower";
+            meta.description = "The Flower server";
           };
         in
         {
-          default = app;
-          flower = app;
+          default = server;
+          flower = server;
+          cli = {
+            type = "app";
+            program = "${packages.sdk}/bin/flower";
+            meta.description = "The SDK's flower command: build, deploy, init, call, query, watch, keys";
+          };
         }
       );
+
+      # pkgs.flower and pkgs.flower-sdk, built with this flake's pinned Nixpkgs and Rust.
+      overlays.default = final: _prev: {
+        flower = self.packages.${final.stdenv.hostPlatform.system}.flower;
+        flower-sdk = self.packages.${final.stdenv.hostPlatform.system}.sdk;
+      };
+
+      # services.flower: a Flower node under systemd. See nix/module.nix.
+      nixosModules = {
+        flower = import ./nix/module.nix self;
+        default = self.nixosModules.flower;
+      };
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
@@ -181,9 +265,25 @@
         };
       });
 
-      checks = forAllSystems (pkgs: {
-        flower = mkFlower pkgs;
-      });
+      checks = forAllSystems (
+        pkgs:
+        let
+          packages = self.packages.${pkgs.stdenv.hostPlatform.system};
+        in
+        {
+          inherit (packages) flower sdk;
+        }
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          # A NixOS VM: the module bootstraps a node, the SDK deploys an example to it.
+          nixos = import ./nix/test.nix {
+            inherit pkgs;
+            module = self.nixosModules.flower;
+            inherit (packages) sdk;
+            example = ./examples/orders.ts;
+            exampleArgs = ./examples/orders.create.json;
+          };
+        }
+      );
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };

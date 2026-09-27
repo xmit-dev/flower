@@ -82,6 +82,22 @@ cargo build
 
 On Nix, `nix develop -c cargo build` uses the pinned Rust 1.98.1 toolchain; the development shell also includes Node 26.10.0. `nix build` builds the standalone server without Node.
 
+`nix build .#sdk` builds `@flower-js/sdk` as npm installs it, under `lib/node_modules/@flower-js/sdk`, with the SDK's own `flower` command in `bin/` (`nix run .#cli -- --help`). Other flakes get both packages from `overlays.default` (`pkgs.flower`, `pkgs.flower-sdk`). A NixOS host can run a node with `nixosModules.default`:
+
+```nix
+{
+  imports = [ flower.nixosModules.default ];
+  services.flower = {
+    enable = true;
+    listen = "127.0.0.1:7101";
+    adminTokenFile = "/run/secrets/flower-admin-token"; # kept out of the Nix store
+    initialize = true; # bootstrap a one-member cluster on first start
+  };
+}
+```
+
+Data and a generated keyring (unless `keyringFile` names one) live in `/var/lib/flower`. `nix flake check` builds both packages and, on Linux, boots a VM that bootstraps a node, deploys `examples/orders.ts` with the packaged SDK and calls it.
+
 [OpenTelemetry reporting](TELEMETRY.md) adds opt-in request traces and detailed query, writer, evaluator, storage, and Raft metrics. The [benchmark profiler](bench/README.md#opentelemetry-reporting) captures a local report without a separate collector service.
 
 Choose an operator token and use the same value in both terminals. It protects deployment, cluster administration, and peer RPCs; ordinary method callers do not receive it.
