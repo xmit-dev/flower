@@ -139,7 +139,7 @@ Entropy (opcode 0) is available only to mutations.
 {
   "definitions": {"name": {"kind": "derived|query|mutation|transaction",
                            "consistency": "replica-local", "receipt": false,
-                           "aggregate": {…}}},
+                           "aggregate": {…}, "access": {…}}},
   "http": {"alias": {"name": "definition", "kind": "query|mutation|transaction",
                      "consistency": "replica-local", "receipt": false}},
   "maintenance": {"name": "…", "kind": "mutation", "onError": {…}} ,
@@ -163,7 +163,10 @@ host enforces it on the collection operations of queries and mutations that
 have a caller; see `src/evaluator/rust_engine/access.rs`. The host `set`
 operation takes an optional fourth argument `{"clear": [field, …]}`: hidden
 fields the value leaves out are removed instead of kept (the SDK sends it only
-when `ctx.set(…, {clear})` lists fields).
+when `ctx.set(…, {clear})` lists fields). A derived definition's optional
+`access` is one such rule over `principal`, `args` (the arguments it is read
+with) and `now`: a method with a caller may `get` the value only where it
+holds, and otherwise fails with `ACCESS_DENIED`.
 
 ## Resource limits
 

@@ -700,6 +700,7 @@ const MANIFEST: &str = r#"
             if (Object.hasOwn(definition, 'consistency')) entry.consistency = definition.consistency;
             if (Object.hasOwn(definition, 'receipt')) entry.receipt = definition.receipt;
             if (Object.hasOwn(definition, 'aggregate')) entry.aggregate = definition.aggregate;
+            if (Object.hasOwn(definition, 'access')) entry.access = definition.access;
         }
         for (const key of Object.keys(app)) {
             if (key === 'definitions' || app[key] === undefined) continue;

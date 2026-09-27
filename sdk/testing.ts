@@ -220,7 +220,7 @@ export class TestDatabase<App = FlowerModule> {
       if (!Object.hasOwn(definitions, method)) throw Object.assign(new Error(`Unknown definition ${method}`), { code: "DEFINITION_MISSING" });
       // Methods see collections as their caller may, like on the server.
       const host = withIdentity(ctx);
-      return definitions[method].compute(caller ? enforceAccess(host, this.module.collections ?? [], identity as unknown as Json) : host, input);
+      return definitions[method].compute(caller ? enforceAccess(host, this.module.collections ?? [], identity as unknown as Json, definitions) : host, input);
     };
     const cell = (cellName: string, input: Json, ctx: any) => {
       const definition = definitions[cellName];

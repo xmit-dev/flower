@@ -25,6 +25,9 @@ pub struct Schema {
     /// Access policies by collection name, enforced on methods' reads and writes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub policies: BTreeMap<String, super::Policy>,
+    /// Who may read each derived value from a method, by definition name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub derived_access: BTreeMap<String, super::Rule>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -79,6 +82,12 @@ impl Schema {
         let policies = self.policies.iter().fold(0usize, |bytes, (name, policy)| {
             bytes.saturating_add(128 + name.len() + policy.allocation_cost())
         });
+        let policies = self
+            .derived_access
+            .iter()
+            .fold(policies, |bytes, (name, rule)| {
+                bytes.saturating_add(128 + name.len() + rule.allocation_cost())
+            });
         policies.saturating_add(self.indexes.iter().chain(self.aggregates.values()).fold(
             self.aggregates
                 .keys()
@@ -120,6 +129,14 @@ impl Schema {
                 EngineError::new("INPUT_INVALID", format!("Malformed access policy: {error}"))
             })?;
         }
+        for (name, rule) in &self.derived_access {
+            if name.is_empty() {
+                return Err(EngineError::new("INPUT_INVALID", "Malformed access rule"));
+            }
+            rule.validate_derived().map_err(|error| {
+                EngineError::new("INPUT_INVALID", format!("Malformed access rule: {error}"))
+            })?;
+        }
         Ok(self)
     }
     pub(super) fn load(value: Option<&Value>) -> EngineResult<Self> {
@@ -134,7 +151,10 @@ impl Schema {
             .validate()
     }
     pub(super) fn empty(&self) -> bool {
-        self.indexes.is_empty() && self.aggregates.is_empty() && self.policies.is_empty()
+        self.indexes.is_empty()
+            && self.aggregates.is_empty()
+            && self.policies.is_empty()
+            && self.derived_access.is_empty()
     }
 }
 

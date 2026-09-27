@@ -13,7 +13,7 @@ mod indexes;
 mod ranges;
 mod reducers;
 mod windows;
-pub use access::Policy;
+pub use access::{Policy, Rule};
 pub use indexes::{IndexSpec, Schema};
 pub(crate) use indexes::{staged_entries, staged_prefixes, staged_schema, staged_schema_bytes};
 mod json;
@@ -1130,6 +1130,7 @@ impl Engine<'_> {
                 } else {
                     let name = reference_name(reference, "derived")?.to_owned();
                     let args = normalize(argument(1).clone(), "INVALID_VALUE")?;
+                    self.admit_derived_read(&name, &args)?;
                     self.temporary_root = Some(Reference {
                         name: name.clone(),
                         args: args.clone(),

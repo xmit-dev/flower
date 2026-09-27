@@ -14,7 +14,7 @@ export type {
   ApiOf, ArgsOf, ResultOf, AliasOf, QueryAliasOf, MutationAliasOf, ArgsParameter,
   TaskFailure, Task, Change, Trigger, Usable, ComponentParts, Component,
 } from "./core.ts";
-export type { Rule, RuleLike, Operand, OperandLike, KeyOperand, RowFields, PrincipalFields, AccessScope, AccessRules, FieldAccess, CollectionAccess, AccessManifest } from "./access.ts";
+export type { Rule, RuleLike, Operand, OperandLike, KeyOperand, ArgsOperand, DerivedScope, DerivedAccess, RowFields, PrincipalFields, AccessScope, AccessRules, FieldAccess, CollectionAccess, AccessManifest } from "./access.ts";
 export { define } from "./define.ts";
 export type { ModuleConfig, AuthConfig, Authenticate, Authenticator } from "./define.ts";
 export { aggregate } from "./indexing.ts";

@@ -314,6 +314,48 @@ test("triggers act with the application's rights: full before and after values, 
   assert.deepEqual(roots(), ['root:["seen","bob"]']);
 });
 
+test("derived values say who may read them, by the caller and the arguments", async () => {
+  const count = (ctx: any, owner: string) => ctx.scan(notes).filter((row: any) => row.value.owner === owner).length;
+  // Each caller may read its own count; admins any.
+  const countFor = derive("countFor", count, {
+    access: ({ principal, args }) => args.eq(principal.subject).or(principal.claim("role").eq("admin")),
+  });
+  const countOf = derive("countOf", (ctx, args: { owner: string }) => count(ctx, args.owner), {
+    access: ({ principal, args }) => args.at("owner").eq(principal.subject),
+  });
+  const everyone = derive("everyone", (ctx) => ctx.scan(notes).length);
+  const app = define({
+    collections: [notes],
+    definitions: [countFor, countOf, everyone],
+    auth: { authenticate: (_ctx, credentials) => typeof credentials === "string" ? { subject: credentials, claims: { role: credentials === "root" ? "admin" : "user" } } : null },
+    http: {
+      put: mutation("put", { args: v.object({ id: v.string(), note: noteSchema }) }, (ctx, { id, note }) => { ctx.set(notes, id, note); return null; }),
+      readFor: query("readFor", { access: "public", args: v.string() }, (ctx, owner) => ctx.get(countFor, owner)),
+      readOf: query("readOf", { access: "public", args: v.string() }, (ctx, owner) => ctx.get(countOf, { owner })),
+      readAll: query("readAll", { access: "public" }, (ctx) => ctx.get(everyone)),
+    },
+  });
+  assert.deepEqual((app.definitions as any).countFor.access, {
+    any: [{ eq: [{ ref: ["args"] }, { ref: ["principal", "subject"] }] }, { eq: [{ ref: ["principal", "claims", "role"] }, { value: "admin" }] }],
+  });
+  assert.equal((app.definitions as any).everyone.access, undefined);
+  const db = await testDatabase(app);
+  const as = (credentials?: string) => credentials === undefined ? {} : { credentials };
+  for (const [id, owner] of [["a1", "alice"], ["a2", "alice"], ["b1", "bob"]]) db.mutate("put", { id, note: { owner, rank: 1, text: id } }, as("root"));
+  assert.equal(db.query("readFor", "alice", as("alice")), 2);
+  assert.equal(db.query("readOf", "alice", as("alice")), 2);
+  assert.equal(db.query("readFor", "bob", as("root")), 1);
+  const denied = (run: () => unknown) => assert.throws(run, (error: any) => error.failure?.code === "ACCESS_DENIED" && /denies reading/.test(error.failure.message));
+  denied(() => db.query("readFor", "bob", as("alice")));
+  denied(() => db.query("readOf", "bob", as("alice")));
+  denied(() => db.query("readFor", "alice", as()));
+  // Without a rule, any method may read it: its author decides.
+  assert.equal(db.query("readAll", null, as()), 3);
+  assert.throws(() => derive("bad", count, { access: 1 as never }), /must be a rule, true or false/);
+  // @ts-expect-error: the arguments are a string.
+  derive("typed", count, { access: ({ args }) => args.eq(1) });
+});
+
 test("a collection with access must be declared, and callers' views never reach the auth hook", async () => {
   const sessions = collection<{ subject: string }>("sessions").access({ read: false, insert: true });
   const orphan = collection<{ owner: string }>("orphan").access({ read: true });

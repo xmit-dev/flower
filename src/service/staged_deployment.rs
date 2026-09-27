@@ -423,6 +423,7 @@ async fn start(app: &App, request_id: String, bundle: Value) -> Result<Value, Ap
         indexes: added,
         aggregates: BTreeMap::new(),
         policies: BTreeMap::new(),
+        derived_access: BTreeMap::new(),
     };
     let command = command(
         &state,

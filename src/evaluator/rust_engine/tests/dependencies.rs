@@ -182,6 +182,7 @@ fn certificates_track_collection_and_index_phantoms_but_skip_unrelated_buckets()
     let mut data = Records::new();
     let schema = Schema {
         policies: Default::default(),
+        derived_access: Default::default(),
         indexes: vec![indexes::IndexSpec {
             collection: "items".into(),
             fields: vec!["group".into()],
@@ -293,6 +294,7 @@ fn writes_that_invalidate_a_certificate_touch_what_it_observed() {
     let mut data = Records::from([(source_id("items", "first"), json!({"group":"a"}))]);
     let schema = Schema {
         policies: Default::default(),
+        derived_access: Default::default(),
         indexes: vec![indexes::IndexSpec {
             collection: "items".into(),
             fields: vec!["group".into()],

@@ -89,6 +89,37 @@ fn fixture() -> Fixture {
             (|args, host| host("definer", json!([args]))) as Callback,
         ),
         (
+            // Derived: every note of an owner, whoever asks.
+            "countFor",
+            (|args, host| {
+                let owner = args.get("owner").unwrap_or(args).clone();
+                let rows = host("scan", json!([notes()]))?;
+                let count = rows
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| row["value"]["owner"] == owner)
+                    .count();
+                Ok(json!(count))
+            }) as Callback,
+        ),
+        (
+            "readCount",
+            (|args, host| get(host, "derived", "countFor", args.clone())) as Callback,
+        ),
+        (
+            "total",
+            (|_, host| {
+                Ok(json!(
+                    host("scan", json!([notes()]))?.as_array().unwrap().len()
+                ))
+            }) as Callback,
+        ),
+        (
+            "readTotal",
+            (|_, host| get(host, "derived", "total", Value::Null)) as Callback,
+        ),
+        (
             "setWith",
             (|args, host| {
                 host(
@@ -115,11 +146,17 @@ fn policy() -> Value {
 }
 
 fn install(data: &mut Records, fixture: &Fixture) {
-    install_with(data, fixture, policy(), None);
+    install_with(data, fixture, policy(), None, None);
 }
 
 /// The notes fixture's rows (or `writes`) under another policy.
-fn install_with(data: &mut Records, fixture: &Fixture, policy: Value, writes: Option<Value>) {
+fn install_with(
+    data: &mut Records,
+    fixture: &Fixture,
+    policy: Value,
+    writes: Option<Value>,
+    derived: Option<Value>,
+) {
     let spec = |field: &str| IndexSpec {
         collection: "notes".into(),
         fields: vec![field.into()],
@@ -144,6 +181,9 @@ fn install_with(data: &mut Records, fixture: &Fixture, policy: Value, writes: Op
                 "notes".into(),
                 serde_json::from_value(policy).unwrap(),
             )]),
+            derived_access: derived
+                .map(|rules| serde_json::from_value(rules).unwrap())
+                .unwrap_or_default(),
         }),
     )
     .unwrap();
@@ -546,7 +586,7 @@ fn policy_overhead() {
 fn with_policy(policy: Value, writes: Option<Value>) -> (Records, Fixture) {
     let fixture = fixture();
     let mut data = Records::default();
-    install_with(&mut data, &fixture, policy, writes);
+    install_with(&mut data, &fixture, policy, writes, None);
     (data, fixture)
 }
 
@@ -865,4 +905,66 @@ fn definer_brackets_act_with_the_applications_rights() {
     .err()
     .expect("query");
     assert_eq!(error.code, "QUERY_WRITE_FORBIDDEN");
+}
+
+#[test]
+fn derived_values_answer_only_the_callers_their_rule_allows() {
+    // countFor computes with the application's rights, over every row; each
+    // caller may read only its own count, by string or object arguments.
+    let mine = json!({"any":[
+        {"eq":[{"ref":["args"]},{"ref":["principal","subject"]}]},
+        {"eq":[{"ref":["args","owner"]},{"ref":["principal","subject"]}]},
+    ]});
+    let fixture = fixture();
+    let mut data = Records::default();
+    install_with(
+        &mut data,
+        &fixture,
+        policy(),
+        None,
+        Some(json!({"countFor": mine})),
+    );
+    let read = |args: Value, principal: Option<Value>| {
+        call(&data, &fixture, "query", "readCount", args, principal)
+    };
+    assert_eq!(read(json!("alice"), Some(alice())).unwrap().value, 3);
+    assert_eq!(
+        read(json!({"owner":"alice"}), Some(alice())).unwrap().value,
+        3
+    );
+    for (args, principal) in [
+        (json!("bob"), Some(alice())),
+        (json!({"owner":"bob"}), Some(alice())),
+        (json!("alice"), Some(json!({"subject":"$anonymous"}))),
+        (json!("alice"), Some(Value::Null)),
+        (json!("alice"), Some(admin())),
+    ] {
+        let error = read(args, principal).err().expect("denied");
+        assert_eq!(error.code, "ACCESS_DENIED");
+        assert_eq!(error.message, "Access policy denies reading countFor");
+    }
+    // Without a caller nothing is checked, and values without a rule stay open.
+    assert_eq!(read(json!("bob"), None).unwrap().value, 2);
+    assert_eq!(
+        call(
+            &data,
+            &fixture,
+            "query",
+            "readTotal",
+            Value::Null,
+            Some(alice())
+        )
+        .unwrap()
+        .value,
+        6
+    );
+    // Rules see principal, args and now only.
+    for invalid in [
+        json!({"exists":{"ref":["row","owner"]}}),
+        json!({"exists":{"ref":["key"]}}),
+        json!({"exists":{"ref":["args",""]}}),
+    ] {
+        let rule: crate::evaluator::rust_engine::Rule = serde_json::from_value(invalid).unwrap();
+        assert!(rule.validate_derived().is_err());
+    }
 }

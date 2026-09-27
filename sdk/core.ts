@@ -1,7 +1,7 @@
 import { canonicalJson, type Json } from "./json.ts";
 import { schema as adopt, ValidationError, type Infer, type Schema, type SchemaLike } from "./schema.ts";
 import type { ManagedKey } from "./keys.ts";
-import { compileAccess, type AccessManifest, type CollectionAccess } from "./access.ts";
+import { compileAccess, compileDerivedAccess, type AccessManifest, type CollectionAccess, type DerivedAccess } from "./access.ts";
 
 export type { Json };
 
@@ -302,16 +302,25 @@ export type Materialization<A> = "always" | { readonly each: Collection<any, A &
 export interface DeriveOptions<A> {
   /** Keep instances maintained: one argless instance, or one per row keyed like the collection. */
   readonly materialize?: Materialization<A>;
+  /**
+   * Who may read the value from a method. Derived values compute with the application's
+   * rights, over rows callers may not see; without a rule, any method may read them.
+   */
+  readonly access?: DerivedAccess<NoInfer<A>>;
 }
 const materializations = new WeakMap<object, Materialization<any>>();
 export function materializationOf(definition: object): Materialization<any> | undefined { return materializations.get(definition); }
+const derivedAccesses = new WeakMap<object, Json>();
+/** A derived value's compiled access rule, if it declares one. */
+export function derivedAccessOf(definition: object): Json | undefined { return derivedAccesses.get(definition); }
 
 /** A pure reactive function of database state. */
 export function derive<A = null, V = Json>(name: string, compute: (ctx: Context, args: A) => V, options: DeriveOptions<A> = {}): Derived<A, V> {
   requireName(name, "Definition name");
   if (typeof compute !== "function") throw new TypeError("A definition requires a compute function");
-  const settings = plainObject(options, "Derive options", ["materialize"]);
+  const settings = plainObject(options, "Derive options", ["materialize", "access"]);
   const definition = Object.freeze({ kind: "derived" as const, name, compute });
+  if (settings.access !== undefined) derivedAccesses.set(definition, compileDerivedAccess(settings.access as DerivedAccess<A>, name));
   if (settings.materialize !== undefined) {
     const policy = settings.materialize as Materialization<A>;
     if (policy !== "always" && (typeof policy !== "object" || policy === null || !collectionInfos.has((policy as { each: object }).each))) {

@@ -1,6 +1,6 @@
 import { canonicalJson, type Json } from "./json.ts";
 import {
-  collection, collectionInfo, component, fail, materializationOf, methodInfo, mutation, plainObject, query, rangeOwner, requireName, task, trigger,
+  collection, collectionInfo, component, derivedAccessOf, fail, materializationOf, methodInfo, mutation, plainObject, query, rangeOwner, requireName, task, trigger,
 } from "./core.ts";
 import type {
   Access, AuthorizationRequest, Collection, Component, ComponentParts, Definition, Derived, Failure, FlowerModule, HttpMap,
@@ -571,6 +571,7 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
     definitions[name] = Object.freeze({
       kind: definition.kind, name, compute: bound(definition, runtime),
       ...(aggregate ? { aggregate } : {}),
+      ...(definition.kind === "derived" && derivedAccessOf(definition) !== undefined ? { access: derivedAccessOf(definition) } : {}),
       ...(definition.kind === "queryMethod" && definition.consistency === "replica-local" ? { consistency: "replica-local" as const } : {}),
       ...(definition.kind === "mutationMethod" && definition.receipt === false ? { receipt: false as const } : {}),
     }) as Definition;

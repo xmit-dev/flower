@@ -25,6 +25,7 @@ fn install(data: &mut Records, fixture: &Fixture) {
         fixture,
         Some(Schema {
             policies: Default::default(),
+            derived_access: Default::default(),
             indexes: vec![spec()],
             aggregates: BTreeMap::new(),
         }),

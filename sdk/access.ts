@@ -57,6 +57,29 @@ export interface KeyOperand extends Operand<string> {
   at(...path: [string | number, ...(string | number)[]]): Operand<Json>;
 }
 
+/** A derived value's arguments; `at` reads an element or field of them. */
+export interface ArgsOperand<A> extends Operand<A> {
+  at(...path: [string | number, ...(string | number)[]]): Operand<Json>;
+}
+
+/** What a derived value's access rule can refer to. */
+export interface DerivedScope<A> {
+  readonly principal: PrincipalFields;
+  /** The arguments the method reads the value with. */
+  readonly args: ArgsOperand<A>;
+  readonly now: Operand<number>;
+  all(...rules: RuleLike[]): Rule;
+  any(...rules: RuleLike[]): Rule;
+  not(rule: RuleLike): Rule;
+}
+
+/**
+ * Who may read a derived value from a method: a rule, or a function of a DerivedScope
+ * returning one. Derived values compute with the application's rights, over every row,
+ * so a value built from guarded collections says who may see it.
+ */
+export type DerivedAccess<A> = RuleLike | ((scope: DerivedScope<A>) => RuleLike);
+
 /** A field of a row, then optionally a path into it. */
 export interface RowFields<T> {
   <F extends FieldOf<T>>(field: F): Operand<FieldValue<T, F>>;
@@ -171,10 +194,12 @@ class OperandNode implements Operand<any> {
   startsWith(prefix: unknown): Rule { return new RuleNode({ startsWith: [this[json], operand(prefix)] }); }
 }
 
-class KeyNode extends OperandNode implements KeyOperand {
+/** An operand whose parts `at` reads: a JSON key, or a derived value's arguments. */
+class PartsNode extends OperandNode implements KeyOperand {
   at(...path: unknown[]): Operand<Json> {
+    const base = (this[json] as { ref: string[] }).ref;
     const parts = path.map((part) => typeof part === "number" && Number.isSafeInteger(part) && part >= 0 ? String(part) : part);
-    return new OperandNode({ ref: ["key", ...segments(parts, "key.at")] });
+    return new OperandNode({ ref: [...base, ...segments(parts, `${base[0]}.at`)] });
   }
 }
 
@@ -196,20 +221,32 @@ function fieldsOf(root: "row" | "next"): RowFields<any> {
   return ((...path: unknown[]) => new OperandNode({ ref: [root, ...segments(path, root)] })) as RowFields<any>;
 }
 
-const scope: AccessScope<any> = Object.freeze({
-  principal: Object.freeze({
-    subject: new OperandNode({ ref: ["principal", "subject"] }),
-    tenant: new OperandNode({ ref: ["principal", "tenant"] }),
-    claim: (...path: unknown[]) => new OperandNode({ ref: ["principal", "claims", ...segments(path, "claim")] }),
-    authenticated: new RuleNode({ exists: { ref: ["principal", "subject"] } }),
-  }),
-  row: fieldsOf("row"),
-  next: fieldsOf("next"),
-  key: new KeyNode({ ref: ["key"] }),
-  now: new OperandNode({ ref: ["now"] }),
+const principalFields: PrincipalFields = Object.freeze({
+  subject: new OperandNode({ ref: ["principal", "subject"] }),
+  tenant: new OperandNode({ ref: ["principal", "tenant"] }),
+  claim: (...path: unknown[]) => new OperandNode({ ref: ["principal", "claims", ...segments(path, "claim")] }),
+  authenticated: new RuleNode({ exists: { ref: ["principal", "subject"] } }),
+});
+const combinators = {
   all: (...rules: RuleLike[]) => join("all", rules),
   any: (...rules: RuleLike[]) => join("any", rules),
   not: (rule: RuleLike) => new RuleNode({ not: ruleJson(rule, "not()") }),
+};
+
+const scope: AccessScope<any> = Object.freeze({
+  principal: principalFields,
+  row: fieldsOf("row"),
+  next: fieldsOf("next"),
+  key: new PartsNode({ ref: ["key"] }),
+  now: new OperandNode({ ref: ["now"] }),
+  ...combinators,
+});
+
+const derivedScope: DerivedScope<any> = Object.freeze({
+  principal: principalFields,
+  args: new PartsNode({ ref: ["args"] }),
+  now: new OperandNode({ ref: ["now"] }),
+  ...combinators,
 });
 
 /** Roots each rule may use, matching the server's checks. */
@@ -229,7 +266,8 @@ function checkRoots(body: unknown, allowed: readonly string[], label: string): v
   const ref = (body as { ref?: string[] }).ref;
   if (ref) {
     if (!allowed.includes(ref[0])) {
-      const hint = ref[0] === "next" ? "next only exists while writing" : "row doesn't exist yet on insert";
+      const hint = allowed.includes("args") ? "derived values' rules see principal, args and now"
+        : ref[0] === "next" ? "next only exists while writing" : "row doesn't exist yet on insert";
       throw new TypeError(`Access rule ${label} can't use ${ref.join(".")}: ${hint}`);
     }
     return;
@@ -241,6 +279,12 @@ function compiled(rule: unknown, allowed: readonly string[], label: string): Jso
   const body = ruleJson(rule, `Access rule ${label}`);
   checkRoots(body, allowed, label);
   return body as Json;
+}
+
+/** Compile a derived value's access rule into the form its manifest entry carries. */
+export function compileDerivedAccess<A>(declaration: DerivedAccess<A>, name: string): Json {
+  const rule = typeof declaration === "function" ? declaration(derivedScope as DerivedScope<A>) : declaration;
+  return deepFreeze(compiled(rule, ["principal", "args", "now"], `${name}.access`));
 }
 
 /** Compile an access declaration into the manifest form the server enforces. */
@@ -327,7 +371,8 @@ function resolve(operand: OperandJson, caller: Json, subject: Subject, clock: Cl
   if (root === "principal") return lookup(caller, path);
   if (root === "now") return clock.now();
   if (root === "key") return path.length ? lookup(keyParts(subject), path) : subject.key;
-  return lookup(root === "row" ? subject.row : subject.next, path);
+  // A derived value's rule sees its arguments where rows would be.
+  return lookup(root === "row" || root === "args" ? subject.row : subject.next, path);
 }
 
 /** Code point order, which is how the server (UTF-8 bytes) orders strings. */
@@ -485,9 +530,15 @@ function matches(value: Json, fields: readonly string[], expected: Json): boolea
  * A method's database context, as the server enforces collection access for its caller.
  * `host` is the raw context (collection references and encoded keys).
  */
-export function enforceAccess(host: Host, collections: readonly { name: string; access?: AccessManifest }[], principal: Json): Host {
+export function enforceAccess(
+  host: Host,
+  collections: readonly { name: string; access?: AccessManifest }[],
+  principal: Json,
+  definitions: Readonly<Record<string, { readonly kind: string; readonly access?: Json }>> = {},
+): Host {
   const policies = new Map(collections.filter((entry) => entry.access).map((entry) => [entry.name, entry.access!]));
-  if (!policies.size) return host;
+  const derived = new Map(Object.entries(definitions).filter(([, entry]) => entry.kind === "derived" && entry.access !== undefined).map(([name, entry]) => [name, entry.access as RuleJson]));
+  if (!policies.size && !derived.size) return host;
   const anonymous = principal === null || typeof principal !== "object" || Array.isArray(principal) ||
     (principal as Record<string, Json>).subject === "$anonymous";
   const caller: Json = anonymous
@@ -515,6 +566,10 @@ export function enforceAccess(host: Host, collections: readonly { name: string; 
       return null;
     },
     get(reference: any, key: any) {
+      const rule = reference?.kind === "derived" && definer === 0 ? derived.get(reference.name) : undefined;
+      if (rule && !holds(rule, caller, { key: "", row: key ?? null }, clock)) {
+        throw Object.assign(new Error(`Access policy denies reading ${reference.name}`), { code: "ACCESS_DENIED" });
+      }
       const value = host.get(reference, key);
       const access = reference?.kind === "collection" ? guard(reference.name) : undefined;
       if (!access || value === null) return value;

@@ -8,6 +8,7 @@ fn schema(aggregate: bool) -> Schema {
     };
     Schema {
         policies: Default::default(),
+        derived_access: Default::default(),
         indexes: vec![index.clone()],
         aggregates: if aggregate {
             BTreeMap::from([("total".into(), index)])
@@ -234,6 +235,7 @@ fn composite_index_distinguishes_absent_and_null_and_canonicalizes_objects() {
     let mut data = Records::default();
     let schema = Schema {
         policies: Default::default(),
+        derived_access: Default::default(),
         indexes: vec![IndexSpec {
             collection: "orders".into(),
             fields: vec!["shop".into(), "active".into()],
@@ -442,6 +444,7 @@ fn index_schema_metadata_reserves_memory_before_execution() {
     let mut data = Records::default();
     let oversized = Schema {
         policies: Default::default(),
+        derived_access: Default::default(),
         indexes: vec![IndexSpec {
             collection: "orders".into(),
             fields: vec!["x".repeat(8192)],

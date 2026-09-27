@@ -45,6 +45,10 @@ const log = trigger("log", notes, (ctx, change) => {
   ctx.set(audit, String(ctx.scan(audit).length).padStart(3, "0"), { by: ctx.principal()?.subject ?? null, secret: (change.after ?? change.before).secret ?? null });
 });
 const total = derive("total", (ctx) => ctx.scan(notes).length);
+// Counts every owner's rows, but tells each caller only its own count (admins any).
+const countFor = derive("countFor", (ctx, owner) => ctx.scan(notes).filter((row) => row.value.owner === owner).length, {
+  access: ({ principal, args }) => args.eq(principal.subject).or(principal.claim("role").eq("admin")),
+});
 const id = v.string({ min: 1 });
 const open = { access: "public" };
 const get = query("get", { ...open, args: id }, (ctx, key) => ctx.get(notes, key));
@@ -53,6 +57,7 @@ const mine = query("mine", open, (ctx) => ctx.query(notes.by("owner").eq(ctx.pri
 const page = query("page", { ...open, args: v.nullable(v.string()) }, (ctx, after) =>
   ctx.range(notes.by("rank").range({ limit: 2, ...(after ? { after } : {}) })));
 const count = query("count", open, (ctx) => ctx.get(total));
+const tally = query("tally", { ...open, args: id }, (ctx, owner) => ctx.get(countFor, owner));
 const put = mutation("put", { args: v.object({ id, note: v.json() }) }, (ctx, { id, note }) => { ctx.set(notes, id, note as any); return null; });
 const edit = mutation("edit", { args: v.object({ id, text: v.string() }) }, (ctx, { id, text }) => {
   const note = ctx.get(notes, id);
@@ -70,14 +75,14 @@ const clearToken = mutation("clearToken", { args: id }, (ctx, key) => {
 const entries = query("audit", open, (ctx) => ctx.scan(audit).map((row) => row.value));
 export default define({
   collections: [notes, audit],
-  definitions: [total],
+  definitions: [total, countFor],
   triggers: [log],
   auth: {
     authenticate: (_ctx, credentials) => typeof credentials === "string"
       ? { subject: credentials, claims: credentials === "root" ? { role: "admin" } : {} }
       : null,
   },
-  http: { get, list, mine, page, count, put, edit, remove, clearToken, audit: entries },
+  http: { get, list, mine, page, count, tally, put, edit, remove, clearToken, audit: entries },
 });`;
 }
 
@@ -114,8 +119,12 @@ try {
   const second = await value(alice.query("page", first.cursor));
   assert.deepEqual(second.rows.map((row) => row.key), ["a3"]);
   assert.equal(second.cursor, null);
-  // Derived values run without a caller: they see every row.
+  // Derived values run without a caller: they see every row, so they say who may read them.
   assert.equal(await value(alice.query("count")), 5);
+  assert.equal(await value(alice.query("tally", "alice")), 3);
+  assert.equal(await value(rootUser.query("tally", "bob")), 2);
+  await denied(alice.query("tally", "bob"));
+  await denied(anonymous.query("tally", "alice"));
 
   // Writes.
   await denied(mutate(alice, "put", { id: "b9", note: { owner: "bob", rank: 9, text: "forged" } }));

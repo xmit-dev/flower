@@ -108,14 +108,18 @@ enum Scope {
     Delete,
     FieldRead,
     FieldWrite,
+    /// Reading a derived value: the caller, the value's arguments and the time.
+    Derived,
 }
 
 impl Scope {
     fn allows(self, root: &str) -> bool {
         match root {
-            "principal" | "key" | "now" => true,
-            "row" => self != Scope::Insert,
+            "principal" | "now" => true,
+            "key" => self != Scope::Derived,
+            "row" => !matches!(self, Scope::Insert | Scope::Derived),
             "next" => matches!(self, Scope::Insert | Scope::Update | Scope::FieldWrite),
+            "args" => self == Scope::Derived,
             _ => false,
         }
     }
@@ -165,6 +169,15 @@ impl Policy {
 }
 
 impl Rule {
+    /// Checks for a derived value's rule: `principal`, `args` and `now` only.
+    pub fn validate_derived(&self) -> Result<(), String> {
+        self.validate(Scope::Derived, "access")
+    }
+
+    pub(super) fn allocation_cost(&self) -> usize {
+        self.cost()
+    }
+
     fn validate(&self, scope: Scope, label: &str) -> Result<(), String> {
         let mut nodes = 0usize;
         self.walk(scope, 1, &mut nodes)
@@ -232,7 +245,7 @@ impl Operand {
                     }
                     [] => false,
                 },
-                "key" => rest.iter().all(|segment| !segment.is_empty()),
+                "key" | "args" => rest.iter().all(|segment| !segment.is_empty()),
                 "now" => rest.is_empty(),
                 _ => !rest.is_empty() && rest.iter().all(|segment| !segment.is_empty()),
             },
@@ -509,7 +522,8 @@ impl Check {
                 "principal" => {
                     Term::Value(lookup(caller, &path[1..]).cloned().unwrap_or(Value::Null))
                 }
-                "row" => Term::Row(path[1..].to_vec()),
+                // A derived value's rule sees its arguments where rows would be.
+                "row" | "args" => Term::Row(path[1..].to_vec()),
                 "next" => Term::Next(path[1..].to_vec()),
                 "now" => Term::Now(json!(now)),
                 _ if path.len() > 1 => Term::KeyPart(path[1..].to_vec()),
@@ -616,6 +630,20 @@ struct FieldCheck {
     write: Option<Check>,
 }
 
+/// The principal as rules see it. Methods see an anonymous caller as null,
+/// and so do rules: only the tenant, a named partition's name, remains.
+fn caller(principal: &Value) -> Value {
+    match principal {
+        Value::Object(fields)
+            if fields.get("subject").and_then(Value::as_str) == Some("$anonymous") =>
+        {
+            json!({"tenant": fields.get("tenant").cloned().unwrap_or(Value::Null)})
+        }
+        Value::Object(_) => principal.clone(),
+        _ => json!({}),
+    }
+}
+
 /// One caller's view of a collection's policy, built once per invocation.
 #[derive(Debug)]
 pub(super) struct Access {
@@ -632,17 +660,7 @@ pub(super) struct Access {
 
 impl Access {
     fn new(collection: &str, policy: &Policy, principal: &Value, now: u64) -> Self {
-        // Methods see an anonymous caller as null, and so do rules. Only the
-        // tenant, a named partition's name, remains.
-        let caller = match principal {
-            Value::Object(fields)
-                if fields.get("subject").and_then(Value::as_str) == Some("$anonymous") =>
-            {
-                json!({"tenant": fields.get("tenant").cloned().unwrap_or(Value::Null)})
-            }
-            Value::Object(_) => principal.clone(),
-            _ => json!({}),
-        };
+        let caller = caller(principal);
         let clock = Clock::default();
         let check = |rule: &Rule| Check::new(rule, &caller, now, &clock);
         let fields: Vec<FieldCheck> = policy
@@ -888,11 +906,46 @@ impl Engine<'_> {
             .filter(|access| !access.open_writes())
     }
 
+    /// A caller's method may read this derived value only where its access
+    /// rule allows. Values without a rule, and reads by code without a
+    /// caller or with definer rights, are open.
+    pub(super) fn admit_derived_read(&mut self, name: &str, args: &Value) -> EngineResult<()> {
+        if self.system || self.definer > 0 {
+            return Ok(());
+        }
+        let Some(rule) = self.schema.derived_access.get(name) else {
+            return Ok(());
+        };
+        let clock = Clock::default();
+        let check = Check::new(rule, &caller(&self.principal), self.now, &clock);
+        let parts = OnceCell::new();
+        let allowed = check.holds(Subject {
+            key: "",
+            parts: &parts,
+            row: Some(args),
+            next: None,
+            clock: &clock,
+        });
+        self.settle_clock(&clock)?;
+        if allowed {
+            Ok(())
+        } else {
+            Err(EngineError::new(
+                "ACCESS_DENIED",
+                format!("Access policy denies reading {name}"),
+            ))
+        }
+    }
+
     /// Report what the caller's rules made of the clock, as `ctx.now()` and
     /// `ctx.changesAt()` would have: an outcome that read the time can't be
     /// cached or certified, and the result changes at the earliest flip.
     pub(super) fn settle_access(&mut self, access: &Access) -> EngineResult<()> {
-        let (read, flip) = access.clock.take();
+        self.settle_clock(&access.clock)
+    }
+
+    fn settle_clock(&mut self, clock: &Clock) -> EngineResult<()> {
+        let (read, flip) = clock.take();
         if read {
             self.query_cacheable = false;
             self.certifying = false;

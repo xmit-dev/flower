@@ -2,7 +2,7 @@
 //! maintenance and authorization methods, key declarations and index schema
 //! Flower stores. Every guest kind goes through these same checks.
 use super::{
-    rust_engine::{IndexSpec, Policy, Schema},
+    rust_engine::{IndexSpec, Policy, Rule, Schema},
     AuthorizationMethod, HttpMethod, MaintenanceMethod, Manifest, MethodKind, QueryConsistency,
 };
 use anyhow::{anyhow, bail, ensure, Result};
@@ -38,6 +38,7 @@ struct Definition<'a> {
     consistency: QueryConsistency,
     receipt: bool,
     aggregate: Option<&'a Value>,
+    access: Option<&'a Value>,
 }
 
 fn object<'a>(value: Option<&'a Value>, label: &str) -> Result<&'a Map<String, Value>> {
@@ -197,10 +198,26 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
             },
         );
     }
+    let mut derived_access = BTreeMap::new();
+    for (name, definition) in definitions {
+        let Some(access) = definition.access else {
+            continue;
+        };
+        ensure!(
+            definition.kind == Kind::Derived,
+            "Only derived definitions declare access: {name}"
+        );
+        let rule = serde_json::from_value::<Rule>(access.clone())
+            .map_err(|error| error.to_string())
+            .and_then(|rule| rule.validate_derived().map(|()| rule))
+            .map_err(|error| anyhow!("Invalid access rule for derived {name}: {error}"))?;
+        derived_access.insert((*name).to_owned(), rule);
+    }
     Ok(Schema {
         indexes,
         aggregates,
         policies,
+        derived_access,
     })
 }
 
@@ -229,7 +246,11 @@ pub(super) fn validate(raw: &Value) -> Result<Manifest> {
             kind => method_kind(kind).map(Kind::Method),
         };
         let Some(kind) = kind.filter(|_| {
-            !name.is_empty() && only(definition, &["kind", "consistency", "receipt", "aggregate"])
+            !name.is_empty()
+                && only(
+                    definition,
+                    &["kind", "consistency", "receipt", "aggregate", "access"],
+                )
         }) else {
             bail!("Invalid definition: {name}");
         };
@@ -242,6 +263,7 @@ pub(super) fn validate(raw: &Value) -> Result<Manifest> {
                 consistency,
                 receipt,
                 aggregate: definition.get("aggregate"),
+                access: definition.get("access"),
             },
         );
     }
@@ -427,6 +449,20 @@ mod tests {
     }
 
     #[test]
+    fn derived_access_rules_reach_the_schema() {
+        let rule = json!({"eq": [{"ref": ["args"]}, {"ref": ["principal", "subject"]}]});
+        let manifest = validate(&json!({
+            "definitions": {"d": {"kind": "derived", "access": rule}},
+            "http": {},
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&manifest.schema.derived_access["d"]).unwrap(),
+            rule
+        );
+    }
+
+    #[test]
     fn invalid_manifests_fail_with_the_declaration_at_fault() {
         let definitions =
             json!({"q": {"kind": "query"}, "m": {"kind": "mutation"}, "d": {"kind": "derived"}});
@@ -517,6 +553,14 @@ mod tests {
             (
                 json!({"definitions": definitions, "http": {}, "collections": [{"name": "a", "indexes": {}, "access": {"read": true}}]}),
                 "Invalid access policy for collection a",
+            ),
+            (
+                json!({"definitions": {"q": {"kind": "query", "access": {"const": true}}}, "http": {}}),
+                "Only derived definitions declare access: q",
+            ),
+            (
+                json!({"definitions": {"d": {"kind": "derived", "access": {"exists": {"ref": ["row", "x"]}}}}, "http": {}}),
+                "Invalid access rule for derived d: access: row.x cannot be used here",
             ),
             (
                 json!({"definitions": {"t": {"kind": "query", "aggregate": {"collection": "a", "fields": ["x"]}}}, "http": {}}),
