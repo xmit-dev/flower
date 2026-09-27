@@ -22,9 +22,10 @@ export type RuleLike = Rule | boolean;
 
 /**
  * A value a rule compares: a principal attribute, a field of the stored row (`row`) or
- * of the row being written (`next`), or the row's key. Missing and null values compare
- * false with everything, so `row("owner").eq(principal.subject)` never matches an
- * anonymous caller.
+ * of the row being written (`next`), the row's key, or the time (`now`). Missing and
+ * null values compare false with everything, so `row("owner").eq(principal.subject)`
+ * never matches an anonymous caller. Only numbers order against numbers, and strings
+ * against strings (by code point).
  */
 export interface Operand<T = Json> {
   /** Both sides present, non-null and equal. */
@@ -37,8 +38,24 @@ export interface Operand<T = Json> {
   has(item: OperandLike<Item<T>>): Rule;
   /** Present and not null. */
   exists(): Rule;
+  /** Less than: two numbers, or two strings. */
+  lt(value: OperandLike<T>): Rule;
+  /** Less than or equal. */
+  lte(value: OperandLike<T>): Rule;
+  /** Greater than. */
+  gt(value: OperandLike<T>): Rule;
+  /** Greater than or equal. */
+  gte(value: OperandLike<T>): Rule;
+  /** A string that starts with the prefix. */
+  startsWith(prefix: OperandLike<string>): Rule;
 }
 export type OperandLike<T> = Operand<T> | T;
+
+/** The row's key; `at` reads a part of a JSON key (collection.key(schema)). */
+export interface KeyOperand extends Operand<string> {
+  /** An element of an array key, or a field of an object key, then optionally deeper. */
+  at(...path: [string | number, ...(string | number)[]]): Operand<Json>;
+}
 
 /** A field of a row, then optionally a path into it. */
 export interface RowFields<T> {
@@ -65,7 +82,12 @@ export interface AccessScope<T> {
   /** The row being written: in insert, update and field write rules. */
   readonly next: RowFields<T>;
   /** The row's stored key: the string, or canonical JSON for typed keys. */
-  readonly key: Operand<string>;
+  readonly key: KeyOperand;
+  /**
+   * The invocation's time in milliseconds. A result that depends on it isn't cached,
+   * and changes by itself when a comparison with it flips (`row("expiresAt").gt(now)`).
+   */
+  readonly now: Operand<number>;
   all(...rules: RuleLike[]): Rule;
   any(...rules: RuleLike[]): Rule;
   not(rule: RuleLike): Rule;
@@ -142,6 +164,18 @@ class OperandNode implements Operand<any> {
   in(list: unknown): Rule { return new RuleNode({ in: [this[json], operand(list)] }); }
   has(item: unknown): Rule { return new RuleNode({ in: [operand(item), this[json]] }); }
   exists(): Rule { return new RuleNode({ exists: this[json] }); }
+  lt(value: unknown): Rule { return new RuleNode({ lt: [this[json], operand(value)] }); }
+  lte(value: unknown): Rule { return new RuleNode({ lte: [this[json], operand(value)] }); }
+  gt(value: unknown): Rule { return new RuleNode({ gt: [this[json], operand(value)] }); }
+  gte(value: unknown): Rule { return new RuleNode({ gte: [this[json], operand(value)] }); }
+  startsWith(prefix: unknown): Rule { return new RuleNode({ startsWith: [this[json], operand(prefix)] }); }
+}
+
+class KeyNode extends OperandNode implements KeyOperand {
+  at(...path: unknown[]): Operand<Json> {
+    const parts = path.map((part) => typeof part === "number" && Number.isSafeInteger(part) && part >= 0 ? String(part) : part);
+    return new OperandNode({ ref: ["key", ...segments(parts, "key.at")] });
+  }
 }
 
 function operand(value: unknown): OperandJson {
@@ -171,7 +205,8 @@ const scope: AccessScope<any> = Object.freeze({
   }),
   row: fieldsOf("row"),
   next: fieldsOf("next"),
-  key: new OperandNode({ ref: ["key"] }),
+  key: new KeyNode({ ref: ["key"] }),
+  now: new OperandNode({ ref: ["now"] }),
   all: (...rules: RuleLike[]) => join("all", rules),
   any: (...rules: RuleLike[]) => join("any", rules),
   not: (rule: RuleLike) => new RuleNode({ not: ruleJson(rule, "not()") }),
@@ -179,12 +214,12 @@ const scope: AccessScope<any> = Object.freeze({
 
 /** Roots each rule may use, matching the server's checks. */
 const roots = {
-  read: ["principal", "key", "row"],
-  insert: ["principal", "key", "next"],
-  update: ["principal", "key", "row", "next"],
-  delete: ["principal", "key", "row"],
-  fieldRead: ["principal", "key", "row"],
-  fieldWrite: ["principal", "key", "row", "next"],
+  read: ["principal", "key", "now", "row"],
+  insert: ["principal", "key", "now", "next"],
+  update: ["principal", "key", "now", "row", "next"],
+  delete: ["principal", "key", "now", "row"],
+  fieldRead: ["principal", "key", "now", "row"],
+  fieldWrite: ["principal", "key", "now", "row", "next"],
 } as const;
 
 function checkRoots(body: unknown, allowed: readonly string[], label: string): void {
@@ -259,7 +294,10 @@ function deepFreeze<T>(value: T): T {
 // ---- Enforcement for the in-process test database, matching the server's rules.
 
 type Row = { key: string; value: Json };
-type Subject = { key: string; row?: Json; next?: Json };
+/** What a check sees; `parts` caches the key parsed as JSON. */
+type Subject = { key: string; row?: Json; next?: Json; parts?: Json | undefined | null };
+/** The invocation's clock, as rules read it: the time, and a flip to report. */
+interface Clock { now(): number; note(flip: number | undefined): void }
 type Host = Record<string, (...args: any[]) => any>;
 
 function lookup(value: Json | undefined, path: readonly string[]): Json | undefined {
@@ -274,33 +312,92 @@ function lookup(value: Json | undefined, path: readonly string[]): Json | undefi
 
 const present = (value: Json | undefined): value is Json => value !== undefined && value !== null;
 
-function resolve(operand: OperandJson, caller: Json, subject: Subject): Json | undefined {
+function keyParts(subject: Subject): Json | undefined {
+  if (subject.parts === undefined) {
+    let parsed: Json | null = null;
+    try { parsed = JSON.parse(subject.key) as Json; } catch { /* a plain string key */ }
+    subject.parts = parsed !== null && typeof parsed === "object" ? parsed : null;
+  }
+  return subject.parts ?? undefined;
+}
+
+function resolve(operand: OperandJson, caller: Json, subject: Subject, clock: Clock): Json | undefined {
   if ("value" in operand) return operand.value;
   const [root, ...path] = operand.ref;
   if (root === "principal") return lookup(caller, path);
-  if (root === "key") return subject.key;
+  if (root === "now") return clock.now();
+  if (root === "key") return path.length ? lookup(keyParts(subject), path) : subject.key;
   return lookup(root === "row" ? subject.row : subject.next, path);
+}
+
+/** Code point order, which is how the server (UTF-8 bytes) orders strings. */
+function compareText(left: string, right: string): number {
+  let i = 0;
+  let j = 0;
+  while (i < left.length && j < right.length) {
+    const a = left.codePointAt(i)!;
+    const b = right.codePointAt(j)!;
+    if (a !== b) return a < b ? -1 : 1;
+    i += a > 0xffff ? 2 : 1;
+    j += b > 0xffff ? 2 : 1;
+  }
+  return i < left.length ? 1 : j < right.length ? -1 : 0;
+}
+
+function order(left: Json | undefined, right: Json | undefined): number | undefined {
+  if (typeof left === "string" && typeof right === "string") return compareText(left, right);
+  if (typeof left === "number" && typeof right === "number") return left < right ? -1 : left > right ? 1 : 0;
+  return undefined;
+}
+
+const swapped: Record<string, string> = { lt: "gt", lte: "gte", gt: "lt", gte: "lte" };
+
+/** The first instant after `now` when `now <operator> value` changes outcome. */
+function flip(operator: string, now: number, value: Json | undefined): number | undefined {
+  if (operator === "in") {
+    if (!Array.isArray(value)) return undefined;
+    const flips = value.map((item) => flip("eq", now, item)).filter((at): at is number => at !== undefined);
+    return flips.length ? Math.min(...flips) : undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const reached = Math.ceil(value);
+  const passed = Math.floor(value) + 1;
+  const at = operator === "lt" || operator === "gte" ? reached
+    : operator === "lte" || operator === "gt" ? passed
+    : operator === "eq" || operator === "ne" ? (reached > now ? reached : passed)
+    : undefined;
+  return at !== undefined && at > now && at <= Number.MAX_SAFE_INTEGER ? at : undefined;
 }
 
 function same(left: Json | undefined, right: Json | undefined): boolean | undefined {
   return present(left) && present(right) ? canonicalJson(left) === canonicalJson(right) : undefined;
 }
 
-function holds(rule: RuleJson, caller: Json, subject: Subject): boolean {
+const isNow = (operand: OperandJson) => "ref" in operand && operand.ref[0] === "now";
+
+function holds(rule: RuleJson, caller: Json, subject: Subject, clock: Clock): boolean {
   const [operator, body] = Object.entries(rule)[0] as [string, any];
   switch (operator) {
     case "const": return body === true;
-    case "all": return (body as RuleJson[]).every((each) => holds(each, caller, subject));
-    case "any": return (body as RuleJson[]).some((each) => holds(each, caller, subject));
-    case "not": return !holds(body, caller, subject);
-    case "eq": return same(resolve(body[0], caller, subject), resolve(body[1], caller, subject)) === true;
-    case "ne": return same(resolve(body[0], caller, subject), resolve(body[1], caller, subject)) === false;
-    case "in": {
-      const item = resolve(body[0], caller, subject);
-      const list = resolve(body[1], caller, subject);
-      return present(item) && Array.isArray(list) && list.some((each) => same(item, each) === true);
-    }
-    case "exists": return present(resolve(body, caller, subject));
+    case "all": return (body as RuleJson[]).every((each) => holds(each, caller, subject, clock));
+    case "any": return (body as RuleJson[]).some((each) => holds(each, caller, subject, clock));
+    case "not": return !holds(body, caller, subject, clock);
+    case "exists": return isNow(body) || present(resolve(body, caller, subject, clock));
+  }
+  const left = resolve(body[0], caller, subject, clock);
+  const right = resolve(body[1], caller, subject, clock);
+  // Reading the clock makes the result time dependent until the comparison flips.
+  if (isNow(body[0]) && !isNow(body[1])) clock.note(flip(operator, left as number, right));
+  else if (isNow(body[1]) && !isNow(body[0])) clock.note(operator === "in" ? undefined : flip(swapped[operator] ?? operator, right as number, left));
+  switch (operator) {
+    case "eq": return same(left, right) === true;
+    case "ne": return same(left, right) === false;
+    case "in": return present(left) && Array.isArray(right) && right.some((each) => same(left, each) === true);
+    case "lt": return order(left, right) === -1;
+    case "lte": { const sign = order(left, right); return sign === -1 || sign === 0; }
+    case "gt": return order(left, right) === 1;
+    case "gte": { const sign = order(left, right); return sign === 1 || sign === 0; }
+    case "startsWith": return typeof left === "string" && typeof right === "string" && left.startsWith(right);
     default: throw new TypeError(`Unknown access rule ${operator}`);
   }
 }
@@ -309,18 +406,21 @@ class Guard {
   readonly collection: string;
   readonly policy: AccessManifest;
   readonly caller: Json;
-  constructor(collection: string, policy: AccessManifest, caller: Json) {
+  readonly clock: Clock;
+  constructor(collection: string, policy: AccessManifest, caller: Json, clock: Clock) {
     this.collection = collection;
     this.policy = policy;
     this.caller = caller;
+    this.clock = clock;
   }
   private rule(body: Json): RuleJson { return body as RuleJson; }
+  private check(rule: Json, subject: Subject): boolean { return holds(this.rule(rule), this.caller, subject, this.clock); }
   private fieldReadable(field: string, key: string, row: Json): boolean {
     const read = this.policy.fields?.[field]?.read;
-    return read === undefined || holds(this.rule(read), this.caller, { key, row });
+    return read === undefined || this.check(read, { key, row });
   }
   visible(key: string, row: Json, fields: readonly string[] = []): boolean {
-    return holds(this.rule(this.policy.read), this.caller, { key, row }) &&
+    return this.check(this.policy.read, { key, row }) &&
       fields.every((field) => this.fieldReadable(field, key, row));
   }
   redact(key: string, row: Json): Json {
@@ -338,7 +438,7 @@ class Guard {
     const denied = () => Object.assign(new Error(`Access policy denies this write to ${this.collection}`), { code: "ACCESS_DENIED" });
     if (previous === null && next === undefined) return undefined;
     if (next === undefined) {
-      if (holds(this.rule(this.policy.delete), this.caller, { key, row: previous })) return undefined;
+      if (this.check(this.policy.delete, { key, row: previous })) return undefined;
       throw denied();
     }
     const fields = this.policy.fields ?? {};
@@ -353,14 +453,14 @@ class Guard {
     }
     const stored = previous === null ? undefined : previous;
     const subject: Subject = { key, row: stored, next: written };
-    const row = this.rule(stored === undefined ? this.policy.insert : this.policy.update);
-    const allowed = holds(row, this.caller, subject) && Object.entries(fields).every(([field, access]) => {
+    const row = stored === undefined ? this.policy.insert : this.policy.update;
+    const allowed = this.check(row, subject) && Object.entries(fields).every(([field, access]) => {
       const before = lookup(stored, [field]);
       const after = lookup(written, [field]);
       const changed = before === undefined || after === undefined ? before !== after : canonicalJson(before) !== canonicalJson(after);
       if (!changed) return true;
-      if (access.write !== undefined) return holds(this.rule(access.write), this.caller, subject);
-      if (access.read !== undefined) return holds(this.rule(access.read), this.caller, { key, row: stored ?? written });
+      if (access.write !== undefined) return this.check(access.write, subject);
+      if (access.read !== undefined) return this.check(access.read, { key, row: stored ?? written });
       return true;
     });
     if (!allowed) throw denied();
@@ -388,9 +488,14 @@ export function enforceAccess(host: Host, collections: readonly { name: string; 
   const caller: Json = anonymous
     ? (principal !== null && typeof principal === "object" && !Array.isArray(principal) && "tenant" in principal ? { tenant: principal.tenant } : {})
     : principal;
+  // Rules read the clock like ctx.now() and report flips like ctx.changesAt().
+  const clock: Clock = {
+    now: () => host.now() as number,
+    note: (flip) => { if (flip !== undefined) host.changesAt(flip); },
+  };
   const guard = (name: unknown) => {
     const policy = typeof name === "string" ? policies.get(name) : undefined;
-    return policy ? new Guard(name as string, policy, caller) : undefined;
+    return policy ? new Guard(name as string, policy, caller, clock) : undefined;
   };
   const name = (reference: any): string | undefined =>
     typeof reference?.collection === "string" ? reference.collection : reference?.collection?.name ?? reference?.name;

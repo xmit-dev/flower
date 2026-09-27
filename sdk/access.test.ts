@@ -157,6 +157,49 @@ test("the test database enforces access like the server", async () => {
   assert.deepEqual(db.query("list", null, as("root")), ["a1", "a3", "b1", "b2"]);
 });
 
+test("rules order numbers and strings by code point, match prefixes, read key parts and follow the clock", async () => {
+  type Item = { rank: number; text: string; expiresAt?: number };
+  const items = collection<Item>("items").key(v.tuple([v.string(), v.int()])).access(({ principal, row, next, key, now }) => ({
+    read: key.at(0).eq(principal.subject).and(row("rank").gte(2), row("text").gt("\uFFFD").or(row("text").startsWith("b")), row("expiresAt").gt(now)),
+    insert: key.at(0).eq(principal.subject).and(next("rank").lt(100).or(next("text").startsWith("b"))),
+  }));
+  const app = define({
+    collections: [items],
+    auth: { authenticate: (_ctx, credentials) => typeof credentials === "string" ? { subject: credentials } : null },
+    http: {
+      list: query("list", { access: "public" }, (ctx) => ctx.scan(items).map((row) => row.key)),
+      put: mutation("put", { args: v.object({ key: v.tuple([v.string(), v.int()]), item: v.json() }) }, (ctx, { key, item }) => { ctx.set(items, key, item as Item); return null; }),
+    },
+  });
+  const [entry] = app.collections!;
+  assert.deepEqual(entry.access!.insert, {
+    all: [
+      { eq: [{ ref: ["key", "0"] }, { ref: ["principal", "subject"] }] },
+      { any: [{ lt: [{ ref: ["next", "rank"] }, { value: 100 }] }, { startsWith: [{ ref: ["next", "text"] }, { value: "b" }] }] },
+    ],
+  });
+  assert.deepEqual((entry.access!.read as any).all[3], { gt: [{ ref: ["row", "expiresAt"] }, { ref: ["now"] }] });
+  const db = await testDatabase(app, { now: 1_000 });
+  const seed: [[string, number], Item][] = [
+    [["alice", 1], { rank: 1, text: "\u{1F600}", expiresAt: 5_000 }], // rank too low
+    [["alice", 2], { rank: 2, text: "\u{1F600}", expiresAt: 5_000 }], // an emoji sorts after U+FFFD by code point
+    [["alice", 3], { rank: 3, text: "\uFFFD", expiresAt: 5_000 }], // not greater than itself
+    [["alice", 4], { rank: 4, text: "bee", expiresAt: 2_000 }], // a prefix match, until it expires
+    [["alice", 5], { rank: "5" as never, text: "bee", expiresAt: 5_000 }], // a string never orders against a number
+    [["bob", 1], { rank: 9, text: "bee", expiresAt: 5_000 }], // someone else's key
+  ];
+  for (const [key, item] of seed) db.mutate("put", { key, item }, { credentials: key[0] });
+  assert.deepEqual(db.query("list", null, { credentials: "alice" }), [["alice", 2], ["alice", 4]]);
+  db.advance(1_000);
+  assert.deepEqual(db.query("list", null, { credentials: "alice" }), [["alice", 2]]);
+  assert.throws(() => db.mutate("put", { key: ["bob", 2], item: { rank: 1, text: "x" } }, { credentials: "alice" }), (error: any) => error.failure?.code === "ACCESS_DENIED");
+  assert.throws(() => db.mutate("put", { key: ["alice", 9], item: { rank: 100, text: "x" } }, { credentials: "alice" }), (error: any) => error.failure?.code === "ACCESS_DENIED");
+  // Key parts need JSON keys: a plain string key that parses as JSON must not have parts.
+  const plain = collection<Item>("plain").access(({ key, principal }) => ({ read: key.at(0).eq(principal.subject) }));
+  assert.throws(() => define({ collections: [plain], http: {} }), /read key parts; declare its keys with collection.key/);
+  assert.throws(() => collection<Item>("bad").access(({ key }) => ({ read: key.at("").exists() })), /nonempty/);
+});
+
 test("a collection with access must be declared, and callers' views never reach the auth hook", async () => {
   const sessions = collection<{ subject: string }>("sessions").access({ read: false, insert: true });
   const orphan = collection<{ owner: string }>("orphan").access({ read: true });

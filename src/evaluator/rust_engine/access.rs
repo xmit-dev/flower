@@ -17,6 +17,11 @@
 //! constant and costs nothing per row, and a collection without a policy
 //! costs one map lookup per invocation.
 use super::*;
+use std::cell::OnceCell;
+use std::cmp::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+
+const RELAXED: std::sync::atomic::Ordering = std::sync::atomic::Ordering::Relaxed;
 
 /// Largest rule a collection may declare for one operation, in nodes.
 const MAX_RULE_NODES: usize = 256;
@@ -51,9 +56,12 @@ pub struct FieldPolicy {
 }
 
 /// `{"const":true}`, `{"all":[…]}`, `{"any":[…]}`, `{"not":…}`,
-/// `{"eq":[a,b]}`, `{"ne":[a,b]}`, `{"in":[item,list]}`, `{"exists":a}`.
-/// Comparisons with a missing or null side are false, so a row without an
-/// `owner` never matches an anonymous caller's missing subject.
+/// `{"eq":[a,b]}`, `{"ne":[a,b]}`, `{"in":[item,list]}`, `{"exists":a}`,
+/// `{"lt":[a,b]}`, `{"lte":…}`, `{"gt":…}`, `{"gte":…}` and
+/// `{"startsWith":[text,prefix]}`. Comparisons with a missing or null side
+/// are false, so a row without an `owner` never matches an anonymous
+/// caller's missing subject. Only numbers order against numbers and strings
+/// against strings (by code point); any other pair compares false.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Rule {
@@ -65,6 +73,12 @@ pub enum Rule {
     Ne(Operand, Operand),
     In(Operand, Operand),
     Exists(Operand),
+    Lt(Operand, Operand),
+    Lte(Operand, Operand),
+    Gt(Operand, Operand),
+    Gte(Operand, Operand),
+    #[serde(rename = "startsWith")]
+    StartsWith(Operand, Operand),
 }
 
 impl Default for Rule {
@@ -74,8 +88,10 @@ impl Default for Rule {
 }
 
 /// `{"value": json}` or `{"ref": path}`, where a path starts with
-/// `principal` (`subject`, `tenant`, `claims`…), `row` (the stored row),
-/// `next` (the row being written) or is exactly `["key"]`.
+/// `principal` (`subject`, `tenant`, `claims`…), `row` (the stored row) or
+/// `next` (the row being written), is `["key"]` (the stored key) or a path
+/// into a JSON key (`["key","0"]`), or is exactly `["now"]`: the
+/// invocation's time in milliseconds.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Operand {
@@ -96,7 +112,7 @@ enum Scope {
 impl Scope {
     fn allows(self, root: &str) -> bool {
         match root {
-            "principal" | "key" => true,
+            "principal" | "key" | "now" => true,
             "row" => self != Scope::Insert,
             "next" => matches!(self, Scope::Insert | Scope::Update | Scope::FieldWrite),
             _ => false,
@@ -168,7 +184,14 @@ impl Rule {
                 .iter()
                 .try_for_each(|rule| rule.walk(scope, depth + 1, nodes)),
             Rule::Not(rule) => rule.walk(scope, depth + 1, nodes),
-            Rule::Eq(left, right) | Rule::Ne(left, right) | Rule::In(left, right) => {
+            Rule::Eq(left, right)
+            | Rule::Ne(left, right)
+            | Rule::In(left, right)
+            | Rule::Lt(left, right)
+            | Rule::Lte(left, right)
+            | Rule::Gt(left, right)
+            | Rule::Gte(left, right)
+            | Rule::StartsWith(left, right) => {
                 left.validate(scope)?;
                 right.validate(scope)
             }
@@ -181,9 +204,14 @@ impl Rule {
             Rule::Const(_) => 0,
             Rule::All(rules) | Rule::Any(rules) => rules.iter().map(Rule::cost).sum(),
             Rule::Not(rule) => rule.cost(),
-            Rule::Eq(left, right) | Rule::Ne(left, right) | Rule::In(left, right) => {
-                left.cost() + right.cost()
-            }
+            Rule::Eq(left, right)
+            | Rule::Ne(left, right)
+            | Rule::In(left, right)
+            | Rule::Lt(left, right)
+            | Rule::Lte(left, right)
+            | Rule::Gt(left, right)
+            | Rule::Gte(left, right)
+            | Rule::StartsWith(left, right) => left.cost() + right.cost(),
             Rule::Exists(operand) => operand.cost(),
         }
     }
@@ -203,7 +231,8 @@ impl Operand {
                     }
                     [] => false,
                 },
-                "key" => rest.is_empty(),
+                "key" => rest.iter().all(|segment| !segment.is_empty()),
+                "now" => rest.is_empty(),
                 _ => !rest.is_empty() && rest.iter().all(|segment| !segment.is_empty()),
             },
             _ => false,
@@ -223,17 +252,28 @@ impl Operand {
     }
 }
 
-/// A rule with the caller folded in. What remains depends only on the row.
+/// A rule with the caller folded in. What remains depends only on the row
+/// and, for rules about time, the clock.
 #[derive(Debug)]
 enum Check {
     Const(bool),
     All(Vec<Check>),
     Any(Vec<Check>),
     Not(Box<Check>),
-    Eq(Term, Term),
-    Ne(Term, Term),
-    In(Term, Term),
+    Compare(Op, Term, Term),
     Exists(Term),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Op {
+    Eq,
+    Ne,
+    In,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    StartsWith,
 }
 
 #[derive(Debug)]
@@ -241,7 +281,44 @@ enum Term {
     Row(Vec<String>),
     Next(Vec<String>),
     Key,
+    /// A path into a JSON key: canonical JSON of an array or an object.
+    KeyPart(Vec<String>),
+    /// The invocation's time, in milliseconds.
+    Now(Value),
     Value(Value),
+}
+
+/// What checks learned about the clock since the engine last asked: whether
+/// an outcome depended on the time, and the earliest instant one changes.
+/// Atomics keep `Access` shareable; each invocation still owns its own.
+#[derive(Debug)]
+struct Clock {
+    read: AtomicBool,
+    flips_at: AtomicU64,
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self {
+            read: AtomicBool::new(false),
+            flips_at: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl Clock {
+    fn note(&self, flip: Option<u64>) {
+        self.read.store(true, RELAXED);
+        if let Some(flip) = flip {
+            self.flips_at.fetch_min(flip, RELAXED);
+        }
+    }
+
+    fn take(&self) -> (bool, Option<u64>) {
+        let read = self.read.swap(false, RELAXED);
+        let flip = self.flips_at.swap(u64::MAX, RELAXED);
+        (read, (flip != u64::MAX).then_some(flip))
+    }
 }
 
 /// What one check sees: the row's key, the stored row and the row being
@@ -249,8 +326,11 @@ enum Term {
 #[derive(Clone, Copy)]
 struct Subject<'a> {
     key: &'a str,
+    /// The key parsed as JSON, on the first key-part term of this row.
+    parts: &'a OnceCell<Option<Value>>,
     row: Option<&'a Value>,
     next: Option<&'a Value>,
+    clock: &'a Clock,
 }
 
 #[derive(Clone, Copy)]
@@ -301,11 +381,109 @@ fn contains(item: Resolved<'_>, list: Resolved<'_>) -> bool {
     }
 }
 
+fn text(value: Resolved<'_>) -> Option<&str> {
+    match value {
+        Resolved::Key(key) => Some(key),
+        Resolved::Json(Value::String(text)) => Some(text),
+        _ => None,
+    }
+}
+
+/// Two numbers, or two strings by code point (UTF-8 byte order); nothing
+/// else is ordered.
+fn order(left: Resolved<'_>, right: Resolved<'_>) -> Option<Ordering> {
+    if let (Some(left), Some(right)) = (text(left), text(right)) {
+        return Some(left.cmp(right));
+    }
+    let (Resolved::Json(Value::Number(left)), Resolved::Json(Value::Number(right))) = (left, right)
+    else {
+        return None;
+    };
+    if let (Some(left), Some(right)) = (left.as_i64(), right.as_i64()) {
+        return Some(left.cmp(&right));
+    }
+    if let (Some(left), Some(right)) = (left.as_u64(), right.as_u64()) {
+        return Some(left.cmp(&right));
+    }
+    left.as_f64()?.partial_cmp(&right.as_f64()?)
+}
+
+impl Op {
+    fn holds(self, left: Resolved<'_>, right: Resolved<'_>) -> bool {
+        match self {
+            Op::Eq => same(left, right) == Some(true),
+            Op::Ne => same(left, right) == Some(false),
+            Op::In => contains(left, right),
+            Op::Lt => order(left, right) == Some(Ordering::Less),
+            Op::Lte => matches!(order(left, right), Some(Ordering::Less | Ordering::Equal)),
+            Op::Gt => order(left, right) == Some(Ordering::Greater),
+            Op::Gte => matches!(
+                order(left, right),
+                Some(Ordering::Greater | Ordering::Equal)
+            ),
+            Op::StartsWith => text(left)
+                .zip(text(right))
+                .is_some_and(|(text, prefix)| text.starts_with(prefix)),
+        }
+    }
+
+    /// The same comparison with its sides swapped: `a < b` is `b > a`.
+    fn swapped(self) -> Self {
+        match self {
+            Op::Lt => Op::Gt,
+            Op::Lte => Op::Gte,
+            Op::Gt => Op::Lt,
+            Op::Gte => Op::Lte,
+            op => op,
+        }
+    }
+}
+
+/// The first instant after `now` when `now <op> value` changes outcome:
+/// `now < v` and `now >= v` at v, `now <= v` and `now > v` just after v.
+fn flip(op: Op, now: u64, value: &Value) -> Option<u64> {
+    let value = value.as_f64().filter(|value| value.is_finite())?;
+    let reached = value.ceil();
+    let passed = value.floor() + 1.0;
+    let at = match op {
+        Op::Lt | Op::Gte => reached,
+        Op::Lte | Op::Gt => passed,
+        Op::Eq | Op::Ne if reached > now as f64 => reached,
+        Op::Eq | Op::Ne => passed,
+        Op::In | Op::StartsWith => return None,
+    };
+    (at > now as f64 && at < 9_007_199_254_740_992.0).then_some(at as u64)
+}
+
+/// When a comparison of the clock (on the left) with `other` next flips.
+fn clock_flip(op: Op, now: &Value, other: Resolved<'_>) -> Option<u64> {
+    let (Some(now), Resolved::Json(other)) = (now.as_u64(), other) else {
+        return None;
+    };
+    match (op, other) {
+        (Op::In, Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| flip(Op::Eq, now, item))
+            .min(),
+        _ => flip(op, now, other),
+    }
+}
+
 impl Term {
     fn resolve<'a>(&'a self, subject: Subject<'a>) -> Resolved<'a> {
         match self {
-            Term::Value(value) => Resolved::Json(value),
+            Term::Value(value) | Term::Now(value) => Resolved::Json(value),
             Term::Key => Resolved::Key(subject.key),
+            Term::KeyPart(path) => subject
+                .parts
+                .get_or_init(|| {
+                    serde_json::from_str::<Value>(subject.key)
+                        .ok()
+                        .filter(|parts| parts.is_array() || parts.is_object())
+                })
+                .as_ref()
+                .and_then(|parts| lookup(parts, path))
+                .map_or(Resolved::Missing, Resolved::Json),
             Term::Row(path) => subject
                 .row
                 .and_then(|row| lookup(row, path))
@@ -316,10 +494,14 @@ impl Term {
                 .map_or(Resolved::Missing, Resolved::Json),
         }
     }
+
+    fn constant(&self) -> bool {
+        matches!(self, Term::Value(_) | Term::Now(_))
+    }
 }
 
 impl Check {
-    fn new(rule: &Rule, caller: &Value) -> Self {
+    fn new(rule: &Rule, caller: &Value, now: u64, clock: &Clock) -> Self {
         let term = |operand: &Operand| match operand {
             Operand::Value(value) => Term::Value(value.clone()),
             Operand::Ref(path) => match path[0].as_str() {
@@ -328,36 +510,47 @@ impl Check {
                 }
                 "row" => Term::Row(path[1..].to_vec()),
                 "next" => Term::Next(path[1..].to_vec()),
+                "now" => Term::Now(json!(now)),
+                _ if path.len() > 1 => Term::KeyPart(path[1..].to_vec()),
                 _ => Term::Key,
             },
         };
         // Comparisons of two constants, such as a claim and a literal, fold now.
-        let binary = |left: &Operand, right: &Operand, build: fn(Term, Term) -> Check| {
-            let check = build(term(left), term(right));
+        let compare = |op: Op, left: &Operand, right: &Operand| {
+            let check = Check::Compare(op, term(left), term(right));
             match &check {
-                Check::Eq(Term::Value(_), Term::Value(_))
-                | Check::Ne(Term::Value(_), Term::Value(_))
-                | Check::In(Term::Value(_), Term::Value(_)) => Check::Const(check.holds(Subject {
-                    key: "",
-                    row: None,
-                    next: None,
-                })),
+                Check::Compare(_, left, right) if left.constant() && right.constant() => {
+                    let parts = OnceCell::new();
+                    Check::Const(check.holds(Subject {
+                        key: "",
+                        parts: &parts,
+                        row: None,
+                        next: None,
+                        clock,
+                    }))
+                }
                 _ => check,
             }
         };
         match rule {
             Rule::Const(value) => Check::Const(*value),
-            Rule::All(rules) => Self::join(rules, caller, true),
-            Rule::Any(rules) => Self::join(rules, caller, false),
-            Rule::Not(rule) => match Check::new(rule, caller) {
+            Rule::All(rules) => Self::join(rules, caller, now, clock, true),
+            Rule::Any(rules) => Self::join(rules, caller, now, clock, false),
+            Rule::Not(rule) => match Check::new(rule, caller, now, clock) {
                 Check::Const(value) => Check::Const(!value),
                 check => Check::Not(Box::new(check)),
             },
-            Rule::Eq(left, right) => binary(left, right, Check::Eq),
-            Rule::Ne(left, right) => binary(left, right, Check::Ne),
-            Rule::In(left, right) => binary(left, right, Check::In),
+            Rule::Eq(left, right) => compare(Op::Eq, left, right),
+            Rule::Ne(left, right) => compare(Op::Ne, left, right),
+            Rule::In(left, right) => compare(Op::In, left, right),
+            Rule::Lt(left, right) => compare(Op::Lt, left, right),
+            Rule::Lte(left, right) => compare(Op::Lte, left, right),
+            Rule::Gt(left, right) => compare(Op::Gt, left, right),
+            Rule::Gte(left, right) => compare(Op::Gte, left, right),
+            Rule::StartsWith(left, right) => compare(Op::StartsWith, left, right),
             Rule::Exists(operand) => match term(operand) {
                 Term::Value(value) => Check::Const(present(Resolved::Json(&value))),
+                Term::Now(_) => Check::Const(true),
                 term => Check::Exists(term),
             },
         }
@@ -365,10 +558,10 @@ impl Check {
 
     /// `all` (a conjunction) or `any`, dropping neutral constants and
     /// short-circuiting on absorbing ones.
-    fn join(rules: &[Rule], caller: &Value, conjunction: bool) -> Self {
+    fn join(rules: &[Rule], caller: &Value, now: u64, clock: &Clock, conjunction: bool) -> Self {
         let mut checks = Vec::new();
         for rule in rules {
-            match Check::new(rule, caller) {
+            match Check::new(rule, caller, now, clock) {
                 Check::Const(value) if value == conjunction => {}
                 Check::Const(value) => return Check::Const(value),
                 check => checks.push(check),
@@ -388,13 +581,24 @@ impl Check {
             Check::All(checks) => checks.iter().all(|check| check.holds(subject)),
             Check::Any(checks) => checks.iter().any(|check| check.holds(subject)),
             Check::Not(check) => !check.holds(subject),
-            Check::Eq(left, right) => {
-                same(left.resolve(subject), right.resolve(subject)) == Some(true)
+            Check::Compare(op, left, right) => {
+                let (resolved_left, resolved_right) =
+                    (left.resolve(subject), right.resolve(subject));
+                // An outcome that read the clock makes the result time
+                // dependent, and says when it will next change.
+                match (left, right) {
+                    (Term::Now(_), Term::Now(_)) => {}
+                    (Term::Now(now), _) => subject.clock.note(clock_flip(*op, now, resolved_right)),
+                    (_, Term::Now(_)) if *op == Op::In => subject.clock.note(None),
+                    (_, Term::Now(now)) => {
+                        subject
+                            .clock
+                            .note(clock_flip(op.swapped(), now, resolved_left))
+                    }
+                    _ => {}
+                }
+                op.holds(resolved_left, resolved_right)
             }
-            Check::Ne(left, right) => {
-                same(left.resolve(subject), right.resolve(subject)) == Some(false)
-            }
-            Check::In(item, list) => contains(item.resolve(subject), list.resolve(subject)),
             Check::Exists(term) => present(term.resolve(subject)),
         }
     }
@@ -422,10 +626,11 @@ pub(super) struct Access {
     fields: Vec<FieldCheck>,
     /// Some field's read rule can fail for this caller.
     redacts: bool,
+    clock: Clock,
 }
 
 impl Access {
-    fn new(collection: &str, policy: &Policy, principal: &Value) -> Self {
+    fn new(collection: &str, policy: &Policy, principal: &Value, now: u64) -> Self {
         // Methods see an anonymous caller as null, and so do rules. Only the
         // tenant, a named partition's name, remains.
         let caller = match principal {
@@ -437,25 +642,50 @@ impl Access {
             Value::Object(_) => principal.clone(),
             _ => json!({}),
         };
+        let clock = Clock::default();
+        let check = |rule: &Rule| Check::new(rule, &caller, now, &clock);
         let fields: Vec<FieldCheck> = policy
             .fields
             .iter()
             .map(|(name, field)| FieldCheck {
                 name: name.clone(),
-                read: field.read.as_ref().map(|rule| Check::new(rule, &caller)),
-                write: field.write.as_ref().map(|rule| Check::new(rule, &caller)),
+                read: field.read.as_ref().map(check),
+                write: field.write.as_ref().map(check),
             })
             .collect();
+        let (read, insert, update, delete) = (
+            check(&policy.read),
+            check(&policy.insert),
+            check(&policy.update),
+            check(&policy.delete),
+        );
         Self {
             collection: collection.to_owned(),
-            read: Check::new(&policy.read, &caller),
-            insert: Check::new(&policy.insert, &caller),
-            update: Check::new(&policy.update, &caller),
-            delete: Check::new(&policy.delete, &caller),
+            read,
+            insert,
+            update,
+            delete,
             redacts: fields
                 .iter()
                 .any(|field| field.read.as_ref().is_some_and(|check| !check.always())),
             fields,
+            clock,
+        }
+    }
+
+    fn subject<'a>(
+        &'a self,
+        key: &'a str,
+        parts: &'a OnceCell<Option<Value>>,
+        row: Option<&'a Value>,
+        next: Option<&'a Value>,
+    ) -> Subject<'a> {
+        Subject {
+            key,
+            parts,
+            row,
+            next,
+            clock: &self.clock,
         }
     }
 
@@ -473,30 +703,24 @@ impl Access {
             && !self.redacts
     }
 
-    fn field_readable(&self, field: &FieldCheck, key: &str, row: &Value) -> bool {
-        field.read.as_ref().is_none_or(|check| {
-            check.holds(Subject {
-                key,
-                row: Some(row),
-                next: None,
-            })
-        })
+    /// Whether the caller may read `field` of the stored row in `subject`.
+    fn field_readable(&self, field: &FieldCheck, subject: Subject<'_>) -> bool {
+        field.read.as_ref().is_none_or(|check| check.holds(subject))
     }
 
     /// Whether the caller sees this row at all. `fields` are the index fields
     /// that selected it: finding a row through a field the caller can't read
     /// would reveal that field's value, so such rows stay hidden too.
     pub(super) fn visible(&self, key: &str, row: &Value, fields: &[String]) -> bool {
-        self.read.holds(Subject {
-            key,
-            row: Some(row),
-            next: None,
-        }) && fields.iter().all(|name| {
-            self.fields
-                .iter()
-                .find(|field| &field.name == name)
-                .is_none_or(|field| self.field_readable(field, key, row))
-        })
+        let parts = OnceCell::new();
+        let subject = self.subject(key, &parts, Some(row), None);
+        self.read.holds(subject)
+            && fields.iter().all(|name| {
+                self.fields
+                    .iter()
+                    .find(|field| &field.name == name)
+                    .is_none_or(|field| self.field_readable(field, subject))
+            })
     }
 
     /// The row without the fields the caller can't read. Shares the stored
@@ -508,11 +732,13 @@ impl Access {
         let Value::Object(entries) = row.as_ref() else {
             return row.clone();
         };
+        let parts = OnceCell::new();
+        let subject = self.subject(key, &parts, Some(row), None);
         let hidden: Vec<&str> = self
             .fields
             .iter()
             .filter(|field| {
-                entries.contains_key(&field.name) && !self.field_readable(field, key, row)
+                entries.contains_key(&field.name) && !self.field_readable(field, subject)
             })
             .map(|field| field.name.as_str())
             .collect();
@@ -557,14 +783,11 @@ impl Access {
                 format!("Access policy denies this write to {}", self.collection),
             )
         };
+        let parts = OnceCell::new();
         let (previous, mut next) = match (previous, next) {
             (None, None) => return Ok(None),
             (Some(previous), None) => {
-                let subject = Subject {
-                    key,
-                    row: Some(previous),
-                    next: None,
-                };
+                let subject = self.subject(key, &parts, Some(previous), None);
                 return if self.delete.holds(subject) {
                     Ok(None)
                 } else {
@@ -579,17 +802,13 @@ impl Access {
             for field in &self.fields {
                 if !written.contains_key(&field.name)
                     && let Some(value) = entries.get(&field.name)
-                    && !self.field_readable(field, key, stored)
+                    && !self.field_readable(field, self.subject(key, &parts, Some(stored), None))
                 {
                     written.insert(field.name.clone(), value.clone());
                 }
             }
         }
-        let subject = Subject {
-            key,
-            row: previous,
-            next: Some(&next),
-        };
+        let subject = self.subject(key, &parts, previous, Some(&next));
         let row = if previous.is_some() {
             &self.update
         } else {
@@ -608,11 +827,9 @@ impl Access {
                     (Some(write), _) => write.holds(subject),
                     // Change only what you can read: in the stored row, or in
                     // the new one for an insert.
-                    (None, Some(read)) => read.holds(Subject {
-                        key,
-                        row: Some(previous.unwrap_or(&next)),
-                        next: None,
-                    }),
+                    (None, Some(read)) => {
+                        read.holds(self.subject(key, &parts, Some(previous.unwrap_or(&next)), None))
+                    }
                     (None, None) => true,
                 }
         });
@@ -638,7 +855,7 @@ impl Engine<'_> {
             .schema
             .policies
             .get(collection)
-            .map(|policy| Arc::new(Access::new(collection, policy, &self.principal)));
+            .map(|policy| Arc::new(Access::new(collection, policy, &self.principal, self.now)));
         self.access.insert(collection.to_owned(), access.clone());
         access
     }
@@ -653,6 +870,22 @@ impl Engine<'_> {
     pub(super) fn write_access(&mut self, collection: &str) -> Option<Arc<Access>> {
         self.access(collection)
             .filter(|access| !access.open_writes())
+    }
+
+    /// Report what the caller's rules made of the clock, as `ctx.now()` and
+    /// `ctx.changesAt()` would have: an outcome that read the time can't be
+    /// cached or certified, and the result changes at the earliest flip.
+    pub(super) fn settle_access(&mut self, access: &Access) -> EngineResult<()> {
+        let (read, flip) = access.clock.take();
+        if read {
+            self.query_cacheable = false;
+            self.certifying = false;
+            self.clock_polled = true;
+        }
+        match flip {
+            Some(flip) => self.declare_change(&json!(flip)),
+            None => Ok(()),
+        }
     }
 }
 
@@ -671,7 +904,7 @@ mod tests {
             "fields": {"secret": {"read": {"in":[{"value":"admin"},{"ref":["principal","claims","roles"]}]}}},
         }))
         .unwrap();
-        Access::new("notes", &policy, &principal)
+        Access::new("notes", &policy, &principal, 1_000)
     }
 
     #[test]
@@ -685,7 +918,7 @@ mod tests {
         let alice = access(json!({"subject":"alice","tenant":"frozen"}));
         assert!(!alice.open_reads());
         assert!(
-            matches!(&alice.read, Check::Eq(Term::Row(path), Term::Value(subject))
+            matches!(&alice.read, Check::Compare(Op::Eq, Term::Row(path), Term::Value(subject))
             if path == &["owner"] && subject == "alice")
         );
         assert!(matches!(alice.update, Check::Const(false)));
@@ -694,5 +927,30 @@ mod tests {
         assert!(matches!(anonymous.insert, Check::Const(false)));
         assert!(matches!(anonymous.update, Check::Const(true)));
         assert!(!access(Value::Null).visible("k", &json!({"owner":null}), &[]));
+    }
+
+    #[test]
+    fn comparisons_with_the_clock_flip_at_the_first_instant_their_outcome_changes() {
+        let now = 1_000;
+        // now < v and now >= v change when now reaches v.
+        assert_eq!(flip(Op::Lt, now, &json!(1_500)), Some(1_500));
+        assert_eq!(flip(Op::Gte, now, &json!(1_500)), Some(1_500));
+        // now <= v and now > v change once now passes v.
+        assert_eq!(flip(Op::Lte, now, &json!(1_500)), Some(1_501));
+        assert_eq!(flip(Op::Gt, now, &json!(1_500)), Some(1_501));
+        // Fractional instants: the first whole millisecond on the other side.
+        assert_eq!(flip(Op::Lt, now, &json!(1_500.5)), Some(1_501));
+        assert_eq!(flip(Op::Gt, now, &json!(1_500.5)), Some(1_501));
+        // Equality holds at v, then stops just after.
+        assert_eq!(flip(Op::Eq, now, &json!(1_500)), Some(1_500));
+        assert_eq!(flip(Op::Eq, now, &json!(1_000)), Some(1_001));
+        // Past instants, non-numbers and prefixes never flip.
+        assert_eq!(flip(Op::Lt, now, &json!(900)), None);
+        assert_eq!(flip(Op::Gt, now, &json!(1_000)), Some(1_001));
+        assert_eq!(flip(Op::Lt, now, &json!("1500")), None);
+        assert_eq!(flip(Op::StartsWith, now, &json!(1_500)), None);
+        // `v > now` is `now < v`.
+        assert_eq!(Op::Gt.swapped(), Op::Lt);
+        assert_eq!(Op::Lte.swapped(), Op::Gte);
     }
 }

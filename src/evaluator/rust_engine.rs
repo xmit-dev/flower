@@ -923,7 +923,11 @@ impl Engine<'_> {
             }
             self.count_operations(rows.len())?;
             let rows = match &access {
-                Some(access) => access.filter(rows, &query.fields),
+                Some(access) => {
+                    let rows = access.filter(rows, &query.fields);
+                    self.settle_access(access)?;
+                    rows
+                }
                 None => rows,
             };
             let values: Vec<_> = rows.into_iter().map(|(_, value)| value).collect();
@@ -1010,7 +1014,11 @@ impl Engine<'_> {
                 .unwrap_or_default()
         };
         let rows = match &access {
-            Some(access) => access.filter(rows, &query.fields),
+            Some(access) => {
+                let rows = access.filter(rows, &query.fields);
+                self.settle_access(access)?;
+                rows
+            }
             None => rows,
         };
         self.query_values(rows.into_iter().map(|(_, value)| value).collect())
@@ -1082,12 +1090,18 @@ impl Engine<'_> {
                     let value = self.source(&id).cloned();
                     match (value, self.read_access(collection)) {
                         (Some(value), None) => self.copy_for_host(&value),
-                        (Some(value), Some(access)) if access.visible(key, &value, &[]) => {
-                            let shown = access.redact(key, &value);
-                            self.copy_for_host(&shown)
+                        (Some(value), Some(access)) => {
+                            let shown = access
+                                .visible(key, &value, &[])
+                                .then(|| access.redact(key, &value));
+                            self.settle_access(&access)?;
+                            match shown {
+                                Some(shown) => self.copy_for_host(&shown),
+                                // A hidden row reads as absent.
+                                None => Ok(Value::Null),
+                            }
                         }
-                        // A hidden row reads as absent.
-                        _ => Ok(Value::Null),
+                        (None, _) => Ok(Value::Null),
                     }
                 } else {
                     let name = reference_name(reference, "derived")?.to_owned();
@@ -1118,7 +1132,11 @@ impl Engine<'_> {
                 let rows = self.collection_rows(collection)?;
                 self.count_operations(rows.len())?;
                 let rows = match self.read_access(collection) {
-                    Some(access) => access.filter(rows, &[]),
+                    Some(access) => {
+                        let rows = access.filter(rows, &[]);
+                        self.settle_access(&access)?;
+                        rows
+                    }
                     None => rows,
                 };
                 self.rows_for_host(rows)
@@ -1161,7 +1179,9 @@ impl Engine<'_> {
                         let id = source_id(collection, key);
                         self.record_read(&id);
                         let previous = self.source(&id).cloned();
-                        access.admit(key, previous.as_deref(), value)?
+                        let admitted = access.admit(key, previous.as_deref(), value);
+                        self.settle_access(&access)?;
+                        admitted?
                     }
                 };
                 self.write_source(collection, key, value)?;

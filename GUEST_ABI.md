@@ -151,10 +151,11 @@ definition's, and
 names starting with `$flower.` are reserved for SDK-generated definitions.
 A collection's optional `access` holds its policy: `read`, `insert`, `update`
 and `delete` rules plus per-field `read`/`write` rules, each a JSON rule tree
-(`const`, `all`, `any`, `not`, `eq`, `ne`, `in`, `exists` over `{"ref": path}`
-and `{"value": json}` operands). The host enforces it on the collection
-operations of queries and mutations that have a caller; see
-`src/evaluator/rust_engine/access.rs`.
+(`const`, `all`, `any`, `not`, `eq`, `ne`, `in`, `exists`, `lt`, `lte`, `gt`,
+`gte`, `startsWith` over `{"ref": path}` and `{"value": json}` operands; paths
+start with `principal`, `row`, `next` or `key`, or are exactly `["now"]`). The
+host enforces it on the collection operations of queries and mutations that
+have a caller; see `src/evaluator/rust_engine/access.rs`.
 
 ## Resource limits
 

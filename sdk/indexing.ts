@@ -45,6 +45,10 @@ export function collectionManifest(references: Iterable<Collection<any, any, any
       indexes[index] = fields(columns);
     }
     const access = collectionInfo(reference)?.access;
+    // Only JSON keys have parts: a plain string key that happens to parse as JSON must not.
+    if (access && !collectionInfo(reference)?.key && usesKeyParts(access)) {
+      throw new TypeError(`Access rules of ${JSON.stringify(reference.name)} read key parts; declare its keys with collection.key(schema)`);
+    }
     const entry: CollectionManifest = Object.freeze({ name: reference.name, indexes: Object.freeze(indexes), ...(access ? { access } : {}) });
     const previous = byName.get(reference.name);
     if (previous && canonicalJson(previous.indexes) !== canonicalJson(entry.indexes)) {
@@ -58,6 +62,14 @@ export function collectionManifest(references: Iterable<Collection<any, any, any
     byName.set(reference.name, previous?.access || !entry.access ? previous ?? entry : entry);
   }
   return [...byName.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+}
+
+function usesKeyParts(rule: unknown): boolean {
+  if (Array.isArray(rule)) return rule.some(usesKeyParts);
+  if (rule === null || typeof rule !== "object" || Object.hasOwn(rule, "value")) return false;
+  const ref = (rule as { ref?: unknown }).ref;
+  if (Array.isArray(ref)) return ref[0] === "key" && ref.length > 1;
+  return Object.values(rule).some(usesKeyParts);
 }
 
 /**

@@ -80,20 +80,25 @@ fn policy() -> Value {
 }
 
 fn install(data: &mut Records, fixture: &Fixture) {
+    install_with(data, fixture, policy(), None);
+}
+
+/// The notes fixture's rows (or `writes`) under another policy.
+fn install_with(data: &mut Records, fixture: &Fixture, policy: Value, writes: Option<Value>) {
     let spec = |field: &str| IndexSpec {
         collection: "notes".into(),
         fields: vec![field.into()],
     };
     let result = run_with_schema(
         data.clone(),
-        json!({"requestId":"schema","writes":[
+        json!({"requestId":"schema","writes":writes.unwrap_or_else(|| json!([
             {"collection":"notes","key":"a1","value":{"owner":"alice","rank":1,"text":"one","secret":"s1"}},
             {"collection":"notes","key":"b1","value":{"owner":"bob","rank":2,"text":"two","secret":"s2"}},
             {"collection":"notes","key":"a2","value":{"owner":"alice","rank":3,"text":"three"}},
             {"collection":"notes","key":"b2","value":{"owner":"bob","rank":4,"text":"four"}},
             {"collection":"notes","key":"a3","value":{"owner":"alice","rank":5,"text":"five"}},
             {"collection":"notes","key":"x","value":{"rank":6,"text":"ownerless"}},
-        ]}),
+        ]))}),
         "deployment",
         None,
         fixture,
@@ -102,7 +107,7 @@ fn install(data: &mut Records, fixture: &Fixture) {
             aggregates: BTreeMap::new(),
             policies: BTreeMap::from([(
                 "notes".into(),
-                serde_json::from_value(policy()).unwrap(),
+                serde_json::from_value(policy).unwrap(),
             )]),
         }),
     )
@@ -441,10 +446,12 @@ fn policies_are_validated_before_they_are_stored() {
         invalid(json!({"read":{"exists":{"ref":["principal","password"]}}}))
             .contains("principal.password")
     );
-    assert!(invalid(json!({"read":{"exists":{"ref":["key","0"]}}})).contains("key.0"));
+    assert!(invalid(json!({"read":{"exists":{"ref":["key",""]}}})).contains("key."));
+    assert!(invalid(json!({"read":{"exists":{"ref":["now","day"]}}})).contains("now.day"));
     assert!(invalid(json!({"read":{"exists":{"ref":["row"]}}})).contains("row"));
     assert!(invalid(json!({"fields":{"secret":{}}})).contains("no rule"));
-    invalid(json!({"read":{"lt":[{"value":1},{"value":2}]}}));
+    invalid(json!({"read":{"le":[{"value":1},{"value":2}]}}));
+    invalid(json!({"read":{"lt":[{"value":1}]}}));
     invalid(json!({"read":true}));
     invalid(json!({"reads":{"const":true}}));
     let wide = json!({"read":{"any":vec![json!({"const":false}); 256]}});
@@ -496,4 +503,155 @@ fn policy_overhead() {
         }
         println!("scan 20,006 rows as {label}: {rows} returned, best of 5 {best:?}");
     }
+}
+
+fn with_policy(policy: Value, writes: Option<Value>) -> (Records, Fixture) {
+    let fixture = fixture();
+    let mut data = Records::default();
+    install_with(&mut data, &fixture, policy, writes);
+    (data, fixture)
+}
+
+fn visible_keys(policy: Value) -> Vec<String> {
+    let (data, fixture) = with_policy(policy, None);
+    keys(&query(&data, &fixture, "scan", Value::Null, Some(alice())))
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn rules_order_numbers_and_strings_and_match_prefixes() {
+    let rank = |op: &str, value: Value| json!({op:[{"ref":["row","rank"]},{"value":value}]});
+    // Ranks: a1 1, b1 2, a2 3, b2 4, a3 5, x 6.
+    assert_eq!(
+        visible_keys(json!({"read":{"all":[rank("gte", json!(2)), rank("lt", json!(5))]}})),
+        ["a2", "b1", "b2"]
+    );
+    assert_eq!(
+        visible_keys(json!({"read":{"any":[rank("lte", json!(1)), rank("gt", json!(5.5))]}})),
+        ["a1", "x"]
+    );
+    // Strings order by code point; numbers never order against strings.
+    assert_eq!(
+        visible_keys(json!({"read":{"gt":[{"ref":["row","text"]},{"value":"one"}]}})),
+        ["a2", "b1", "x"]
+    );
+    assert!(visible_keys(json!({"read":rank("lt", json!("9"))})).is_empty());
+    assert!(
+        visible_keys(json!({"read":{"lt":[{"ref":["row","missing"]},{"value":9}]}})).is_empty()
+    );
+    // Prefixes of keys and strings.
+    assert_eq!(
+        visible_keys(json!({"read":{"startsWith":[{"ref":["key"]},{"value":"b"}]}})),
+        ["b1", "b2"]
+    );
+    assert_eq!(
+        visible_keys(json!({"read":{"startsWith":[{"ref":["row","text"]},{"value":"f"}]}})),
+        ["a3", "b2"]
+    );
+    assert!(
+        visible_keys(json!({"read":{"startsWith":[{"ref":["row","rank"]},{"value":"1"}]}}))
+            .is_empty()
+    );
+}
+
+#[test]
+fn rules_read_parts_of_json_keys() {
+    // Keys of the caller's own: reads and inserts stay inside ["<subject>", …].
+    let mine = json!({"eq":[{"ref":["key","0"]},{"ref":["principal","subject"]}]});
+    let writes = json!([
+        {"collection":"notes","key":"[\"alice\",1]","value":{"rank":1,"text":"one"}},
+        {"collection":"notes","key":"[\"bob\",1]","value":{"rank":2,"text":"two"}},
+        {"collection":"notes","key":"[\"alice\",2]","value":{"rank":3,"text":"three"}},
+        {"collection":"notes","key":"{\"owner\":\"alice\"}","value":{"rank":4,"text":"object"}},
+        {"collection":"notes","key":"alice","value":{"rank":5,"text":"plain"}},
+    ]);
+    let (data, fixture) = with_policy(
+        json!({"read":mine,"insert":mine,"update":mine,"delete":mine}),
+        Some(writes),
+    );
+    assert_eq!(
+        keys(&query(&data, &fixture, "scan", Value::Null, Some(alice()))),
+        ["[\"alice\",1]", "[\"alice\",2]"]
+    );
+    let write = |key: &str| {
+        call(
+            &data,
+            &fixture,
+            "mutation",
+            "set",
+            json!({"key":key,"value":{"rank":9,"text":"new"}}),
+            Some(alice()),
+        )
+    };
+    write("[\"alice\",3]").unwrap();
+    assert_eq!(write("[\"bob\",2]").err().unwrap().code, "ACCESS_DENIED");
+    // A plain string key has no parts.
+    assert_eq!(write("alice").err().unwrap().code, "ACCESS_DENIED");
+    // Object keys have named parts.
+    let (data, fixture) = with_policy(
+        json!({"read":{"eq":[{"ref":["key","owner"]},{"ref":["principal","subject"]}]}}),
+        Some(json!([
+            {"collection":"notes","key":"{\"owner\":\"alice\"}","value":{"rank":4,"text":"object"}},
+            {"collection":"notes","key":"{\"owner\":\"bob\"}","value":{"rank":5,"text":"other"}},
+        ])),
+    );
+    assert_eq!(
+        keys(&query(&data, &fixture, "scan", Value::Null, Some(alice()))),
+        ["{\"owner\":\"alice\"}"]
+    );
+}
+
+#[test]
+fn rules_about_now_are_time_dependent_and_say_when_they_flip() {
+    let staff = json!({"eq":[{"ref":["principal","claims","role"]},{"value":"admin"}]});
+    let live = json!({"gt":[{"ref":["row","expiresAt"]},{"ref":["now"]}]});
+    let (data, fixture) = with_policy(
+        json!({"read":{"any":[staff, live]}}),
+        Some(json!([
+            {"collection":"notes","key":"gone","value":{"expiresAt":1500,"text":"gone"}},
+            {"collection":"notes","key":"soon","value":{"expiresAt":2500,"text":"soon"}},
+            {"collection":"notes","key":"late","value":{"expiresAt":3000.5,"text":"late"}},
+            {"collection":"notes","key":"never","value":{"text":"never"}},
+        ])),
+    );
+    let at = |now: u64, principal: Value| {
+        run(
+            data.clone(),
+            json!({"name":"scan","args":null,"$principal":principal}),
+            "query",
+            Some(now),
+            &fixture,
+        )
+        .unwrap()
+    };
+    let result = at(2000, alice());
+    assert_eq!(keys(&result.value), ["late", "soon"]);
+    assert!(result.query_clock_polled);
+    assert!(!result.query_cacheable);
+    // `expiresAt > now` stops holding when now reaches expiresAt.
+    assert_eq!(result.query_changes_at, Some(2500));
+    let result = at(2500, alice());
+    assert_eq!(keys(&result.value), ["late"]);
+    assert_eq!(result.query_changes_at, Some(3001));
+    let result = at(3001, alice());
+    assert_eq!(result.value, json!([]));
+    assert_eq!(result.query_changes_at, None);
+    // A rule that folds away for the caller never reads the clock.
+    let result = at(2000, admin());
+    assert_eq!(keys(&result.value).len(), 4);
+    assert!(!result.query_clock_polled);
+    assert_eq!(result.query_changes_at, None);
+    // Point reads report the time dependency too.
+    let point = run(
+        data.clone(),
+        json!({"name":"get","args":"soon","$principal":alice()}),
+        "query",
+        Some(2000),
+        &fixture,
+    )
+    .unwrap();
+    assert_eq!(point.value["text"], "soon");
+    assert_eq!(point.query_changes_at, Some(2500));
 }

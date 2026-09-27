@@ -827,13 +827,17 @@ impl Engine<'_> {
             found.into_values().collect()
         };
         let rows = match access {
-            Some(access) => rows
-                .into_iter()
-                .map(|(key, value)| {
-                    let shown = access.redact(&key, &value);
-                    (key, shown)
-                })
-                .collect(),
+            Some(access) => {
+                let rows = rows
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let shown = access.redact(&key, &value);
+                        (key, shown)
+                    })
+                    .collect();
+                self.settle_access(access)?;
+                rows
+            }
             None => rows,
         };
         let rows = self.rows_for_host(rows)?;
