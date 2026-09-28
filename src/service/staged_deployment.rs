@@ -422,6 +422,7 @@ async fn start(app: &App, request_id: String, bundle: Value) -> Result<Value, Ap
     let indexes = Schema {
         indexes: added,
         aggregates: BTreeMap::new(),
+        aggregate_versions: BTreeMap::new(),
         policies: BTreeMap::new(),
         derived_access: BTreeMap::new(),
     };

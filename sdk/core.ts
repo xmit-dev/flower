@@ -291,7 +291,7 @@ export interface MutationContext extends QueryContext {
 
 // ---- Definitions
 
-export interface AggregateMetadata { readonly collection: string; readonly fields: readonly string[] }
+export interface AggregateMetadata { readonly collection: string; readonly fields: readonly string[]; readonly version?: string }
 export interface Derived<A = Json, V = Json> {
   readonly kind: "derived";
   readonly name: string;

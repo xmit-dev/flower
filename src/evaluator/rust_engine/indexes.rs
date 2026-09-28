@@ -22,6 +22,11 @@ pub struct Schema {
     pub indexes: Vec<IndexSpec>,
     #[serde(default)]
     pub aggregates: BTreeMap<String, IndexSpec>,
+    /// The aggregates whose groups keep their accumulators across deployments while their version
+    /// stays the same (`aggregate(…, { version })`), by definition name. The others rebuild every
+    /// group a deployment reaches from all of its rows.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub aggregate_versions: BTreeMap<String, String>,
     /// Access policies by collection name, enforced on methods' reads and writes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub policies: BTreeMap<String, super::Policy>,
@@ -88,6 +93,12 @@ impl Schema {
             .fold(policies, |bytes, (name, rule)| {
                 bytes.saturating_add(128 + name.len() + rule.allocation_cost())
             });
+        let policies = self
+            .aggregate_versions
+            .iter()
+            .fold(policies, |bytes, (name, version)| {
+                bytes.saturating_add(128 + name.len() + version.len())
+            });
         policies.saturating_add(
             self.indexes.iter().chain(self.aggregates.values()).fold(
                 self.aggregates
@@ -120,6 +131,14 @@ impl Schema {
                 return Err(EngineError::new(
                     "INPUT_INVALID",
                     "Aggregate index is not declared",
+                ));
+            }
+        }
+        for (name, version) in &self.aggregate_versions {
+            if !self.aggregates.contains_key(name) || !valid_version(version) {
+                return Err(EngineError::new(
+                    "INPUT_INVALID",
+                    "Malformed aggregate version",
                 ));
             }
         }
@@ -161,9 +180,15 @@ impl Schema {
     pub(super) fn empty(&self) -> bool {
         self.indexes.is_empty()
             && self.aggregates.is_empty()
+            && self.aggregate_versions.is_empty()
             && self.policies.is_empty()
             && self.derived_access.is_empty()
     }
+}
+
+/// An aggregate's version: 1 to 128 bytes, no control characters.
+pub fn valid_version(version: &str) -> bool {
+    (1..=128).contains(&version.len()) && !version.chars().any(char::is_control)
 }
 
 #[derive(Clone)]

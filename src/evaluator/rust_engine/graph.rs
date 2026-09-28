@@ -462,7 +462,11 @@ impl Engine<'_> {
         self.preview.active.insert(id.clone());
         self.preview.depth += 1;
         let mut observed = BTreeSet::new();
-        let result = if let Some(index) = self.schema.aggregates.get(name).cloned() {
+        let aggregate = self.schema.aggregates.get(name).cloned();
+        let reducer = aggregate
+            .as_ref()
+            .and_then(|index| self.aggregate_fingerprint(name, index));
+        let result = if let Some(index) = aggregate {
             self.aggregate_value(name, args, &index, previous.as_deref(), &mut observed)
         } else {
             let execute = self.execute;
@@ -503,7 +507,7 @@ impl Engine<'_> {
         let deps: Vec<_> = observed.into_iter().map(|key| key.0).collect();
         // Materialization callers need the stored cell, not an owned copy of
         // its outcome. Move the newly computed tree into that cell once.
-        let cell = Value::Object(serde_json::Map::from_iter([
+        let mut cell = serde_json::Map::from_iter([
             ("name".into(), Value::String(name.into())),
             ("args".into(), args.clone()),
             ("outcome".into(), outcome),
@@ -511,7 +515,13 @@ impl Engine<'_> {
                 "deps".into(),
                 Value::Array(deps.into_iter().map(Value::String).collect()),
             ),
-        ]));
+        ]);
+        // A versioned aggregate's accumulator says what built it, so the next deployment can tell
+        // whether to keep it (reducers.rs).
+        if let Some(reducer) = reducer {
+            cell.insert("reducer".into(), reducer);
+        }
+        let cell = Value::Object(cell);
         self.put(id.clone(), cell)?;
         self.observed_bytes = self.observed_bytes.saturating_sub(observed_bytes);
         self.preview.complete.insert(id);

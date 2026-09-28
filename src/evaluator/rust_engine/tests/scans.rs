@@ -23,6 +23,7 @@ fn install(data: &mut Records, fixture: &Fixture) {
         Some(Schema {
             policies: Default::default(),
             derived_access: Default::default(),
+            aggregate_versions: Default::default(),
             indexes: vec![IndexSpec {
                 collection: "items".into(),
                 fields: vec!["tenant".into(), "score".into()],
@@ -870,6 +871,7 @@ fn undeclared_equality_queries_rerun_only_for_their_bucket() {
     let schema = Schema {
         policies: Default::default(),
         derived_access: Default::default(),
+        aggregate_versions: Default::default(),
         indexes: vec![IndexSpec {
             collection: "items".into(),
             fields: vec!["state".into()],

@@ -170,8 +170,23 @@ test("collection manifests merge identical declarations by name and reject confl
   assert.equal(invoked, false);
 });
 
+test("an aggregate's version reaches its metadata and the manifest, as a string", () => {
+  const callbacks = { initial: () => 0, add: (n: number) => n, remove: (n: number) => n };
+  const kept = aggregate("kept", { source: orders, index: "byShop", ...callbacks, version: 3 });
+  assert.deepEqual(plain(kept.aggregate), { collection: "orders", fields: ["shop"], version: "3" });
+  const named = aggregate("named", { source: orders, index: "byShop", ...callbacks, version: "2026-09-28" });
+  assert.deepEqual(plain((define({ definitions: [named] }).definitions as any).named.aggregate), { collection: "orders", fields: ["shop"], version: "2026-09-28" });
+  // Without one, the metadata is what it always was, so servers that know no versions take it.
+  assert.equal(Object.hasOwn(revenue.aggregate, "version"), false);
+  for (const version of ["", -1, 1.5, "x".repeat(129), "é".repeat(65), "a\nb", true, null]) {
+    assert.throws(() => aggregate("bad", { source: orders, index: "byShop", ...callbacks, version: version as never }), /Aggregate version must be/, String(version));
+  }
+  assert.doesNotThrow(() => aggregate("edge", { source: orders, index: "byShop", ...callbacks, version: "é".repeat(64) }));
+});
+
 test("aggregate metadata normalization rejects malformed input", () => {
   assert.deepEqual(plain(normalizeAggregateMetadata({ collection: "orders", fields: ["shop"] })), { collection: "orders", fields: ["shop"] });
+  assert.deepEqual(plain(normalizeAggregateMetadata({ collection: "orders", fields: ["shop"], version: "1" })), { collection: "orders", fields: ["shop"], version: "1" });
   for (const value of [null, [], { collection: "orders" }, { collection: "orders", fields: [] }, { collection: "orders", fields: ["shop", "shop"] },
     { collection: "orders", fields: ["shop"], extra: true }, { collection: "", fields: ["shop"] }, { collection: "orders", fields: [""] }]) {
     assert.throws(() => normalizeAggregateMetadata(value), TypeError);

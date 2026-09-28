@@ -10,6 +10,7 @@ fn schema(aggregate: bool) -> Schema {
     Schema {
         policies: Default::default(),
         derived_access: Default::default(),
+        aggregate_versions: Default::default(),
         indexes: vec![index.clone()],
         aggregates: if aggregate {
             BTreeMap::from([("total".into(), index)])
@@ -241,6 +242,7 @@ fn composite_index_distinguishes_absent_and_null_and_canonicalizes_objects() {
     let schema = Schema {
         policies: Default::default(),
         derived_access: Default::default(),
+        aggregate_versions: Default::default(),
         indexes: vec![IndexSpec {
             collection: "orders".into(),
             fields: vec!["shop".into(), "active".into()],
@@ -455,6 +457,134 @@ fn aggregate_previews_do_not_double_apply_deltas_and_errors_rebuild() {
     assert_eq!(total(&data, "a"), 14);
 }
 
+fn versioned(version: &str) -> Schema {
+    let mut schema = schema(true);
+    schema.aggregate_versions = BTreeMap::from([("total".into(), version.into())]);
+    schema
+}
+
+#[test]
+fn a_versioned_aggregate_keeps_its_accumulators_across_deployments_until_its_version_changes() {
+    let fixture = Reducer::default();
+    let mut data = Records::default();
+    let writes: Vec<_> = (0..50).map(|key| json!({"collection":"orders","key":key.to_string(),"value":{"shop":"a","cents":10}})).collect();
+    deploy_schema(
+        &mut data,
+        json!({"writes":writes,"materialize":[{"name":"total","args":"a"}]}),
+        versioned("1"),
+        &fixture,
+    );
+    assert_eq!(total(&data, "a"), 500);
+    let cell = |data: &Records| data[&cell_id("total", &json!("a"))].clone();
+    assert_eq!(
+        cell(&data)["reducer"],
+        json!({"version":"1","collection":"orders","fields":["shop"]})
+    );
+    // New code, the same version: the group goes on from its accumulator, reading no row again.
+    fixture.payloads.borrow_mut().clear();
+    deploy_schema(
+        &mut data,
+        json!({"bundle":{"hash":"new-code","javascript":"new-code"}}),
+        versioned("1"),
+        &fixture,
+    );
+    assert!(
+        fixture.payloads.borrow().is_empty(),
+        "{:?}",
+        fixture.payloads.borrow()
+    );
+    assert_eq!(total(&data, "a"), 500);
+    // And deltas keep maintaining it.
+    let result = run(data.clone(), json!({"name":"change","requestId":"delta","args":[{"key":"7","value":{"shop":"a","cents":20}}]}), "mutation", None, &fixture).unwrap();
+    apply(&mut data, result);
+    assert_eq!(total(&data, "a"), 510);
+    assert_eq!(fixture.payloads.borrow()[0]["initialize"], false);
+    // A new version rebuilds it from its rows.
+    fixture.payloads.borrow_mut().clear();
+    deploy_schema(
+        &mut data,
+        json!({"bundle":{"hash":"newer-code","javascript":"newer-code"}}),
+        versioned("2"),
+        &fixture,
+    );
+    assert_eq!(fixture.payloads.borrow()[0]["initialize"], true);
+    assert_eq!(
+        fixture.payloads.borrow()[0]["changes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        50
+    );
+    assert_eq!(total(&data, "a"), 510);
+    assert_eq!(cell(&data)["reducer"]["version"], "2");
+    // Without a version, every new bundle rebuilds it, as before, and the cell records none.
+    fixture.payloads.borrow_mut().clear();
+    deploy_schema(
+        &mut data,
+        json!({"bundle":{"hash":"plain-code","javascript":"plain-code"}}),
+        schema(true),
+        &fixture,
+    );
+    assert_eq!(fixture.payloads.borrow()[0]["initialize"], true);
+    assert_eq!(total(&data, "a"), 510);
+    assert!(cell(&data).get("reducer").is_none());
+}
+
+#[test]
+fn a_big_group_goes_to_its_reducer_a_chunk_at_a_time() {
+    use crate::evaluator::rust_engine::reducers::{REDUCER_CHUNK_BYTES, REDUCER_CHUNK_ROWS};
+    let fixture = Reducer::default();
+    let mut data = Records::default();
+    let rows = REDUCER_CHUNK_ROWS * 2 + 5;
+    let writes: Vec<_> = (0..rows).map(|key| json!({"collection":"orders","key":format!("{key:05}"),"value":{"shop":"a","cents":1}})).collect();
+    deploy_schema(
+        &mut data,
+        json!({"writes":writes,"materialize":[{"name":"total","args":"a"}]}),
+        schema(true),
+        &fixture,
+    );
+    assert_eq!(total(&data, "a"), rows as i64);
+    let payloads = fixture.payloads.borrow().clone();
+    let sizes: Vec<_> = payloads
+        .iter()
+        .map(|payload| payload["changes"].as_array().unwrap().len())
+        .collect();
+    assert_eq!(sizes, [REDUCER_CHUNK_ROWS, REDUCER_CHUNK_ROWS, 5]);
+    let initializing: Vec<_> = payloads
+        .iter()
+        .map(|payload| payload["initialize"] == true)
+        .collect();
+    assert_eq!(initializing, [true, false, false]);
+    assert_eq!(payloads[1]["previous"], REDUCER_CHUNK_ROWS);
+    assert_eq!(payloads[2]["previous"], REDUCER_CHUNK_ROWS * 2);
+    // Big rows make smaller chunks: about REDUCER_CHUNK_BYTES of them at a time.
+    fixture.payloads.borrow_mut().clear();
+    let pad = "x".repeat(20_000);
+    let writes: Vec<_> = (0..200).map(|key| json!({"collection":"orders","key":format!("big{key:03}"),"value":{"shop":"b","cents":2,"pad":pad}})).collect();
+    deploy_schema(
+        &mut data,
+        json!({"writes":writes,"materialize":[{"name":"total","args":"b"}]}),
+        schema(true),
+        &fixture,
+    );
+    assert_eq!(total(&data, "b"), 400);
+    let chunks: Vec<_> = fixture
+        .payloads
+        .borrow()
+        .iter()
+        .filter(|payload| payload["group"] == "b")
+        .map(|payload| payload["changes"].as_array().unwrap().len())
+        .collect();
+    assert!(chunks.len() >= 4, "{chunks:?}");
+    assert_eq!(chunks.iter().sum::<usize>(), 200);
+    assert!(
+        chunks
+            .iter()
+            .all(|&size| size * 20_000 <= REDUCER_CHUNK_BYTES + 20_000 + 1024),
+        "{chunks:?}"
+    );
+}
+
 #[test]
 fn aggregate_context_access_is_fatal_even_if_callback_catches_it() {
     let fixture = Fixture::new([(
@@ -560,6 +690,7 @@ fn index_schema_metadata_reserves_memory_before_execution() {
     let oversized = Schema {
         policies: Default::default(),
         derived_access: Default::default(),
+        aggregate_versions: Default::default(),
         indexes: vec![IndexSpec {
             collection: "orders".into(),
             fields: vec!["x".repeat(8192)],

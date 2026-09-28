@@ -4,7 +4,9 @@
 use super::{
     AuthorizationMethod, AuthorizationResult, HttpMethod, MaintenanceMethod, Manifest, MethodKind,
     QueryConsistency,
-    rust_engine::{IndexSpec, Policy, Rule, Schema, validate_derived_targets, validate_targets},
+    rust_engine::{
+        IndexSpec, Policy, Rule, Schema, valid_version, validate_derived_targets, validate_targets,
+    },
 };
 use anyhow::{Result, anyhow, bail, ensure};
 use serde_json::{Map, Value};
@@ -173,6 +175,7 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
     }
     validate_targets(&policies).map_err(|error| anyhow!("Invalid access policy: {error}"))?;
     let mut aggregates = BTreeMap::new();
+    let mut aggregate_versions = BTreeMap::new();
     for (name, definition) in definitions {
         let Some(aggregate) = definition.aggregate else {
             continue;
@@ -180,13 +183,20 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
         let metadata = object(Some(aggregate), "Aggregate metadata")?;
         let collection = text(metadata, "collection").filter(|collection| {
             definition.kind == Kind::Derived
-                && only(metadata, &["collection", "fields"])
+                && only(metadata, &["collection", "fields", "version"])
                 && !collection.is_empty()
         });
         let Some(collection) = collection else {
             bail!("Aggregate metadata requires a derived definition, collection, and fields");
         };
         let fields = index_fields(metadata.get("fields"))?;
+        match metadata.get("version") {
+            None => {}
+            Some(Value::String(version)) if valid_version(version) => {
+                aggregate_versions.insert((*name).to_owned(), version.clone());
+            }
+            Some(_) => bail!("Aggregate version must be a string of 1 to 128 characters: {name}"),
+        }
         let identity = (collection.to_owned(), fields);
         ensure!(
             identities.contains(&identity),
@@ -220,6 +230,7 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
     Ok(Schema {
         indexes,
         aggregates,
+        aggregate_versions,
         policies,
         derived_access,
     })
@@ -510,6 +521,31 @@ mod tests {
             rule
         );
         assert!(manifest.schema.aggregates.contains_key("sum"));
+        assert!(manifest.schema.aggregate_versions.is_empty());
+    }
+
+    #[test]
+    fn aggregate_versions_reach_the_schema() {
+        let manifest = validate(&json!({
+            "definitions": {
+                "sum": {"kind": "derived", "aggregate": {"collection": "orders", "fields": ["shop"], "version": "2"}},
+                "count": {"kind": "derived", "aggregate": {"collection": "orders", "fields": ["shop"]}},
+            },
+            "http": {},
+            "collections": [{"name": "orders", "indexes": {"shop": ["shop"]}}],
+        }))
+        .unwrap();
+        assert_eq!(
+            manifest.schema.aggregate_versions,
+            BTreeMap::from([("sum".to_owned(), "2".to_owned())])
+        );
+        // Stored and loaded back as the schema record.
+        let stored = serde_json::to_value(&manifest.schema).unwrap();
+        assert_eq!(stored["aggregate_versions"], json!({"sum": "2"}));
+        assert_eq!(
+            serde_json::from_value::<Schema>(stored).unwrap(),
+            manifest.schema
+        );
     }
 
     #[test]
@@ -664,6 +700,14 @@ mod tests {
             (
                 json!({"definitions": {"t": {"kind": "derived", "aggregate": {"collection": "a", "fields": ["x"]}}}, "http": {}}),
                 "Aggregate index must be declared",
+            ),
+            (
+                json!({"definitions": {"t": {"kind": "derived", "aggregate": {"collection": "a", "fields": ["x"], "version": 2}}}, "http": {}, "collections": [{"name": "a", "indexes": {"x": ["x"]}}]}),
+                "Aggregate version must be a string of 1 to 128 characters: t",
+            ),
+            (
+                json!({"definitions": {"t": {"kind": "derived", "aggregate": {"collection": "a", "fields": ["x"], "version": ""}}}, "http": {}, "collections": [{"name": "a", "indexes": {"x": ["x"]}}]}),
+                "Aggregate version must be a string of 1 to 128 characters: t",
             ),
         ] {
             let actual = error(raw.clone());

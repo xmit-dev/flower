@@ -11,6 +11,14 @@ export interface AggregateOptions<T, K, G, V> {
   readonly add: (value: V, row: T, key: K, group: G) => V;
   readonly remove: (value: V, row: T, key: K, group: G) => V;
   /**
+   * Keep each group's accumulator across deployments while this stays the same (a string of 1 to
+   * 128 characters, or a nonnegative integer). Without it, every deployment rebuilds each group it
+   * reaches from all of its rows, in one evaluation: fine for small groups, slow and eventually over
+   * budget for big ones. Change it whenever initial, add or remove (or anything they call) would
+   * compute differently, so the next deployment rebuilds the groups with the new callbacks.
+   */
+  readonly version?: string | number;
+  /**
    * Who may read a group's value from a method, as derive(…, { access }) says it: a rule
    * over `principal`, `args` (the group, as ctx.get(aggregate, group) passes it) and `now`.
    * Aggregates fold every row of the source, whoever may read them; without a rule, any
@@ -31,9 +39,29 @@ function fields(value: unknown): readonly string[] {
 }
 
 export function normalizeAggregateMetadata(value: unknown): AggregateMetadata {
-  const metadata = plainObject(value, "Aggregate metadata", ["collection", "fields"]);
+  const metadata = plainObject(value, "Aggregate metadata", ["collection", "fields", "version"]);
   requireName(metadata.collection, "Aggregate collection");
-  return Object.freeze({ collection: metadata.collection, fields: fields(metadata.fields) });
+  const version = metadata.version === undefined ? undefined : aggregateVersion(metadata.version);
+  return Object.freeze({ collection: metadata.collection, fields: fields(metadata.fields), ...(version === undefined ? {} : { version }) });
+}
+
+/** UTF-8 bytes, without TextEncoder (guests lack it). */
+function utf8Length(text: string): number {
+  let bytes = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0)!;
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
+function aggregateVersion(value: unknown): string {
+  const version = typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : value;
+  // The server's rule (valid_version): 1 to 128 bytes, no control characters.
+  if (typeof version !== "string" || version.length === 0 || utf8Length(version) > 128 || /[\u0000-\u001f\u007f-\u009f]/.test(version)) {
+    throw new TypeError("Aggregate version must be a nonnegative integer or a string of 1 to 128 bytes without control characters");
+  }
+  return version;
 }
 
 /** Merge collection declarations by name; one name must always carry the same indexes. */
@@ -113,21 +141,24 @@ function usesKeyParts(rule: unknown): boolean {
 /**
  * Maintain one accumulator per equality group of an index from row deltas.
  * add/remove must be deterministic, order-independent inverses. Prefer integer
- * units: floating-point sums depend on update order. Redeploying rebuilds.
+ * units: floating-point sums depend on update order. Redeploying rebuilds every group from its
+ * rows, unless `version` is given and unchanged: then groups keep their accumulators.
  */
 export function aggregate<T, K extends Json, I extends IndexMap, N extends Extract<keyof I, string>, V>(
   name: string,
   options: { readonly source: Collection<T, K, I>; readonly index: N } & Omit<AggregateOptions<T, K, EqualityValue<T, I[N]>, V>, "source" | "index">,
 ): Aggregate<EqualityValue<T, I[N]>, V> {
   requireName(name, "Aggregate name");
-  const settings = plainObject(options, "Aggregate options", ["source", "index", "initial", "add", "remove", "access"]);
+  const settings = plainObject(options, "Aggregate options", ["source", "index", "initial", "add", "remove", "access", "version"]);
   const [declaration] = collectionManifest([options.source]);
   requireName(settings.index, "Aggregate index");
   if (!Object.hasOwn(declaration.indexes, options.index)) throw new TypeError(`Unknown aggregate index ${JSON.stringify(options.index)}`);
   for (const callback of ["initial", "add", "remove"] as const) {
     if (typeof settings[callback] !== "function") throw new TypeError(`Aggregate ${callback} must be a function`);
   }
-  const metadata = normalizeAggregateMetadata({ collection: declaration.name, fields: declaration.indexes[options.index] });
+  const metadata = normalizeAggregateMetadata({
+    collection: declaration.name, fields: declaration.indexes[options.index], ...(settings.version === undefined ? {} : { version: settings.version }),
+  });
   const { initial, add, remove } = options;
   const decode = collectionInfo(options.source)?.key ? (key: string) => JSON.parse(key) as K : (key: string) => key as K;
   type Group = EqualityValue<T, I[N]>;
