@@ -87,6 +87,9 @@ fn store(engine: &Engine, shared: Arc<Limits>, callback: Option<Callback>) -> St
     store
 }
 
+#[cfg(test)]
+pub(super) use cache::hashes;
+
 /// Compile and initialize the shared sandbox before accepting timed requests.
 pub fn warmup() -> Result<()> {
     cache::runtime().map(|_| ())
@@ -102,11 +105,14 @@ pub(super) fn prepare_bundle(bundle: &Value, shared: Arc<Limits>) -> Result<Arc<
     cache::runtime()?.prepare_source(cache::Source::of(bundle, &mut decoded)?, shared)
 }
 
-pub(super) fn prepare_shared_bundle(
-    bundle: &Arc<Value>,
+/// Prepare the bundle record stored by write `version`, reading it with
+/// `bundle` only when needed (see `cache::Runtime::prepare_stored_bundle`).
+pub(super) fn prepare_stored_bundle(
+    version: u64,
+    bundle: impl FnOnce() -> Option<Arc<Value>>,
     shared: Arc<Limits>,
-) -> Result<Arc<Prepared>> {
-    cache::runtime()?.prepare_shared_bundle(bundle, shared)
+) -> Result<Option<Arc<Prepared>>> {
+    cache::runtime()?.prepare_stored_bundle(version, bundle, shared)
 }
 
 #[cfg(test)]

@@ -50,7 +50,7 @@
 <h2>Stored data and caches</h2>
 <p>Records and retry results are served from the database file, so stored data isn't limited by memory. Memory holds the writes still queued for disk and two caches. Reads that miss both wait on the disk, so size the caches to your working set.</p>
 <div class="table-wrap"><table><caption class="sr-only">Storage cache settings</caption><thead><tr><th>Setting</th><th>Default</th><th>What it does</th></tr></thead><tbody>
-<tr><td><code>FLOWER_VALUE_CACHE_BYTES</code></td><td>256 MiB</td><td>Parsed stored values shared by every reader in the process. Parsed values take several times their stored size.</td></tr>
+<tr><td><code>FLOWER_VALUE_CACHE_BYTES</code></td><td>256 MiB</td><td>Parsed stored values shared by every reader in the process. Parsed values take several times their stored size. A quarter of it holds large values, above about 512 KB of JSON by default; a value too big even for that is parsed on every read, and the server logs a warning naming it.</td></tr>
 <tr><td><code>FLOWER_REDB_CACHE_BYTES</code></td><td>1 GiB</td><td>The database's own cache of file pages, and its buffer for pages being written.</td></tr>
 </tbody></table></div>
 <p>A few structures still grow with the data: the scan windows of derived values that scan ranges, and a deployment that changes the bundle without staging, which walks every materialized value at once. Receiving a Raft snapshot writes it to a temporary file next to the database first, so leave free disk space for a second copy of the state.</p>

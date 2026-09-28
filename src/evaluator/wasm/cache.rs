@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     io::Write,
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 use wasmtime::{
@@ -21,6 +21,8 @@ const WASM: &[u8] = include_bytes!("../../../vendor/quickjs-ng/quickjs.wasm");
 const WASM_HASH: &str = "4146efd6851a79d0f056cebd5e927682f51ef3a740ee006bceaa32eaeba0b822";
 const MAX_CACHE_BYTES: usize = 96 * 1024 * 1024;
 const MAX_CACHE_ENTRIES: usize = 8;
+/// Stored bundle records whose content keys are remembered, by version.
+const MAX_STORED_VERSIONS: usize = 64;
 /// The largest initialized heap a static-init bundle is snapshotted with; a
 /// larger one runs from the shared base image instead, reloading its bytecode
 /// and rerunning its module code in every callback. The fallback saves no guest
@@ -63,6 +65,13 @@ impl<'a> Source<'a> {
     /// Exact content identity. For JavaScript it includes the guest, sandbox
     /// and runner; no user-supplied hash or native code is ever trusted.
     fn key(&self) -> [u8; 32] {
+        let key = self.content_key();
+        #[cfg(test)]
+        HASHES.with(|hashes| *hashes.borrow_mut().entry(key).or_default() += 1);
+        key
+    }
+
+    fn content_key(&self) -> [u8; 32] {
         let mut hash = Sha256::new();
         let parts: &[&[u8]] = match self {
             Self::JavaScript(javascript) => &[
@@ -81,6 +90,19 @@ impl<'a> Source<'a> {
         }
         hash.finalize().into()
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static HASHES: std::cell::RefCell<std::collections::HashMap<[u8; 32], usize>> =
+        Default::default();
+}
+
+/// How many times this thread hashed `javascript` to find its image.
+#[cfg(test)]
+pub(in crate::evaluator) fn hashes(javascript: &str) -> usize {
+    let key = Source::JavaScript(javascript).content_key();
+    HASHES.with(|hashes| hashes.borrow().get(&key).copied().unwrap_or(0))
 }
 
 pub(in crate::evaluator) struct Prepared {
@@ -127,7 +149,11 @@ pub(super) struct Runtime {
 #[derive(Default)]
 struct Cache {
     images: VecDeque<([u8; 32], Arc<Prepared>)>,
-    identities: VecDeque<(Weak<Value>, [u8; 32])>,
+    /// Stored bundle records' content keys, by the version of the write that
+    /// stored them, least recently used first. Versions identify writes, so a
+    /// record found again at its version needs neither reading, parsing nor
+    /// hashing again; its image stays in `images` alone, evicted as ever.
+    stored: VecDeque<(u64, [u8; 32])>,
 }
 impl Cache {
     fn touch(&mut self, key: &[u8; 32]) -> Option<Arc<Prepared>> {
@@ -140,42 +166,23 @@ impl Cache {
         self.images.push_back(entry);
         Some(prepared)
     }
-    fn identity(&mut self, bundle: &Arc<Value>) -> Option<Arc<Prepared>> {
-        self.identities
-            .retain(|(value, _)| value.strong_count() != 0);
-        let position = self.identities.iter().position(|(value, _)| {
-            // A weak reference keeps the allocation identity unique; upgrading
-            // and comparing Arc identity also rejects a dropped/replaced value.
-            value.as_ptr() == Arc::as_ptr(bundle)
-                && value
-                    .upgrade()
-                    .is_some_and(|value| Arc::ptr_eq(&value, bundle))
-        })?;
-        let entry = self.identities.remove(position).unwrap();
-        let prepared = self.touch(&entry.1);
-        if prepared.is_some() {
-            self.identities.push_back(entry);
-        }
-        prepared
-    }
-    fn remember(&mut self, bundle: &Arc<Value>, prepared: &Arc<Prepared>) {
-        let Some((key, _)) = self
-            .images
+    /// The content key of the bundle record stored by write `version`, if
+    /// known, now the most recently used.
+    fn stored(&mut self, version: u64) -> Option<[u8; 32]> {
+        let position = self
+            .stored
             .iter()
-            .find(|(_, image)| Arc::ptr_eq(image, prepared))
-        else {
-            return;
-        };
-        let key = *key;
-        self.identities.retain(|(value, _)| {
-            value.strong_count() != 0 && value.as_ptr() != Arc::as_ptr(bundle)
-        });
-        while self.identities.len() >= 32 {
-            self.identities.pop_front();
+            .position(|(candidate, _)| *candidate == version)?;
+        let entry = self.stored.remove(position).unwrap();
+        self.stored.push_back(entry);
+        Some(entry.1)
+    }
+    fn remember(&mut self, version: u64, key: [u8; 32]) {
+        self.stored.retain(|(candidate, _)| *candidate != version);
+        while self.stored.len() >= MAX_STORED_VERSIONS {
+            self.stored.pop_front();
         }
-        // Neither the JSON value nor another snapshot is kept alive by this
-        // shortcut. Image retention remains exclusively the bounded main LRU.
-        self.identities.push_back((Arc::downgrade(bundle), key));
+        self.stored.push_back((version, key));
     }
 }
 
@@ -278,27 +285,43 @@ impl Runtime {
         })
     }
 
-    pub(super) fn prepare_shared_bundle(
-        &self,
-        bundle: &Arc<Value>,
-        shared: Arc<Limits>,
-    ) -> Result<Arc<Prepared>> {
-        shared.check()?;
-        if let Some(prepared) = self
-            .cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Wasm cache lock poisoned"))?
-            .identity(bundle)
-        {
-            return Ok(prepared);
-        }
-        let mut decoded = Vec::new();
-        let prepared = self.prepare_source(Source::of(bundle, &mut decoded)?, shared)?;
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Cache>> {
         self.cache
             .lock()
-            .map_err(|_| anyhow::anyhow!("Wasm cache lock poisoned"))?
-            .remember(bundle, &prepared);
-        Ok(prepared)
+            .map_err(|_| anyhow::anyhow!("Wasm cache lock poisoned"))
+    }
+
+    /// The image of the bundle record that write `version` stored. `bundle`
+    /// reads the record, only for a version not seen before or whose image
+    /// left the cache, and gives None for a record without code: then so does
+    /// this. Every evaluation finds the deployed bundle this way, and hashing
+    /// its code, or parsing a record grown past the value cache's slices, took
+    /// most of a busy replica's time.
+    pub(super) fn prepare_stored_bundle(
+        &self,
+        version: u64,
+        bundle: impl FnOnce() -> Option<Arc<Value>>,
+        shared: Arc<Limits>,
+    ) -> Result<Option<Arc<Prepared>>> {
+        shared.check()?;
+        let known = {
+            let mut cache = self.lock()?;
+            let known = cache.stored(version);
+            if let Some(prepared) = known.and_then(|key| cache.touch(&key)) {
+                return Ok(Some(prepared));
+            }
+            known
+        };
+        let Some(bundle) = bundle() else {
+            return Ok(None);
+        };
+        let mut decoded = Vec::new();
+        let source = Source::of(&bundle, &mut decoded)?;
+        admit(&source, &shared)?;
+        let key = known.unwrap_or_else(|| source.key());
+        let prepared = self.prepare_keyed(source, key, shared)?;
+        self.lock()?.remember(version, key);
+        Ok(Some(prepared))
     }
 
     pub(super) fn prepare(&self, bundle: &str, shared: Arc<Limits>) -> Result<Arc<Prepared>> {
@@ -310,12 +333,17 @@ impl Runtime {
         source: Source<'_>,
         shared: Arc<Limits>,
     ) -> Result<Arc<Prepared>> {
-        ensure!(
-            source.len() <= crate::evaluator::config::settings()?.bundle_max_bytes,
-            "bundle exceeds FLOWER_BUNDLE_MAX_BYTES"
-        );
-        shared.check()?;
-        let key = source.key();
+        admit(&source, &shared)?;
+        self.prepare_keyed(source, source.key(), shared)
+    }
+
+    /// The image of `source`, whose content key is `key`.
+    fn prepare_keyed(
+        &self,
+        source: Source<'_>,
+        key: [u8; 32],
+        shared: Arc<Limits>,
+    ) -> Result<Arc<Prepared>> {
         loop {
             if let Some(prepared) = self.cached(&key)? {
                 return Ok(prepared);
@@ -462,6 +490,16 @@ impl Runtime {
         shared.check()?;
         Ok(prepared)
     }
+}
+
+/// Refuse a bundle past FLOWER_BUNDLE_MAX_BYTES, or a caller out of budget,
+/// before hashing or compiling anything.
+fn admit(source: &Source<'_>, shared: &Limits) -> Result<()> {
+    ensure!(
+        source.len() <= crate::evaluator::config::settings()?.bundle_max_bytes,
+        "bundle exceeds FLOWER_BUNDLE_MAX_BYTES"
+    );
+    shared.check()
 }
 
 /// A static-init bundle that cannot keep its initialized snapshot still works,
@@ -795,57 +833,80 @@ mod tests {
     }
 
     #[test]
-    fn weak_bundle_shortcuts_reject_mutation_and_eviction_and_stay_bounded() {
+    fn stored_bundle_versions_find_cached_images_only_and_stay_bounded() {
         let prepared = runtime()
             .unwrap()
             .prepare(
                 "var __flowerBundle={default:{definitions:{},http:{}}};",
-                Limits::new(
-                    Instant::now() + Duration::from_secs(30),
-                    crate::evaluator::config::settings()
-                        .unwrap()
-                        .guest_memory_bytes,
-                ),
+                super::super::tests::limits(),
             )
             .unwrap();
         let mut cache = Cache::default();
         cache.images.push_back(([7; 32], prepared.clone()));
-        let mut bundle = Arc::new(json!({"javascript":"first"}));
-        cache.remember(&bundle, &prepared);
-        assert_eq!(
-            Arc::strong_count(&bundle),
-            1,
-            "shortcut must not retain the JSON value"
-        );
-        assert!(Arc::ptr_eq(&cache.identity(&bundle).unwrap(), &prepared));
-        assert!(
-            Arc::get_mut(&mut bundle).is_none(),
-            "weak identity prevents in-place mutation"
-        );
-        Arc::make_mut(&mut bundle)["javascript"] = json!("second");
-        assert!(
-            cache.identity(&bundle).is_none(),
-            "copy-on-write value replacement invalidates old identity"
-        );
-        cache.remember(&bundle, &prepared);
+        cache.remember(5, [7; 32]);
+        assert_eq!(cache.stored(5), Some([7; 32]));
+        assert!(Arc::ptr_eq(&cache.touch(&[7; 32]).unwrap(), &prepared));
         cache.images.clear();
-        assert!(
-            cache.identity(&bundle).is_none(),
-            "external live images cannot bypass image-cache eviction"
+        assert_eq!(
+            cache.stored(5),
+            Some([7; 32]),
+            "the key outlives its image, sparing a hash"
         );
-        cache.images.push_back(([7; 32], prepared.clone()));
-        let values: Vec<_> = (0..100)
-            .map(|index| Arc::new(json!({"javascript":index})))
-            .collect();
-        for value in &values {
-            cache.remember(value, &prepared);
+        assert!(
+            cache.touch(&[7; 32]).is_none(),
+            "versions cannot keep an evicted image alive"
+        );
+        for version in 100..200 {
+            cache.remember(version, [8; 32]);
+            // The version in use stays while others come and go.
+            cache.stored(5);
         }
-        assert_eq!(cache.identities.len(), 32);
-        drop(values);
-        assert!(cache.identity(&bundle).is_none());
-        assert!(
-            cache.identities.is_empty(),
-            "dead identity headers are reclaimed"
+        assert_eq!(cache.stored.len(), MAX_STORED_VERSIONS);
+        assert_eq!(cache.stored(5), Some([7; 32]));
+        assert_eq!(cache.stored(100), None, "the least recently used left");
+    }
+
+    #[test]
+    fn stored_bundles_are_read_and_hashed_once_per_version() {
+        let runtime = runtime().unwrap();
+        let javascript = format!(
+            "/*{}*/var __flowerBundle={{default:{{definitions:{{}},http:{{}}}}}};",
+            "read once".repeat(64)
         );
+        let bundle = Arc::new(json!({ "javascript": javascript }));
+        let version = crate::consensus::next_version();
+        let mut reads = 0;
+        let mut images = Vec::new();
+        for _ in 0..4 {
+            let read = || {
+                reads += 1;
+                Some(bundle.clone())
+            };
+            let prepared = runtime
+                .prepare_stored_bundle(version, read, super::super::tests::limits())
+                .unwrap()
+                .expect("a bundle");
+            images.push(prepared);
+        }
+        assert_eq!(reads, 1);
+        assert_eq!(hashes(&javascript), 1);
+        assert!(
+            images
+                .windows(2)
+                .all(|pair| Arc::ptr_eq(&pair[0], &pair[1]))
+        );
+        assert_eq!(
+            call(&images[0])["ok"],
+            false,
+            "the empty bundle has no test method"
+        );
+        let without_code = runtime
+            .prepare_stored_bundle(
+                crate::consensus::next_version(),
+                || None,
+                super::super::tests::limits(),
+            )
+            .unwrap();
+        assert!(without_code.is_none());
     }
 }

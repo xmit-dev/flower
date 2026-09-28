@@ -39,6 +39,8 @@ use openraft::{BasicNode, CommittedLeaderId, Config, RaftMetrics, SnapshotPolicy
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(test)]
+pub(crate) use cache::parses;
 pub use limits::Limits;
 pub(crate) use limits::encoded_json_len;
 pub use membership::{Compatibility, MembershipChange, MembershipView, PeerInfo, compatibility};

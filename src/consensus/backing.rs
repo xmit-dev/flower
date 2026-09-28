@@ -113,7 +113,7 @@ impl Stored {
 
     pub(crate) fn value(&self) -> Arc<Value> {
         let (version, body) = split(self.bytes.value());
-        VALUES.get_or_parse(version, || unpack(body))
+        VALUES.get_or_parse(version, &self.key, || unpack(body))
     }
 }
 
@@ -200,7 +200,7 @@ impl Backing {
     pub(crate) fn get(&self, key: &str) -> Option<(u64, Arc<Value>)> {
         self.raw(key).map(|bytes| {
             let (version, body) = split(bytes.value());
-            (version, VALUES.get_or_parse(version, || unpack(body)))
+            (version, VALUES.get_or_parse(version, key, || unpack(body)))
         })
     }
 

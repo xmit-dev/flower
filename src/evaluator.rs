@@ -395,6 +395,35 @@ pub fn update_keys_at(data: impl Into<Records>, catalog: Value, now: u64) -> Res
     )
 }
 
+/// The deployed bundle's hash as its record stores it, checked against its
+/// code when it was deployed. Kept by the version of the write that stored the
+/// record, so that asking again parses nothing: the record holds the bundle's
+/// code, hundreds of kilobytes, and watches ask for every subscription.
+pub(crate) fn deployment_hash(data: &Records) -> Option<Value> {
+    static HASHES: std::sync::Mutex<std::collections::VecDeque<(u64, Option<Value>)>> =
+        std::sync::Mutex::new(std::collections::VecDeque::new());
+    let version = data.version("bundle")?;
+    let kept = HASHES
+        .lock()
+        .expect("deployment hashes lock")
+        .iter()
+        .find(|(kept, _)| *kept == version)
+        .map(|(_, hash)| hash.clone());
+    if let Some(hash) = kept {
+        return hash;
+    }
+    let hash = data
+        .get("bundle")
+        .and_then(|bundle| bundle.get("hash"))
+        .cloned();
+    let mut hashes = HASHES.lock().expect("deployment hashes lock");
+    if hashes.len() >= 64 {
+        hashes.pop_front();
+    }
+    hashes.push_back((version, hash.clone()));
+    hash
+}
+
 /// Initialize the shared QuickJS/Wasmtime sandbox.
 pub fn warmup() -> Result<()> {
     config::settings()?;
@@ -459,20 +488,28 @@ fn evaluate_selected(
     // This entire evaluator is synchronous; the guard never crosses an await.
     let span = profile::span(&profile);
     let _entered = span.enter();
-    let stored = mutation
-        .get("bundle")
-        .is_none()
-        .then(|| data.get_shared("bundle"))
-        .flatten()
-        .filter(|stored| {
-            stored.get("javascript").is_some_and(Value::is_string)
-                || stored.get("wasm").is_some_and(Value::is_string)
-        });
     let prepared = {
         let _timer = profile::timer(&profile, profile::Stage::BundlePrepare);
+        // The deployed bundle, by the version of its record: read, parsed
+        // and hashed only the first time this process meets that version.
+        let stored = match (mutation.get("bundle"), data.version("bundle")) {
+            (None, Some(version)) => wasm::prepare_stored_bundle(
+                version,
+                || {
+                    data.get_shared("bundle")
+                        .filter(|stored| {
+                            stored.get("javascript").is_some_and(Value::is_string)
+                                || stored.get("wasm").is_some_and(Value::is_string)
+                        })
+                        .cloned()
+                },
+                limits.clone(),
+            )?,
+            _ => None,
+        };
         match (mutation.get("bundle"), stored) {
             (Some(bundle), _) => wasm::prepare_bundle(bundle, limits.clone())?,
-            (None, Some(stored)) => wasm::prepare_shared_bundle(stored, limits.clone())?,
+            (None, Some(stored)) => stored,
             (None, None) => wasm::prepare(
                 "var __flowerBundle = { default: { definitions: {}, http: {} } };",
                 limits.clone(),
@@ -1468,6 +1505,46 @@ mod tests {
         assert_eq!(data["clock"], 1_100);
         let backwards = invoke_at(data, json!({"name":"read"}), "query", 900).unwrap();
         assert_eq!(backwards.value, json!([1_100, 1_100]));
+    }
+
+    #[test]
+    fn stored_bundles_are_parsed_and_hashed_once_across_evaluations() {
+        // Ultimator's bundle record outgrew the value cache's slice for one value
+        // (a 64th of 256 MiB, charged at six times its 700 KB of JSON): from
+        // then on every evaluation parsed it and hashed its code again.
+        let javascript = fixture_bundle(&format!(
+            "/*{}*/var __flowerBundle = {{default: {{read: {{kind:'queryMethod', compute: () => 42}}}}}};",
+            "stored".repeat(200 * 1024)
+        ));
+        let deployment = json!({"requestId":"deploy","bundle":{"hash":hash(javascript.as_bytes()),"javascript":javascript}});
+        let deployed = evaluate(BTreeMap::new(), deployment).unwrap().puts;
+        // Served from storage, as a replica serves it to every evaluation.
+        let records = Records::from(deployed).backed_copy();
+        let version = records.version("bundle").unwrap();
+        let read = || {
+            invoke(records.clone(), json!({"name":"read"}), "query")
+                .unwrap()
+                .value
+        };
+        assert_eq!(read(), 42);
+        let hashed = wasm::hashes(&javascript);
+        let stored_hash = Some(json!(hash(javascript.as_bytes())));
+        assert_eq!(deployment_hash(&records.clone()), stored_hash);
+        let parsed = crate::consensus::parses(version);
+        for _ in 0..16 {
+            assert_eq!(read(), 42);
+            assert_eq!(deployment_hash(&records.clone()), stored_hash);
+        }
+        assert_eq!(
+            crate::consensus::parses(version) - parsed,
+            0,
+            "evaluations parsed the stored bundle again"
+        );
+        assert_eq!(
+            wasm::hashes(&javascript) - hashed,
+            0,
+            "evaluations hashed the stored bundle again"
+        );
     }
 
     #[test]

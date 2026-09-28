@@ -137,7 +137,7 @@ impl Authorized {
         crate::evaluator::hash(
             &serde_json::to_vec(&json!({
                 "invocation":self.input,"method":self.method,"principal":self.principal,
-                "deployment":self.state.data.get("bundle").and_then(|bundle|bundle.get("hash")),
+                "deployment":crate::evaluator::deployment_hash(&self.state.data),
             }))
             .expect("watch scope is JSON"),
         )
