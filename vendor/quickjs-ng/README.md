@@ -72,17 +72,17 @@ On Linux and macOS, reusable Stores protect their linear memory except for hot
 pages, which stay writable and are copied from the pristine image by every
 reset. Protected pages are untouched and already pristine. On Linux 6.7+, where
 a user-mode userfaultfd is permitted, the kernel records writes to protected
-pages without signals; each reset scans and re-protects exactly the pages written
-since the previous one, and a page written in two resets within four stays hot.
-Otherwise Wasmtime's per-Store signal hook makes each first-written native page
-writable and hot, and Rust marks host-written input and crypto buffers
-explicitly, including nested calls; a hot set grown past twice its expected size
-plus 256 KiB is protected again. Every 1,024 resets all pages are protected
-again, and new Stores start with the pages both of their image's two latest
-exact single-callback footprints wrote already hot. There are no hashes or
-assumptions about which application code will write which pages. macOS uses
-Wasmtime's supported Unix signal mode; every Engine in the process must agree on
-that mode.
+pages without signals; each reset scans and re-protects exactly the pages
+written since the previous one, and a page written by two consecutive resets
+stays hot. Otherwise Wasmtime's per-Store signal hook makes each first-written
+native page writable and hot, and Rust marks host-written input and crypto
+buffers explicitly, including nested calls; a hot set grown past twice its
+expected size plus 256 KiB is protected again. All pages are protected again
+every 128 resets with userfaultfd and every 1,024 with signals, and new Stores
+start with the pages both of their image's two latest exact single-callback
+footprints wrote already hot. There are no hashes or assumptions about which
+application code will write which pages. macOS uses Wasmtime's supported Unix
+signal mode; every Engine in the process must agree on that mode.
 
 The full-copy path remains available on unsupported platforms and when protection
 setup fails. `FLOWER_WASM_DIRTY_PAGES=0` selects it explicitly, and `signal`
