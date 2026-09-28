@@ -140,6 +140,8 @@ const DATA: TableDefinition<&[u8], &[u8]> = TableDefinition::new("application_da
 #[cfg(test)]
 const REQUESTS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("application_requests_v4");
 const STATE_META: &str = "state_v4";
+/// How far above the stored version bound a restarted process starts.
+const RESTART_MARGIN: u64 = 1 << 24;
 // Present when index entries use the current layout.
 const INDEX_LAYOUT_META: &str = "index_layout_v2";
 const PREVIOUS_STATE_META: &str = "state_v3";
@@ -1071,8 +1073,12 @@ fn load_application(transaction: &WriteTransaction, tables: Tables) -> anyhow::R
         "incomplete application storage tables"
     );
     check_index_layout(transaction, tables, false)?;
-    // The caller serves the tables once this transaction commits.
-    super::versions_after(metadata.versions);
+    // The caller serves the tables once this transaction commits. Servers
+    // before 8ae042e could store versions above the bound they stored with
+    // them (up to a block's worth per apply, more for partitions under a busy
+    // disk); starting well above it keeps their data safe on the first
+    // restart too, and costs nothing: versions are only compared.
+    super::versions_after(metadata.versions.saturating_add(RESTART_MARGIN));
     Ok(StoredState {
         last_applied: metadata.last_applied,
         membership: metadata.membership,

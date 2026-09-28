@@ -313,6 +313,31 @@ async fn stored_version_bound_covers_every_version_the_batch_stored() {
 }
 
 #[tokio::test]
+async fn a_reopened_store_versions_well_above_its_stored_bound() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(1, directory.path().into()).await.unwrap();
+    store
+        .apply([entry(1, command("one", 0, &[("key", json!(1))], &[]))])
+        .await
+        .unwrap();
+    store.close().await.unwrap();
+    drop(store);
+    let stored = {
+        let db = Database::open(directory.path().join("flower.redb")).unwrap();
+        read_meta::<StateMetadata>(&db, Tables::new(""), STATE_META)
+            .unwrap()
+            .unwrap()
+            .versions
+    };
+    let _reopened = Store::open(1, directory.path().into()).await.unwrap();
+    // A fresh thread takes a fresh block, from the shared counter.
+    let next = std::thread::spawn(crate::consensus::next_version)
+        .join()
+        .unwrap();
+    assert!(next > stored + RESTART_MARGIN, "{next} ≤ {stored} + margin");
+}
+
+#[tokio::test]
 async fn grouped_deltas_preserve_order_dedup_cas_and_untouched_allocations() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(1, directory.path().into()).await.unwrap();
