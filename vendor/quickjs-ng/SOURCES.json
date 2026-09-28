@@ -33,11 +33,18 @@
     "quickjs-atom.h": "66654ae6533d15073ea527979c453709d7ed83162142c656095a10dcef737a60",
     "quickjs-c-atomics.h": "29883c742a5c512278fce54d19b1b9af949006e1d7dfc9ffa2e0946b184d8c5c",
     "quickjs-opcode.h": "0054b0c45fd091afa308c3fb93b5862e0b071235918d3d73e413d23fce388bbc",
-    "quickjs.c": "9fd0e0e68856d165e2872140ac38889845b53eb1bc55150f8598a53eb86948f5",
+    "quickjs.c": "1be2b1fe2e200d1cad0b5bd5f1dbb526b525dc253b926a8f600f26cb820dc024",
     "quickjs.h": "747a77444ff04a910b57ca51dd998d7ee46895b1b9592d7d6051fd180317c44d"
   },
+  "patches": {
+    "quickjs.c": {
+      "upstream_sha256": "9fd0e0e68856d165e2872140ac38889845b53eb1bc55150f8598a53eb86948f5",
+      "patch": "patches/immortal-image-blocks.patch",
+      "patch_sha256": "7e2510d4a68c37e214b79e6ec90a5cd7bf9f9f8c7252a47705aa4ba75510344c"
+    }
+  },
   "artifact": {
-    "sha256": "4146efd6851a79d0f056cebd5e927682f51ef3a740ee006bceaa32eaeba0b822",
-    "bytes": 1130175
+    "sha256": "ab4a8c3637a27d30e1f66f45db5fa0b6e4171b09498db7f3f30eed0e525800fb",
+    "bytes": 1156722
   }
 }

@@ -25,6 +25,7 @@ extern uint64_t flower_wire_invoke(JSContext *ctx, JSValueConst run, JSValueCons
                                    int32_t kind, const char *name, uint32_t name_length,
                                    const uint8_t *args, uint32_t args_length);
 extern uint64_t flower_wire_manifest(JSContext *ctx, JSValueConst manifest, JSValueConst describe);
+extern void flower_immortalize(JSRuntime *rt);
 
 /* QuickJS seeds its internal string hash in JS_NewContextRaw. Deterministic
  * zero is deliberate: no ambient clock/randomness is available to this guest.
@@ -209,6 +210,8 @@ EXPORT("flower_snapshot_prepare") uint64_t flower_snapshot_prepare(void) {
     size_t live = (size_t)after.malloc_size;
     size_t threshold = live > SIZE_MAX - (live >> 1) ? SIZE_MAX : live + (live >> 1);
     JS_SetGCThreshold(runtime, threshold);
+    /* What survived is the image: evaluations never free it or count its references. */
+    flower_immortalize(runtime);
     char diagnostics[384];
     int length = snprintf(diagnostics, sizeof(diagnostics),
         "{\"bytesBefore\":%lld,\"bytesAfter\":%lld,\"objectsBefore\":%lld,"

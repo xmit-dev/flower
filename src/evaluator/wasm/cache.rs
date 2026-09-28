@@ -18,7 +18,7 @@ mod flight;
 mod profile;
 
 const WASM: &[u8] = include_bytes!("../../../vendor/quickjs-ng/quickjs.wasm");
-const WASM_HASH: &str = "4146efd6851a79d0f056cebd5e927682f51ef3a740ee006bceaa32eaeba0b822";
+const WASM_HASH: &str = "ab4a8c3637a27d30e1f66f45db5fa0b6e4171b09498db7f3f30eed0e525800fb";
 const MAX_CACHE_BYTES: usize = 96 * 1024 * 1024;
 const MAX_CACHE_ENTRIES: usize = 8;
 /// Stored bundle records whose content keys are remembered, by version.

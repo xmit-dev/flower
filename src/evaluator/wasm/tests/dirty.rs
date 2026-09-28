@@ -648,3 +648,99 @@ fn fresh_stores_start_with_the_learned_seed_and_skip_first_write_faults() {
     assert_eq!(faults[2], 0, "{faults:?}");
     assert_eq!(copied[2], copied[0], "{copied:?}");
 }
+
+/// The first reset of a new Store of `prepared` after one `args` callback:
+/// exactly the bytes that callback wrote, and the image's size.
+fn footprint(prepared: &Prepared, args: Value) -> (Value, usize, usize) {
+    // A new Store has no hot pages until its image learns a seed from two.
+    pool::release(prepared);
+    let before = pool::stats(prepared);
+    let result = execute_prepared(
+        prepared,
+        "test",
+        &args,
+        "query",
+        &mut |_, _| Ok(Value::Null),
+        limits(),
+    )
+    .unwrap();
+    let after = pool::stats(prepared);
+    assert_eq!(after.created, before.created + 1);
+    (
+        result,
+        after.reset_bytes - before.reset_bytes,
+        after.reset_total_bytes - before.reset_total_bytes,
+    )
+}
+
+#[test]
+fn callbacks_reading_the_initialized_image_leave_its_pages_unwritten() {
+    if !child("callbacks_reading_the_initialized_image_leave_its_pages_unwritten") {
+        return;
+    }
+    // 20,000 rows of objects, strings and arrays initialized into the image.
+    // Reading one took and dropped a reference to each, writing its count.
+    let source = format!(
+        "{STATIC_INIT_MARKER}const table=Array.from({{length:20000}},(_,i)=>({{id:i,name:'row '+i,tags:['t'+i%7]}}));{}",
+        bundle(
+            "(_,args)=>{let sum=0;for(const row of table)sum+=row.id+row.name.length+row.tags[0].length;return sum}",
+            false,
+        ),
+    );
+    let prepared = prepare(&source, limits()).unwrap();
+    let expected: usize = (0..20_000).map(|i| i + format!("row {i}").len() + 2).sum();
+    for _ in 0..2 {
+        let (result, written, image) = footprint(&prepared, Value::Null);
+        assert_eq!(result, json!({"ok":true,"value":expected}));
+        assert!(
+            image > 2 * 1024 * 1024,
+            "the image holds the table: {image}"
+        );
+        assert!(
+            written < 64 * 4096,
+            "reading the table wrote {} KiB of a {} KiB image",
+            written / 1024,
+            image / 1024
+        );
+    }
+}
+
+#[test]
+fn collections_during_a_callback_keep_what_the_image_references() {
+    if !child("collections_during_a_callback_keep_what_the_image_references") {
+        return;
+    }
+    // Image objects never enter a callback's collection: what they reference
+    // must survive it, while garbage cycles pointing into the image go.
+    let source = format!(
+        "{STATIC_INIT_MARKER}const table=Array.from({{length:5000}},(_,i)=>({{id:i}}));{}",
+        bundle(
+            r#"(_,args)=>{
+                const fresh=table[0].extra===undefined&&table[1].ring===undefined;
+                table[0].extra={v:42};
+                const ring={};ring.self=ring;table[1].ring=ring;
+                let odd=0;
+                for(let i=0;i<200000;i++){const a={i,row:table[i%5000]};a.self=a;odd+=a.i&1}
+                let sum=0;for(const row of table)sum+=row.id;
+                return{fresh,extra:table[0].extra.v,ring:table[1].ring.self===table[1].ring,odd,sum};
+            }"#,
+            false,
+        ),
+    );
+    let prepared = prepare(&source, limits()).unwrap();
+    for _ in 0..3 {
+        let result = execute_prepared(
+            &prepared,
+            "test",
+            &Value::Null,
+            "query",
+            &mut |_, _| Ok(Value::Null),
+            limits(),
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            json!({"ok":true,"value":{"fresh":true,"extra":42,"ring":true,"odd":100000,"sum":12497500}})
+        );
+    }
+}

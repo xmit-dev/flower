@@ -1,14 +1,16 @@
 # Flower's QuickJS-NG guest
 
-Flower vendors the unmodified core of [QuickJS-NG v0.17.0](https://github.com/quickjs-ng/quickjs/releases/tag/v0.17.0),
-commit `6d46d07d04041b40f4f49eaa7fdebe44c314c699`, and builds its own small
+Flower vendors the core of [QuickJS-NG v0.17.0](https://github.com/quickjs-ng/quickjs/releases/tag/v0.17.0),
+commit `6d46d07d04041b40f4f49eaa7fdebe44c314c699`, with one patch of its own
+([immortal image blocks](#immortal-image-blocks)), and builds its own small
 [`flower.c`](flower.c) interface. [`SOURCES.json`](SOURCES.json) records every
-upstream file's SHA-256, the upstream archive digest, compiler and static-library
-revisions, and the final artifact digest. The upstream CLI, `quickjs-libc`, module
+vendored file's SHA-256, the patch and the upstream digest of the file it
+changes, the upstream archive digest, compiler and static-library revisions, and
+the final artifact digest. The upstream CLI, `quickjs-libc`, module
 loaders, and examples are neither vendored nor linked.
 
-The checked-in `quickjs.wasm` is **1,130,175 bytes**, SHA-256
-`4146efd6851a79d0f056cebd5e927682f51ef3a740ee006bceaa32eaeba0b822`.
+The checked-in `quickjs.wasm` is **1,156,722 bytes**, SHA-256
+`ab4a8c3637a27d30e1f66f45db5fa0b6e4171b09498db7f3f30eed0e525800fb`.
 Rust embeds it with `include_bytes!` and verifies its digest and complete ABI
 before compiling. Normal Cargo builds need no guest cross-compiler or WASI SDK;
 native Rust dependencies may still require a host C compiler. Server operation
@@ -104,14 +106,41 @@ before its Store is destroyed. An image larger than the byte budget still runs
 normally in fresh COW instances; the budget limits caching rather than
 application heap capacity.
 
+## Immortal image blocks
+
+What an image holds is immortal. `flower_snapshot_prepare` raises the
+reference count of every block alive after its collection to `JS_REF_IMMORTAL`
+(2^30): every small block in the allocator's arenas, every collectable object
+and atom, and every string or big integer those objects hold in properties,
+arrays, constants or closed-over variables, whatever its size. The patched
+engine never increments, decrements or frees such a block again, so a callback
+started from the image reads it without writing to it. Taking a property of an
+initialized object, calling an initialized function, creating an object with an
+initialized shape or pushing a constant used to raise and lower a reference
+count in the page holding it, and that page then had to be restored. A 32-bit
+heap cannot hold 2^30 references to one block, so live counts never reach the
+sentinel. The image's collectable objects also leave the collector's list: a
+collection during a callback walks only what the callback allocated, skips
+edges to immortal blocks, and keeps what they reference alive, since their
+references to it are never counted down. Nothing immortal is freed before the
+reset discards it all. The few blocks an image holds that are none of these
+(large strings kept only in maps, for instance) stay counted, which is merely
+slower. An engine upgrade must carry the patch to every reference count change.
+
+On Ultimator's capacity simulation (300 sessions, exact footprints), a callback
+wrote 138 of the image's ~1,950 pages before and 79 after; 66 of the 138 were
+byte-identical to the image again when it returned.
+
 ## Reproduce and verify
 
 The vendored source subset is byte-for-byte upstream, with its MIT license in
-[`upstream/LICENSE`](upstream/LICENSE). No upstream patch is required.
-[`engine.c`](engine.c) includes the pinned engine and Flower's
+[`upstream/LICENSE`](upstream/LICENSE), except `quickjs.c`, which is upstream plus
+[`patches/immortal-image-blocks.patch`](patches/immortal-image-blocks.patch):
+every build and `--verify-only` undoes the patch and checks that the result is
+the pinned upstream file. [`engine.c`](engine.c) includes the engine and Flower's
 [`json-check.c`](json-check.c), [`canonical-json.c`](canonical-json.c),
-[`wire.c`](wire.c) and [`crypto-view.c`](crypto-view.c) extensions in one
-translation unit. The value codec and the canonical JSON fast path read object
+[`wire.c`](wire.c), [`crypto-view.c`](crypto-view.c) and
+[`immortal.c`](immortal.c) extensions in one translation unit. The value codec and the canonical JSON fast path read object
 shapes and string buffers directly, without invoking application getters. The crypto helper validates Uint8Array
 views and reads their current length, including length-tracking resizable
 buffers: this pinned engine's public typed-array accessors return the original
@@ -155,8 +184,10 @@ An intentional guest change uses `--write`, which replaces the Wasm and updates
 the artifact digest in `SOURCES.json`. Update Rust's embedded digest separately
 and run the guest ABI, isolation/budget, differential, and integration tests.
 Changing upstream requires explicitly updating its release, commit, archive
-digest, and individual file digests; the script never silently downloads or
-changes upstream code.
+digest, and individual file digests, and carrying the patch over (regenerate it
+with `diff -u --label a/quickjs.c --label b/quickjs.c` against the pinned file
+and record its digest); the script never silently downloads or changes upstream
+code.
 
 ### Name guest functions in native profiles
 

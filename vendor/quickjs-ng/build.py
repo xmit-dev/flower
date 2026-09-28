@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import tempfile
 
@@ -147,6 +148,40 @@ def symbol_sidecar(named, artifact):
     return {"guest_sha256": hashlib.sha256(artifact).hexdigest(), "functions": functions}
 
 
+def lines(text):
+    return re.findall(r"[^\n]*\n|[^\n]+$", text)
+
+
+def unpatched(patched, patch):
+    """The file that 'patch', a unified diff, turned into 'patched'."""
+    vendored = lines(patched)
+    result, position = [], 0
+    hunks = lines(patch)
+    index = 0
+    while index < len(hunks) and not hunks[index].startswith("@@"):
+        index += 1
+    while index < len(hunks):
+        header = hunks[index].split()
+        start = int(header[2][1:].split(",")[0])
+        index += 1
+        old, new = [], []
+        while index < len(hunks) and not hunks[index].startswith("@@"):
+            line = hunks[index]
+            if line.startswith("\\"):
+                pass
+            elif line[:1] in (" ", "-"):
+                old.append(line[1:])
+            if line[:1] in (" ", "+"):
+                new.append(line[1:])
+            index += 1
+        at = start - 1 if new else start
+        if at < position or vendored[at:at + len(new)] != new:
+            raise SystemExit(f"patch does not match the vendored file at line {start}")
+        result += vendored[position:at] + old
+        position = at + len(new)
+    return "".join(result + vendored[position:]).encode()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     machine = {"aarch64": "arm64", "x86_64": "x86_64"}.get(platform.machine(), platform.machine())
@@ -165,7 +200,15 @@ def main():
     for name, expected in lock["files"].items():
         actual = hashlib.sha256((ROOT / "upstream" / name).read_bytes()).hexdigest()
         if actual != expected:
-            raise SystemExit(f"upstream source checksum mismatch: {name}")
+            raise SystemExit(f"vendored source checksum mismatch: {name}")
+    # A patched file is its pinned upstream file and exactly the recorded patch.
+    for name, entry in lock.get("patches", {}).items():
+        patch = (ROOT / entry["patch"]).read_bytes()
+        if hashlib.sha256(patch).hexdigest() != entry["patch_sha256"]:
+            raise SystemExit(f"patch checksum mismatch: {entry['patch']}")
+        original = unpatched((ROOT / "upstream" / name).read_text(), patch.decode())
+        if hashlib.sha256(original).hexdigest() != entry["upstream_sha256"]:
+            raise SystemExit(f"{name} without {entry['patch']} is not the pinned upstream file")
     artifact = ROOT / "quickjs.wasm"
     if args.verify_only:
         output = artifact.read_bytes()
