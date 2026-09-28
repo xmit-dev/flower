@@ -168,6 +168,16 @@ struct Manifest {
 #[serde(deny_unknown_fields)]
 struct AuthorizationMethod {
     name: String,
+    /// `Decision`: the hook returns `{principal, readArgs}`, and a decision
+    /// that did not read the arguments holds for any (service::authorization).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    result: Option<AuthorizationResult>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum AuthorizationResult {
+    Decision,
 }
 
 pub fn hash(bytes: &[u8]) -> String {

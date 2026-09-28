@@ -173,8 +173,10 @@ export class TestDatabase<App = FlowerModule> {
     const credentials = options.credentials !== undefined ? options.credentials : this.credentials ?? null;
     let principal: Principal;
     try {
-      principal = plain(this.run(store.data, "query", hook.name,
-        { credentials, method: alias, args, partition: partition || null, delegation } as unknown as Json, null, false).value) as unknown as Principal;
+      const value = plain(this.run(store.data, "query", hook.name,
+        { credentials, method: alias, args, partition: partition || null, delegation } as unknown as Json, null, false).value) as Record<string, unknown> | null;
+      // A decision carries the principal beside whether it read the arguments (the server reuses those that did not).
+      principal = (hook.result === "decision" ? value?.principal : value) as Principal;
     } catch (error) {
       throw new FlowerError("Authorization denied", 403, "FORBIDDEN", failureOf(error));
     }

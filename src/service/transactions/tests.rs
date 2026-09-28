@@ -65,6 +65,7 @@ async fn application() -> (tempfile::TempDir, Arc<App>) {
         query_evaluations: Arc::new(Semaphore::new(1)),
         admission: crate::service::admission::Pool::configured().unwrap(),
         query_cache: query_cache::QueryCache::default(),
+        authorizations: crate::service::authorization::memo::Memo::default(),
         watch_hubs: crate::service::watch::hubs::Registry::default(),
         admin_token: "transaction-test-secret".into(),
         clock: clock::Clock::new(),

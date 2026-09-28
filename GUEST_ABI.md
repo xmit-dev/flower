@@ -149,13 +149,24 @@ Entropy (opcode 0) is available only to mutations.
   "http": {"alias": {"name": "definition", "kind": "query|mutation|transaction",
                      "consistency": "replica-local", "receipt": false}},
   "maintenance": {"name": "…", "kind": "mutation", "onError": {…}} ,
-  "authorize": {"name": "…"},
+  "authorize": {"name": "…", "result": "decision"},
   "collections": [{"name": "…", "indexes": {"index": ["field", …]}, "access": {…}}],
   "keys": [{"kind": "key", "name": "…", "algorithm": "…", "usages": ["…"]}]
 }
 ```
 
-Optional members may be absent. The host validates the manifest: HTTP aliases,
+Optional members may be absent. The authorization hook is a query that
+receives `{credentials, method, args, partition, delegation}` and returns the
+principal; with `"result": "decision"` it returns `{principal, readArgs}`
+instead, `readArgs` saying what deciding read of `args`: nothing (`false`),
+the top-level fields it names (an array of their names, whose whole values it
+may have read), or anything else (`true`). The host reuses a decision for
+later calls with the same credentials, method, partition and delegation whose
+`args` (an object, when fields are named) agree on those fields, present or
+absent, while every record it read is unchanged and its time (`changesAt`, as
+for queries) has not come; a decision that read all of `args`, polled `now`
+or read untracked state is not reused. The host
+validates the manifest: HTTP aliases,
 maintenance and authorization must name definitions of the right kind, an
 alias's `consistency` (queries) and `receipt` (mutations) must match its
 definition's, and

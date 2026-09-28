@@ -500,7 +500,11 @@ function authorization(config: AuthConfig | undefined, http: Readonly<Record<str
   }
   // A hook forces fresh policy reads and full admission, so compile one only when a call could be refused.
   if (!authenticate && !settings?.delegation && ![...policies.values()].some((policy) => typeof policy.access === "function")) return null;
-  return query("$flower.authorize", (ctx, request: AuthorizationRequest): Principal => {
+  return query("$flower.authorize", (ctx, request: AuthorizationRequest): AuthorizationDecision => {
+    // What the decision saw of the call's arguments. It holds for any call whose arguments agree on that, so the host
+    // reuses it for the same credentials, method, partition and delegation while nothing else it read changes (the
+    // manifest's authorize.result is "decision").
+    const reads = new ArgsReads();
     let principal: Principal | null;
     if (request.delegation) {
       principal = anonymousAware(request.delegation.principal);
@@ -510,7 +514,7 @@ function authorization(config: AuthConfig | undefined, http: Readonly<Record<str
       // A trusted coordinator's principal acts in this partition; the host requires tenant === partition.
       if (principal !== null && request.partition) principal = { ...principal, tenant: request.partition };
     } else {
-      const resolved = authenticate ? authenticate(ctx, request.credentials, request) : null;
+      const resolved = authenticate ? authenticate(ctx, request.credentials, trackedRequest(request, reads)) : null;
       principal = resolved === null ? null : checkedPrincipal(resolved);
     }
     const policy = request.method.startsWith("$flower.session.") ? sessions : policies.get(request.method);
@@ -525,9 +529,64 @@ function authorization(config: AuthConfig | undefined, http: Readonly<Record<str
           throw error;
         }
       }
-      if (!policy.access(ctx, principal, args)) fail("FORBIDDEN", "Access denied");
+      if (!policy.access(ctx, principal, reads.track(args))) fail("FORBIDDEN", "Access denied");
     }
-    return principal ?? { subject: ANONYMOUS_SUBJECT, ...(request.partition ? { tenant: request.partition } : {}) };
+    return { principal: principal ?? { subject: ANONYMOUS_SUBJECT, ...(request.partition ? { tenant: request.partition } : {}) }, readArgs: reads.report() };
+  });
+}
+
+/**
+ * What the authorization hook returns: the principal, and what deciding read of the call's arguments: nothing
+ * (`false`), some of its top-level fields (their names), or more (`true`).
+ */
+interface AuthorizationDecision { readonly principal: Principal; readonly readArgs: boolean | readonly string[] }
+
+/**
+ * What a decision reads of the arguments, through proxies that notice: a field read by name (`args.x`, `"x" in args`)
+ * adds that field, whose whole value the decision then depends on; anything else (enumerating keys, serializing,
+ * symbols, writes) counts as reading everything. Arguments that are not objects count as read when handed over.
+ * Passing a proxy itself to the database fails, as for any value that is not plain data; its fields are plain.
+ */
+class ArgsReads {
+  private all = false;
+  private readonly fields = new Set<string>();
+
+  track(args: unknown): unknown {
+    if (args === null || typeof args !== "object") {
+      this.all = true;
+      return args;
+    }
+    const field = (key: string | symbol) => {
+      if (typeof key === "string" && key !== "__proto__") this.fields.add(key);
+      else this.all = true;
+    };
+    const handler: ProxyHandler<object> = {
+      get: (target, key, receiver) => { field(key); return Reflect.get(target, key, receiver); },
+      has: (target, key) => { field(key); return Reflect.has(target, key); },
+    };
+    for (const trap of ["ownKeys", "getOwnPropertyDescriptor", "getPrototypeOf", "setPrototypeOf", "isExtensible",
+      "preventExtensions", "defineProperty", "deleteProperty", "set"] as const) {
+      (handler as Record<string, unknown>)[trap] = (...rest: unknown[]) => {
+        this.all = true;
+        return (Reflect[trap] as (...rest: unknown[]) => unknown)(...rest);
+      };
+    }
+    return new Proxy(args, handler);
+  }
+
+  report(): boolean | string[] {
+    return this.all ? true : this.fields.size > 0 ? [...this.fields].sort() : false;
+  }
+}
+
+/** The request an authenticate function sees, its arguments tracked. */
+function trackedRequest(request: AuthorizationRequest, reads: ArgsReads): AuthorizationRequest {
+  return Object.freeze({
+    credentials: request.credentials,
+    method: request.method,
+    get args() { return reads.track(request.args) as Json; },
+    partition: request.partition,
+    delegation: request.delegation,
   });
 }
 
@@ -653,7 +712,7 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
     definitions: Object.freeze(definitions),
     http: Object.freeze(http),
     maintenance: maintenanceManifest,
-    ...(authorize ? { authorize: Object.freeze({ name: authorize.name }) } : {}),
+    ...(authorize ? { authorize: Object.freeze({ name: authorize.name, result: "decision" as const }) } : {}),
     ...(manifest.length ? { collections: Object.freeze(manifest) } : {}),
     ...(keys.length ? { keys } : {}),
   }) as unknown as FlowerModule<H>;

@@ -461,7 +461,8 @@ export interface FlowerModule<H extends HttpMap = HttpMap> {
   readonly definitions: Readonly<Record<string, Definition>>;
   readonly http: { readonly [K in keyof H]: ManifestMethod };
   readonly maintenance: { readonly name: string; readonly kind: "mutation"; readonly onError: { readonly name: string; readonly kind: "mutation" } } | null;
-  readonly authorize?: { readonly name: string };
+  /** The authorization hook. It returns `{ principal, readArgs }` (`result: "decision"`): whether deciding read the call's arguments. */
+  readonly authorize?: { readonly name: string; readonly result: "decision" };
   readonly collections?: readonly CollectionManifest[];
   readonly keys?: readonly ManagedKey[];
   readonly [phantom]?: H;

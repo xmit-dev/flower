@@ -2,7 +2,8 @@
 //! maintenance and authorization methods, key declarations and index schema
 //! Flower stores. Every guest kind goes through these same checks.
 use super::{
-    AuthorizationMethod, HttpMethod, MaintenanceMethod, Manifest, MethodKind, QueryConsistency,
+    AuthorizationMethod, AuthorizationResult, HttpMethod, MaintenanceMethod, Manifest, MethodKind,
+    QueryConsistency,
     rust_engine::{IndexSpec, Policy, Rule, Schema, validate_derived_targets, validate_targets},
 };
 use anyhow::{Result, anyhow, bail, ensure};
@@ -352,8 +353,14 @@ pub(super) fn validate(raw: &Value) -> Result<Manifest> {
         method => {
             let method = object(method, "authorization method")?;
             let name = text(method, "name");
+            // "result": "decision": the hook reports whether it read the arguments.
+            let result = match method.get("result") {
+                None => None,
+                Some(value) if value == "decision" => Some(AuthorizationResult::Decision),
+                Some(_) => bail!(r#"Authorization result must be "decision""#),
+            };
             ensure!(
-                method.len() == 1
+                method.len() == 1 + usize::from(result.is_some())
                     && definition(name, MethodKind::Query).is_some_and(|definition| {
                         definition.consistency == QueryConsistency::Linearizable
                     }),
@@ -361,6 +368,7 @@ pub(super) fn validate(raw: &Value) -> Result<Manifest> {
             );
             Some(AuthorizationMethod {
                 name: name.unwrap_or_default().to_owned(),
+                result,
             })
         }
     };
@@ -419,7 +427,22 @@ mod tests {
             serde_json::to_value(&manifest.maintenance).unwrap(),
             json!({"name": "tidy", "kind": "mutation", "onError": {"name": "save", "kind": "mutation"}})
         );
-        assert_eq!(manifest.authorize.unwrap().name, "list");
+        let authorize = manifest.authorize.unwrap();
+        assert_eq!((authorize.name.as_str(), authorize.result), ("list", None));
+        // A hook may return decisions, saying whether it read the arguments.
+        let decisions = validate(&json!({
+            "definitions": {"list": {"kind": "query"}},
+            "http": {},
+            "authorize": {"name": "list", "result": "decision"}
+        }))
+        .unwrap()
+        .authorize
+        .unwrap();
+        assert_eq!(decisions.result, Some(AuthorizationResult::Decision));
+        assert_eq!(
+            serde_json::to_value(&decisions).unwrap(),
+            json!({"name": "list", "result": "decision"})
+        );
         assert_eq!(
             serde_json::to_value(&manifest.schema).unwrap(),
             json!({
@@ -547,6 +570,14 @@ mod tests {
             ),
             (
                 json!({"definitions": definitions, "http": {}, "authorize": {"name": "m"}}),
+                "Authorization must reference",
+            ),
+            (
+                json!({"definitions": definitions, "http": {}, "authorize": {"name": "q", "result": "principal"}}),
+                "Authorization result must be",
+            ),
+            (
+                json!({"definitions": definitions, "http": {}, "authorize": {"name": "q", "extra": true}}),
                 "Authorization must reference",
             ),
             (

@@ -42,6 +42,7 @@ struct App {
     query_evaluations: Arc<Semaphore>,
     admission: Arc<admission::Pool>,
     query_cache: query_cache::QueryCache,
+    authorizations: authorization::memo::Memo,
     watch_hubs: watch::hubs::Registry,
     admin_token: String,
     clock: clock::Clock,
@@ -147,6 +148,7 @@ fn make_app(
         query_evaluations,
         admission,
         query_cache: query_cache::QueryCache::default(),
+        authorizations: authorization::memo::Memo::default(),
         watch_hubs: watch::hubs::Registry::default(),
         admin_token,
         clock: clock::Clock::new(),
@@ -1175,6 +1177,7 @@ async fn resource_metrics(
     }
     let mut metrics = app.admission.metrics();
     metrics["watches"] = app.watch_hubs.metrics();
+    metrics["authorizations"] = app.authorizations.metrics();
     metrics["snapshots"] = app.consensus.snapshot_policy_metrics();
     metrics["storage"] = app.consensus.storage_metrics();
     Ok(Json(metrics))

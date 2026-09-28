@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde::ser::SerializeMap;
 use sha2::{Digest, Sha256};
 
+pub(super) mod memo;
 #[cfg(test)]
 mod tests;
 
@@ -31,6 +32,7 @@ pub(super) async fn authorize_admitted(
 }
 
 /// An access decision, and what can change it without new credentials.
+#[derive(Clone)]
 pub(super) struct Access {
     pub principal: Value,
     /// How long it holds without a new revision, so an idle watch rechecks
@@ -113,6 +115,16 @@ async fn authorize_inner(
         .consensus
         .partition_binding()
         .map(|binding| binding.partition.as_str());
+    // A hook that reports what it read of the arguments returns a decision,
+    // which holds for arguments that agree on that: reuse it while it holds.
+    let reported = method.get("result").and_then(Value::as_str) == Some("decision");
+    let reuse = reported.then(|| memo::key(input, partition, &delegation));
+    if let Some(key) = &reuse
+        && let Some(access) = app.authorizations.get(key, input.get("args"), app, state)
+    {
+        return Ok(access);
+    }
+    app.authorizations.evaluated();
     let invocation = json!({"name":name,"args":{
         "credentials": input.get("credentials").unwrap_or(&Value::Null),
         "method": input["name"],
@@ -142,7 +154,30 @@ async fn authorize_inner(
     })?;
     let validity = Validity::of(&result);
     let observed = result.query_certificate.map(Arc::new);
-    let principal = result.value;
+    // What it read of the arguments: none (`false`), fields by name, or more
+    // (`true`, None), which no other call is known to share.
+    let (principal, read_fields) = if reported {
+        let decision = result.value;
+        let fields = decision.get("readArgs").and_then(|read| match read {
+            Value::Bool(all) => Some((!all).then(Vec::new)),
+            Value::Array(fields) => fields
+                .iter()
+                .map(|field| field.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .map(Some),
+            _ => None,
+        });
+        match (decision.as_object(), fields) {
+            (Some(object), Some(fields))
+                if object.len() == 2 && object.contains_key("principal") =>
+            {
+                (decision["principal"].clone(), fields)
+            }
+            _ => return Err(denied("Authorization returned an invalid decision")),
+        }
+    } else {
+        (result.value, None)
+    };
     let Some(object) = principal.as_object() else {
         return Err(denied("Authorization denied"));
     };
@@ -163,11 +198,20 @@ async fn authorize_inner(
     {
         return Err(denied("Principal is not authorized for this partition"));
     }
-    Ok(Access {
+    let access = Access {
         principal,
         validity,
         observed,
-    })
+    };
+    if let Some(key) = reuse
+        && let Some(mut fields) = read_fields
+    {
+        fields.sort_unstable();
+        fields.dedup();
+        app.authorizations
+            .insert(key, input.get("args"), fields, state.revision, &access);
+    }
+    Ok(access)
 }
 
 pub(super) fn business_input(input: &Value) -> Value {

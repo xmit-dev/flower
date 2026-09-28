@@ -302,7 +302,7 @@ test("module manifests have a fixed, frozen shape", () => {
   });
   assert.deepEqual(Object.keys(full).sort(), ["authorize", "collections", "definitions", "http", "keys", "maintenance"]);
   assert.deepEqual(plain(full.maintenance), { name: "$flower.maintenance", kind: "mutation", onError: { name: "$flower.maintenance.error", kind: "mutation" } });
-  assert.deepEqual(full.authorize, { name: "$flower.authorize" });
+  assert.deepEqual(full.authorize, { name: "$flower.authorize", result: "decision" });
   assert.ok(Object.isFrozen(full.maintenance) && Object.isFrozen(full.maintenance!.onError) && Object.isFrozen(full.authorize));
   assert.equal(full.definitions["$flower.authorize"].kind, "queryMethod");
   assert.equal(full.definitions["$flower.maintenance"].kind, "mutationMethod");
@@ -543,10 +543,14 @@ function authenticate(_ctx: QueryContext, credentials: Json): Principal | null {
   return users[credentials as string] ?? fail("UNKNOWN_USER", "Unknown user");
 }
 const host = { now: () => 0, clock: () => 0, changesAt: () => null, history: () => null, principal: () => null, get: () => null, scan: () => [], query: () => [], range: () => ({ rows: [], cursor: null }) };
-function hookOf(app: { definitions: Readonly<Record<string, unknown>> }) {
-  const hook = app.definitions["$flower.authorize"] as QueryMethod<AuthorizationRequest, Principal>;
+function decisionOf(app: { definitions: Readonly<Record<string, unknown>> }) {
+  const hook = app.definitions["$flower.authorize"] as QueryMethod<AuthorizationRequest, { principal: Principal; readArgs: boolean }>;
   return (method: string, request: Partial<AuthorizationRequest> = {}) =>
     hook.compute(host as never, { credentials: null, method, args: null, partition: null, delegation: null, ...request });
+}
+function hookOf(app: { definitions: Readonly<Record<string, unknown>> }) {
+  const decide = decisionOf(app);
+  return (method: string, request: Partial<AuthorizationRequest> = {}) => decide(method, request).principal;
 }
 
 test("authorization compiles only when a call could be refused", () => {
@@ -554,9 +558,9 @@ test("authorization compiles only when a call could be refused", () => {
   const open = query("open", { access: "public" }, () => 1);
   for (const auth of [undefined, {}, { default: "public" as const }]) assert.equal(Object.hasOwn(define({ auth, http: { whoami, open } }), "authorize"), false);
   const predicate = query("predicate", { access: (_ctx, principal) => principal === null }, () => 1);
-  assert.deepEqual(define({ http: { whoami, predicate } }).authorize, { name: "$flower.authorize" });
-  assert.deepEqual(define({ auth: { authenticate }, http: { whoami } }).authorize, { name: "$flower.authorize" });
-  assert.deepEqual(define({ auth: { delegation: () => true }, http: { whoami } }).authorize, { name: "$flower.authorize" });
+  assert.deepEqual(define({ http: { whoami, predicate } }).authorize, { name: "$flower.authorize", result: "decision" });
+  assert.deepEqual(define({ auth: { authenticate }, http: { whoami } }).authorize, { name: "$flower.authorize", result: "decision" });
+  assert.deepEqual(define({ auth: { delegation: () => true }, http: { whoami } }).authorize, { name: "$flower.authorize", result: "decision" });
   assert.throws(() => define({ auth: { sessions: "authenticated" }, http: { whoami } }), /no authenticate/);
   assert.throws(() => define({ http: { x: query("x", { access: "authenticated" }, () => 1) } }), /no authenticate/);
   assert.throws(() => define({ auth: { default: "authenticated" }, http: { whoami } }), /no authenticate/);
@@ -615,6 +619,48 @@ test("the compiled hook returns the anonymous subject, applies sessions and defa
   assert.throws(() => relaxed("$flower.session.open"), { code: "UNAUTHENTICATED" });
   const guarded = hookOf(define({ auth: { default: "public", delegation: () => true }, http: { whoami } }));
   assert.deepEqual(guarded("whoami", { credentials: "alice" }), { subject: "$anonymous" });
+});
+
+test("the compiled hook says what deciding read of the arguments, for the server to reuse decisions by", async () => {
+  const notes = collection("notes", v.object({ owner: v.string(), text: v.string() }));
+  const admin = query("admin", { access: (_ctx, principal) => principal?.claims !== undefined }, () => 1);
+  const own = query("own", { args: v.object({ owner: v.string() }), access: (_ctx, principal, args) => principal?.subject === args.owner }, () => 1);
+  const keys = query("keys", { access: (_ctx, _principal, args) => Object.keys(args as unknown as object).length > 0 }, () => 1);
+  const whole = query("whole", { access: (_ctx, _principal, args) => JSON.stringify(args) !== "{}" }, () => 1);
+  const named = query("named", { args: v.string(), access: (_ctx, _principal, owner) => owner !== "nobody" }, () => 1);
+  const lookup = query("lookup", { args: v.object({ owner: v.string() }), access: (ctx, principal, args) => ctx.get(notes, args.owner)?.owner === principal?.subject }, (ctx, args) => ctx.get(notes, args.owner));
+  const write = mutation("write", { args: v.object({ owner: v.string(), text: v.string({ max: 10 }) }), access: (_ctx, principal) => principal !== null }, (ctx, note) => { ctx.set(notes, note.owner, note); return null; });
+  const app = define({ collections: [notes], auth: { authenticate }, http: { whoami, anyone, admin, own, keys, whole, named, lookup, write } });
+  const decide = decisionOf(app);
+  // Authentication, string access and policies that never touch their arguments: reusable for any arguments.
+  for (const [method, args] of [["whoami", { x: 1 }], ["anyone", null], ["admin", { x: 1 }], ["write", { owner: "bob", text: "hi" }]] as const) {
+    assert.deepEqual(decide(method, { credentials: "bob", args: args as Json }).readArgs, false, method);
+  }
+  // Fields read by name, and any other look at them (all of them), and arguments that are not objects.
+  assert.deepEqual(decide("own", { credentials: "alice", args: { owner: "alice" } }), { principal: users.alice, readArgs: ["owner"] });
+  assert.throws(() => decide("own", { credentials: "alice", args: { owner: "bob" } }), { code: "FORBIDDEN" });
+  assert.equal(decide("keys", { credentials: "alice", args: { x: 1 } }).readArgs, true);
+  assert.equal(decide("whole", { credentials: "alice", args: { x: 1 } }).readArgs, true);
+  assert.equal(decide("named", { credentials: "alice", args: "alice" }).readArgs, true);
+  // Arguments are still validated first, as before, whether the policy reads them or not.
+  assert.throws(() => decide("write", { credentials: "bob", args: { owner: "bob", text: "far too long" } }), { code: "INVALID_ARGUMENT" });
+  // An authenticate function that reads the request's arguments makes every decision depend on them.
+  const reading = decisionOf(define({ auth: { authenticate: (_ctx, credentials, request) => (request.args as { as?: string } | null)?.as === undefined ? authenticate(_ctx, credentials) : { subject: (request.args as { as: string }).as } }, http: { whoami } }));
+  assert.deepEqual(reading("whoami", { credentials: "alice", args: { as: "carol" } }), { principal: { subject: "carol" }, readArgs: ["as"] });
+  assert.deepEqual(reading("whoami", { credentials: "alice", args: null }), { principal: users.alice, readArgs: true });
+  const presence = decisionOf(define({ auth: { authenticate }, http: { p: query("p", { access: (_ctx, _principal, args) => "b" in (args as object) && (args as { a?: number }).a !== 0 }, () => 1) } }));
+  assert.deepEqual(presence("p", { credentials: "alice", args: { a: 1, b: 2, c: 3 } }).readArgs, ["a", "b"]);
+  const owned = decisionOf(define({ auth: { authenticate }, http: { p: query("p", { access: (_ctx, _principal, args) => Object.hasOwn(args as object, "a") }, () => 1) } }));
+  assert.equal(owned("p", { credentials: "alice", args: { a: 1 } }).readArgs, true);
+  const methodOnly = decisionOf(define({ auth: { authenticate: (_ctx, credentials, request) => request.method === "whoami" ? authenticate(_ctx, credentials) : null }, http: { whoami } }));
+  assert.equal(methodOnly("whoami", { credentials: "alice", args: { as: "carol" } }).readArgs, false);
+  // Policies see the arguments' fields as plain values: they reach the database, and the calls behave as before.
+  const db = await testDatabase(app);
+  db.mutate("write", { owner: "alice", text: "hi" }, { credentials: "alice" });
+  assert.deepEqual(db.query("lookup", { owner: "alice" }, { credentials: "alice" }), { owner: "alice", text: "hi" });
+  assert.equal(rejected(() => db.query("lookup", { owner: "alice" }, { credentials: "bob" })).failure!.code, "FORBIDDEN");
+  assert.equal(rejected(() => db.query("own", { owner: "alice" }, { credentials: "bob" })).failure!.code, "FORBIDDEN");
+  assert.equal(db.query("own", { owner: "bob" }, { credentials: "bob" }), 1);
 });
 
 test("delegated principals skip authentication and can be refused by a delegation policy", () => {

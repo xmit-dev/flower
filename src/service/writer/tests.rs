@@ -94,6 +94,7 @@ impl Fixture {
             query_evaluations: Arc::new(Semaphore::new(4)),
             admission: crate::service::admission::Pool::configured().unwrap(),
             query_cache: query_cache::QueryCache::default(),
+            authorizations: crate::service::authorization::memo::Memo::default(),
             watch_hubs: crate::service::watch::hubs::Registry::default(),
             admin_token: "test-only-secret".into(),
             clock: clock::Clock::new(),

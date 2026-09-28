@@ -6,7 +6,7 @@ import { testDatabase } from "./testing.ts";
 test("compiled authorization is a private, fresh query hook", async () => {
   const read=query("read",ctx=>ctx.principal());
   const app=define({auth:{authenticate:(_ctx,credentials)=>typeof credentials==="string"?{subject:credentials}:null},http:{read}});
-  assert.deepEqual(app.authorize,{name:"$flower.authorize"});
+  assert.deepEqual(app.authorize,{name:"$flower.authorize",result:"decision"});
   assert.deepEqual(Object.keys(app.http),["read"]);
   const hook=app.definitions["$flower.authorize"];
   assert.equal(hook.kind,"queryMethod");
