@@ -973,6 +973,22 @@ fn reregistering_a_hub_that_read_many_records() {
 }
 
 #[test]
+fn writes_refresh_a_hub_within_its_duty_cycle() {
+    let started = tokio::time::Instant::now();
+    let ms = Duration::from_millis;
+    assert_eq!(hubs::pace(started, ms(20), 10), Some(started + ms(200)));
+    assert_eq!(hubs::pace(started, ms(1), 10), Some(started + ms(10)));
+    assert_eq!(hubs::pace(started, ms(20), 25), Some(started + ms(80)));
+    assert_eq!(
+        hubs::pace(started, ms(20), 100),
+        None,
+        "100% turns pacing off"
+    );
+    assert_eq!(hubs::pace(started, ms(20), 0), None);
+    assert_eq!(hubs::pace(started, Duration::MAX, 10), None, "no overflow");
+}
+
+#[test]
 fn a_hub_registered_again_watches_exactly_what_its_new_result_read() {
     use crate::consensus::changes::{Changes, Scope};
     use crate::evaluator::DependencyCertificate;

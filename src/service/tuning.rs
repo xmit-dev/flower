@@ -44,6 +44,7 @@ pub(super) struct Settings {
     pub watch_refresh: Duration,
     pub watch_keepalive: Duration,
     pub watch_send_timeout: Duration,
+    pub watch_duty_percent: usize,
 }
 
 fn nonnegative(name: &str, value: Option<String>, default: usize) -> Result<usize, String> {
@@ -170,6 +171,7 @@ pub(super) fn settings() -> Result<&'static Settings> {
                 watch_refresh: duration("FLOWER_WATCH_REFRESH_MS", 250)?,
                 watch_keepalive: duration("FLOWER_WATCH_KEEPALIVE_MS", 15_000)?,
                 watch_send_timeout: duration("FLOWER_WATCH_SEND_TIMEOUT_MS", 5000)?,
+                watch_duty_percent: option("FLOWER_WATCH_DUTY_PERCENT", 10)?,
             })
         })
         .as_ref()

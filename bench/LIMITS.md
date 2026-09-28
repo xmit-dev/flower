@@ -179,6 +179,7 @@ These settings work in ordinary builds. Sizes and durations must be positive pla
 | `FLOWER_MAINTENANCE_INTERVAL_MS` | 250 | Shortest gap between maintenance runs; they start when TypeScript work is due, or after a write, not on a timer. Handlers without a `next` hint are polled at this interval. |
 | `FLOWER_MAINTENANCE_BURST_MS` | 50 | Stop a catch-up burst after a callback takes it past this duration. No independent callback-count ceiling. |
 | `FLOWER_WATCH_REFRESH_MS` | 250 | Re-evaluate watches whose result or authorization read `ctx.now()` without declaring a change time. Commits, Raft role changes and declared times wake the rest. |
+| `FLOWER_WATCH_DUTY_PERCENT` | 10 | Share of the time a watched result may spend refreshing for writes: after a refresh that took T (evaluation, diff and encoding), a write refreshes it again no sooner than T × 100 / this, and writes meanwhile join that refresh. A 1 ms result waits 10 ms at most; a 20 ms one refreshes at most every 200 ms however fast what it read changes. Access, code, clock and Raft changes refresh at once. 100 turns pacing off. |
 | `FLOWER_WATCH_KEEPALIVE_MS` | 15000 | SSE heartbeat cadence. |
 | `FLOWER_WATCH_SEND_TIMEOUT_MS` | 5000 | Maximum wait for room to send a changed update in a slow consumer’s one-item output queue. |
 

@@ -364,6 +364,7 @@ async fn produce(
         if lapse.is_none() {
             lapse = app.partition_gate.as_ref().map(|gate| gate.lapses());
         }
+        let mut written = false;
         tokio::select! {
             biased;
             _ = sender.closed() => return Ok(()),
@@ -372,6 +373,7 @@ async fn produce(
             }
             woken = signal.wait_for(|woken| *woken > revision) => {
                 woken.map_err(|_| failure("UNAVAILABLE", "watch notifications stopped"))?;
+                written = true;
             }
             woken = access_signal.wait_for(|woken| *woken > access) => {
                 woken.map_err(|_| failure("UNAVAILABLE", "watch notifications stopped"))?;
@@ -380,6 +382,18 @@ async fn produce(
             // A partition's owner lost its claim: the next refresh fails its gate.
             _ = lapsed(&mut lapse) => {},
         };
+        // A write to what the result read refreshes it no more often than its
+        // cost allows (FLOWER_WATCH_DUTY_PERCENT of the time), so that a result
+        // that reads much, watched while what it read keeps changing, does not
+        // keep a worker busy; later writes join the refresh that follows.
+        // Access, code and time changes refresh at once.
+        if written && let Some(until) = hub.paced_until() {
+            tokio::select! {
+                biased;
+                _ = sender.closed() => return Ok(()),
+                _ = tokio::time::sleep_until(until) => {}
+            }
+        }
         everything.borrow_and_update();
         ensure_running(&progress.borrow())?;
         let mut capacity = None;

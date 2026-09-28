@@ -41,6 +41,7 @@
 <tr><td><code>FLOWER_MAINTENANCE_INTERVAL_MS</code></td><td>250 ms</td><td>The shortest gap between maintenance runs. They start when a timer or task is due, or after a write, not on a timer.</td></tr>
 <tr><td><code>FLOWER_MAINTENANCE_BURST_MS</code></td><td>50 ms</td><td>Time allowed per maintenance catch-up round.</td></tr>
 <tr><td><code>FLOWER_WATCH_REFRESH_MS</code></td><td>250 ms</td><td>How often a watch re-evaluates a query or access check that reads <code>ctx.now()</code>. Other idle watches have no timer.</td></tr>
+<tr><td><code>FLOWER_WATCH_DUTY_PERCENT</code></td><td>10%</td><td>How much of the time a watched result may spend refreshing for writes. A result that took 20 ms to refresh refreshes again no sooner than 200 ms later, however fast what it read changes; one that took 1 ms, 10 ms later. 100 turns this off.</td></tr>
 <tr><td><code>FLOWER_WATCH_KEEPALIVE_MS</code></td><td>15,000 ms</td><td>Interval between watch-stream keepalives.</td></tr>
 <tr><td><code>FLOWER_WATCH_SEND_TIMEOUT_MS</code></td><td>5,000 ms</td><td>How long a slow watch client can fall behind before it is disconnected.</td></tr>
 </tbody></table></div>

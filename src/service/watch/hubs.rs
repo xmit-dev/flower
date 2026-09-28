@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex, OnceLock, Weak,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use axum::body::Bytes;
@@ -203,6 +203,7 @@ impl Registry {
             signal: Arc::new(watch::Sender::new(0)),
             registry: Arc::downgrade(&self.0),
             state: tokio::sync::Mutex::new(State::default()),
+            paced: Mutex::new(None),
             _retained: retained,
         });
         entries.insert(scope.into(), Arc::downgrade(&hub));
@@ -258,7 +259,26 @@ pub(super) struct Hub {
     signal: wakes::Signal,
     registry: Weak<RegistryInner>,
     state: tokio::sync::Mutex<State>,
+    /// No refresh for a write starts before this: see `pace`.
+    paced: Mutex<Option<tokio::time::Instant>>,
     _retained: admission::Input,
+}
+
+/// When a hub whose last refresh started at `started` and took `cost` may
+/// refresh again for a write, keeping refreshes to `duty_percent` of the
+/// time: a result that costs 20 ms to evaluate and encode refreshes at most
+/// every 200 ms at 10%, however fast writes come, while one that costs 1 ms
+/// waits 10 ms at most. None when pacing is off (0 or 100 and above).
+pub(super) fn pace(
+    started: tokio::time::Instant,
+    cost: Duration,
+    duty_percent: usize,
+) -> Option<tokio::time::Instant> {
+    if duty_percent == 0 || duty_percent >= 100 {
+        return None;
+    }
+    let period = cost.checked_mul(100)?.checked_div(duty_percent as u32)?;
+    started.checked_add(period)
 }
 
 #[derive(Default)]
@@ -293,6 +313,12 @@ impl Hub {
     /// subscriber holding a result from before it refreshes.
     pub fn signal(&self) -> watch::Receiver<u64> {
         self.signal.subscribe()
+    }
+
+    /// The earliest a write may refresh this hub again, if later than now.
+    pub fn paced_until(&self) -> Option<tokio::time::Instant> {
+        let until = (*self.paced.lock().expect("watch pace mutex"))?;
+        (until > tokio::time::Instant::now()).then_some(until)
     }
 
     // None means another admitted subscriber advanced past this authorization
@@ -379,6 +405,14 @@ impl Hub {
         }
         state.current = Some(frame.clone());
         state.started = Some(started);
+        let duty = super::super::tuning::settings()
+            .map_err(unavailable)?
+            .watch_duty_percent;
+        *self.paced.lock().expect("watch pace mutex") = pace(
+            tokio::time::Instant::from_std(started),
+            started.elapsed(),
+            duty,
+        );
         #[cfg(test)]
         {
             state.evaluations += 1;
