@@ -942,6 +942,90 @@ async fn registrations_catch_writes_published_while_their_result_evaluated() {
     app.consensus.shutdown().await.unwrap();
 }
 
+/// `cargo test --release --lib reregistering -- --ignored --nocapture`: what registering a hub again costs.
+#[test]
+#[ignore]
+fn reregistering_a_hub_that_read_many_records() {
+    use crate::evaluator::DependencyCertificate;
+    let keys: Vec<String> = (0..500)
+        .map(|index| format!(r#"source:["sessions","{index:016}"]"#))
+        .collect();
+    let certificate =
+        DependencyCertificate::of_records(&keys.iter().map(String::as_str).collect::<Vec<_>>());
+    let signals: Vec<wakes::Signal> = (0..20)
+        .map(|_| Arc::new(notifications::Sender::new(0)))
+        .collect();
+    let mut wakes = wakes::Wakes::default();
+    wakes.restart(1);
+    for (hub, signal) in signals.iter().enumerate() {
+        wakes.register(hub as u64, signal, 1, Some(&certificate));
+    }
+    let started = std::time::Instant::now();
+    for _ in 0..500 {
+        for (hub, signal) in signals.iter().enumerate() {
+            wakes.register(hub as u64, signal, 1, Some(&certificate));
+        }
+    }
+    eprintln!(
+        "{:?} per registration of 500 keys",
+        started.elapsed() / 10_000
+    );
+}
+
+#[test]
+fn a_hub_registered_again_watches_exactly_what_its_new_result_read() {
+    use crate::consensus::changes::{Changes, Scope};
+    use crate::evaluator::DependencyCertificate;
+    let key = |name: &str| format!(r#"source:["records","{name}"]"#);
+    let certificate = |names: &[&str]| {
+        let keys: Vec<String> = names.iter().map(|name| key(name)).collect();
+        DependencyCertificate::of_records(&keys.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    let changes = |revision, names: &[&str]| {
+        Arc::new(Changes {
+            scope: Scope::Root,
+            revision,
+            keys: Some(names.iter().map(|name| key(name)).collect()),
+        })
+    };
+    let signal: wakes::Signal = Arc::new(notifications::Sender::new(0));
+    let other: wakes::Signal = Arc::new(notifications::Sender::new(0));
+    let mut wakes = wakes::Wakes::default();
+    wakes.restart(1);
+    wakes.register(7, &signal, 1, Some(&certificate(&["a", "b", "c"])));
+    wakes.register(8, &other, 1, Some(&certificate(&["a"])));
+    // Its next result read b and d: a and c no longer wake it, b and d do.
+    wakes.register(7, &signal, 1, Some(&certificate(&["b", "d"])));
+    wakes.publish(changes(2, &["c"]));
+    assert_eq!(*signal.borrow(), 0);
+    wakes.publish(changes(3, &["a"]));
+    assert_eq!(
+        (*signal.borrow(), *other.borrow()),
+        (0, 3),
+        "a still wakes the other hub"
+    );
+    wakes.publish(changes(4, &["d"]));
+    assert_eq!(*signal.borrow(), 4);
+    wakes.publish(changes(5, &["b"]));
+    assert_eq!(*signal.borrow(), 5);
+    // Uncertified, it wakes on anything; certified again, on what it read.
+    wakes.register(7, &signal, 5, None);
+    wakes.publish(changes(6, &["z"]));
+    assert_eq!(*signal.borrow(), 6);
+    wakes.register(7, &signal, 6, Some(&certificate(&["a", "e"])));
+    wakes.publish(changes(7, &["z", "b", "d"]));
+    assert_eq!(*signal.borrow(), 6);
+    wakes.publish(changes(8, &["e"]));
+    assert_eq!(*signal.borrow(), 8);
+    assert_eq!(wakes.watched_keys(), 2, "a (both hubs) and e");
+    wakes.remove(7);
+    wakes.publish(changes(9, &["a", "e"]));
+    assert_eq!((*signal.borrow(), *other.borrow()), (8, 9));
+    assert_eq!(wakes.watched_keys(), 1);
+    wakes.remove(8);
+    assert_eq!((wakes.watched(), wakes.watched_keys()), (0, 0));
+}
+
 #[tokio::test]
 async fn revoking_what_authorization_read_ends_a_watch_whose_result_never_read_it() {
     let javascript = authorized_bundle()

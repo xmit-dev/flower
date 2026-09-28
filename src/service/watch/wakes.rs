@@ -62,6 +62,12 @@ impl Wakes {
     /// Wake `signal` for writes after `revision` to what `certificate`
     /// observed, or to anything when there is none, replacing what the hub
     /// watched before. Writes it may have missed wake it at once.
+    ///
+    /// A hub registers again after every evaluation, and its keys rarely
+    /// change between two: certificates list keys in order and a hub keeps
+    /// them in that order, so merging the two lists touches the index only
+    /// for keys that came or went, instead of removing and hashing, copying
+    /// and inserting every key again.
     pub fn register(
         &mut self,
         id: u64,
@@ -69,7 +75,10 @@ impl Wakes {
         revision: u64,
         certificate: Option<&DependencyCertificate>,
     ) {
-        self.remove(id);
+        let previous = self.hubs.remove(&id);
+        let (kept, markers) = previous.map_or_else(Default::default, |hub| (hub.keys, hub.markers));
+        self.unwatch_ranges(id, markers);
+        let mut kept = kept.into_iter().peekable();
         let mut hub = Hub {
             signal: signal.clone(),
             keys: Vec::new(),
@@ -80,10 +89,17 @@ impl Wakes {
                 self.every.insert(id);
             }
             Some(certificate) => {
+                self.every.remove(&id);
                 for observation in certificate.observations() {
                     match observation {
                         Observation::Key(key) => {
-                            if self.keys.entry(key.into()).or_default().insert(id) {
+                            debug_assert!(hub.keys.last().is_none_or(|last| last.as_str() < key));
+                            while let Some(gone) = kept.next_if(|kept| kept.as_str() < key) {
+                                self.unwatch(&gone, id);
+                            }
+                            if let Some(same) = kept.next_if(|kept| kept == key) {
+                                hub.keys.push(same);
+                            } else if self.keys.entry(key.into()).or_default().insert(id) {
                                 hub.keys.push(key.into());
                             }
                         }
@@ -106,6 +122,9 @@ impl Wakes {
                     }
                 }
             }
+        }
+        for gone in kept {
+            self.unwatch(&gone, id);
         }
         self.hubs.insert(id, hub);
         let missed = if revision < self.floor {
@@ -130,14 +149,22 @@ impl Wakes {
         };
         self.every.remove(&id);
         for key in hub.keys {
-            if let Some(hubs) = self.keys.get_mut(&key) {
-                hubs.remove(&id);
-                if hubs.is_empty() {
-                    self.keys.remove(&key);
-                }
+            self.unwatch(&key, id);
+        }
+        self.unwatch_ranges(id, hub.markers);
+    }
+
+    fn unwatch(&mut self, key: &str, id: u64) {
+        if let Some(hubs) = self.keys.get_mut(key) {
+            hubs.remove(&id);
+            if hubs.is_empty() {
+                self.keys.remove(key);
             }
         }
-        for marker in hub.markers {
+    }
+
+    fn unwatch_ranges(&mut self, id: u64, markers: Vec<String>) {
+        for marker in markers {
             if let Some(windows) = self.ranges.get_mut(&marker) {
                 windows.remove(&id);
                 if windows.is_empty() {
@@ -224,5 +251,10 @@ impl Wakes {
     #[cfg(test)]
     pub fn watched(&self) -> usize {
         self.hubs.len()
+    }
+
+    #[cfg(test)]
+    pub fn watched_keys(&self) -> usize {
+        self.keys.len()
     }
 }

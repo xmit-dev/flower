@@ -98,6 +98,17 @@ impl DependencyCertificate {
     pub(crate) fn observed(&self) -> Vec<&str> {
         self.checks.keys().map(String::as_str).collect()
     }
+    /// A certificate that observed these records, for tests of who watches them.
+    #[cfg(test)]
+    pub(crate) fn of_records(keys: &[&str]) -> Self {
+        Self {
+            checks: keys
+                .iter()
+                .map(|key| (key.to_string(), Stamp::Record(None)))
+                .collect(),
+            bytes: 0,
+        }
+    }
     /// What only a write can invalidate, as `touched` names writes. The
     /// checks of the whole state (depths, the graph pointer, clock readers)
     /// change only through keys a reader must treat as touching everything.
