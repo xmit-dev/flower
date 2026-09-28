@@ -326,8 +326,9 @@ fn run_with_limit_and_schema(
             "Index schema exceeds the Rust memory budget",
         ));
     }
-    // Immutable metadata keeps its validated typed form across invocations on
-    // this worker. Its conservative memory charge still applies to every call.
+    // Immutable metadata keeps its validated typed form across invocations,
+    // databases and workers. Its conservative memory charge still applies to
+    // every call.
     let (schema, stored_schema_bytes) = Schema::load_shared(
         data.get_shared("schema"),
         retained_limit - deployment_schema_bytes,

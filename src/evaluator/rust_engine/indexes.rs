@@ -1,18 +1,117 @@
 //! Durable equality indexes live in the same replicated state as their sources.
 use super::*;
-use std::{cell::RefCell, sync::OnceLock};
+use std::sync::{Mutex, OnceLock};
 
+/// A schema record's validated typed form, with the memory an evaluation using it is charged.
 struct CachedSchema {
     record: Arc<Value>,
     schema: Arc<Schema>,
     bytes: usize,
+    /// `SchemaCache::clock` when last found, to evict the least recently used.
+    used: u64,
 }
 
+/// The validated schemas of the schema records evaluations use, shared by
+/// every worker thread and keyed by the record's address. Holding the
+/// immutable record makes address reuse impossible; replacing or mutating a
+/// record creates a different `Arc`, found again only if its contents equal a
+/// kept record's, since parsing and validation depend on nothing else.
+/// Evaluations of every database a server hosts (a directory and partitions
+/// deploying one bundle, each with a staged deployment's shadow schema at
+/// times) share the blocking pool's threads, which come and go, and the value
+/// cache hands out a new `Arc` for a stored record each time it reads it
+/// again, so one entry per thread parsed a schema again on most calls.
+struct SchemaCache {
+    entries: HashMap<usize, CachedSchema>,
+    clock: u64,
+}
+
+/// Records nothing else holds any more go at the next lookup; this bounds
+/// the ones still held, which a server hosting many databases may all need.
+const SCHEMA_CACHE_ENTRIES: usize = 256;
+
+static SCHEMA_CACHE: Mutex<Option<SchemaCache>> = Mutex::new(None);
+
+impl SchemaCache {
+    fn with<T>(run: impl FnOnce(&mut Self) -> T) -> T {
+        let mut cache = SCHEMA_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        run(cache.get_or_insert_with(|| Self {
+            entries: HashMap::new(),
+            clock: 0,
+        }))
+    }
+
+    /// Let go of the records only this cache still holds: nothing can ask
+    /// for them again, since their addresses stay taken until they go.
+    fn prune(&mut self) {
+        self.entries
+            .retain(|_, entry| Arc::strong_count(&entry.record) > 1);
+    }
+
+    fn find(&mut self, record: &Arc<Value>) -> Option<(Arc<Schema>, usize)> {
+        self.prune();
+        self.clock += 1;
+        let entry = self
+            .entries
+            .get_mut(&(Arc::as_ptr(record) as usize))
+            .filter(|entry| Arc::ptr_eq(&entry.record, record))?;
+        entry.used = self.clock;
+        Some((entry.schema.clone(), entry.bytes))
+    }
+
+    /// The kept records charged `bytes`, the only ones that may equal a record charged `bytes`.
+    fn alike(&self, bytes: usize) -> Vec<(Arc<Value>, Arc<Schema>)> {
+        let mut alike = Vec::<(Arc<Value>, Arc<Schema>)>::new();
+        for entry in self.entries.values().filter(|entry| entry.bytes == bytes) {
+            // Records sharing a parse are equal: comparing with one is enough.
+            if !alike
+                .iter()
+                .any(|(_, schema)| Arc::ptr_eq(schema, &entry.schema))
+            {
+                alike.push((entry.record.clone(), entry.schema.clone()));
+            }
+        }
+        alike
+    }
+
+    /// Keep `schema` for `record`, or return what another thread kept for it meanwhile.
+    fn keep(&mut self, record: &Arc<Value>, schema: Arc<Schema>, bytes: usize) -> Arc<Schema> {
+        if let Some((kept, _)) = self.find(record) {
+            return kept;
+        }
+        while self.entries.len() >= SCHEMA_CACHE_ENTRIES {
+            let oldest = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| *key)
+                .expect("the cache is full");
+            self.entries.remove(&oldest);
+        }
+        self.entries.insert(
+            Arc::as_ptr(record) as usize,
+            CachedSchema {
+                record: record.clone(),
+                schema: schema.clone(),
+                bytes,
+                used: self.clock,
+            },
+        );
+        schema
+    }
+}
+
+#[cfg(test)]
 thread_local! {
-    // Keep only the last schema used by this worker. Holding the immutable
-    // record makes pointer reuse impossible; replacing/mutating a record
-    // creates a different Arc and must pass validation again.
-    static SCHEMA_CACHE: RefCell<Option<CachedSchema>> = const { RefCell::new(None) };
+    static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many schema records this thread parsed and validated for `Schema::load_shared`.
+#[cfg(test)]
+fn schema_parses() -> usize {
+    PARSES.get()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -48,7 +147,7 @@ impl Schema {
         available_bytes: usize,
     ) -> EngineResult<(Arc<Self>, usize)> {
         let Some(record) = record else {
-            SCHEMA_CACHE.with_borrow_mut(|cached| *cached = None);
+            SchemaCache::with(SchemaCache::prune);
             static EMPTY: OnceLock<Arc<Schema>> = OnceLock::new();
             return Ok((EMPTY.get_or_init(|| Arc::new(Self::default())).clone(), 0));
         };
@@ -62,25 +161,27 @@ impl Schema {
                 Ok(())
             }
         };
-        SCHEMA_CACHE.with_borrow_mut(|cached| {
-            if let Some(previous) = cached.as_ref()
-                && Arc::ptr_eq(record, &previous.record)
-            {
-                check_budget(previous.bytes)?;
-                return Ok((previous.schema.clone(), previous.bytes));
-            }
-            // Preserve the existing conservative JSON + typed-schema charge,
-            // including admission before cloning/deserializing on a miss.
-            let bytes = allocation_cost(record).saturating_mul(2);
+        if let Some((schema, bytes)) = SchemaCache::with(|cache| cache.find(record)) {
             check_budget(bytes)?;
-            let schema = Arc::new(Self::load(Some(record))?);
-            *cached = Some(CachedSchema {
-                record: record.clone(),
-                schema: schema.clone(),
+            return Ok((schema, bytes));
+        }
+        // Preserve the existing conservative JSON + typed-schema charge,
+        // including admission before cloning/deserializing on a miss.
+        let bytes = allocation_cost(record).saturating_mul(2);
+        check_budget(bytes)?;
+        // Compare and parse outside the lock, so that other threads go on finding theirs.
+        let alike = SchemaCache::with(|cache| cache.alike(bytes));
+        if let Some((_, schema)) = alike.into_iter().find(|(kept, _)| kept == record) {
+            return Ok((
+                SchemaCache::with(|cache| cache.keep(record, schema, bytes)),
                 bytes,
-            });
-            Ok((schema, bytes))
-        })
+            ));
+        }
+        let schema = Arc::new(Self::load(Some(record))?);
+        #[cfg(test)]
+        PARSES.set(PARSES.get() + 1);
+        let schema = SchemaCache::with(|cache| cache.keep(record, schema, bytes));
+        Ok((schema, bytes))
     }
 
     pub(super) fn allocation_cost(&self) -> usize {
@@ -642,22 +743,32 @@ mod schema_cache_tests {
     }
 
     #[test]
-    fn immutable_schema_identity_reuses_validation_and_replacement_revalidates() {
-        let source = record("orders");
+    fn immutable_schema_identity_reuses_validation_and_changed_records_revalidate() {
+        // Names no other test uses, since equal records share a parse.
+        let source = record("identity-orders");
+        let before = schema_parses();
         let (first, bytes) = Schema::load_shared(Some(&source), usize::MAX).unwrap();
         let (reused, reused_bytes) = Schema::load_shared(Some(&source), usize::MAX).unwrap();
         assert!(Arc::ptr_eq(&first, &reused));
         assert_eq!(bytes, allocation_cost(&source) * 2);
         assert_eq!(reused_bytes, bytes);
+        assert_eq!(schema_parses() - before, 1);
 
+        // Another Arc with the same contents, as the value cache hands out
+        // when it reads a stored record again, needs no parse.
         let equal_replacement = Arc::new((*source).clone());
-        let (revalidated, _) = Schema::load_shared(Some(&equal_replacement), usize::MAX).unwrap();
-        assert!(!Arc::ptr_eq(&first, &revalidated));
-        assert_eq!(*first, *revalidated);
-        let changed = record("customers");
-        let (changed_schema, _) = Schema::load_shared(Some(&changed), usize::MAX).unwrap();
-        assert_eq!(changed_schema.indexes[0].collection, "customers");
-        assert_eq!(first.indexes[0].collection, "orders");
+        let (equal, equal_bytes) =
+            Schema::load_shared(Some(&equal_replacement), usize::MAX).unwrap();
+        assert!(Arc::ptr_eq(&first, &equal));
+        assert_eq!(equal_bytes, bytes);
+        assert_eq!(schema_parses() - before, 1);
+        let changed = record("identity-ledger");
+        let (changed_schema, changed_bytes) =
+            Schema::load_shared(Some(&changed), usize::MAX).unwrap();
+        assert_eq!(changed_bytes, bytes, "same size, different contents");
+        assert_eq!(changed_schema.indexes[0].collection, "identity-ledger");
+        assert_eq!(first.indexes[0].collection, "identity-orders");
+        assert_eq!(schema_parses() - before, 2);
     }
 
     #[test]
@@ -697,8 +808,86 @@ mod schema_cache_tests {
     }
 
     #[test]
-    fn empty_schema_reuses_one_default_and_evicts_the_worker_entry() {
-        let source = record("orders");
+    fn schemas_of_several_databases_stay_parsed_on_a_thread_and_across_threads() {
+        // A server's directory, its partitions and a staged deployment's
+        // shadow schema take turns on the same worker threads.
+        let records = [
+            record("several-orders"),
+            record("several-customers"),
+            record("several-shops"),
+        ];
+        let before = schema_parses();
+        let first = records
+            .iter()
+            .map(|source| Schema::load_shared(Some(source), usize::MAX).unwrap())
+            .collect::<Vec<_>>();
+        for _ in 0..10 {
+            for (source, (schema, bytes)) in records.iter().zip(&first) {
+                let (again, again_bytes) = Schema::load_shared(Some(source), usize::MAX).unwrap();
+                assert!(Arc::ptr_eq(schema, &again));
+                assert_eq!(again_bytes, *bytes);
+                assert_eq!(again_bytes, allocation_cost(source) * 2);
+            }
+        }
+        assert_eq!(schema_parses() - before, records.len());
+        // A worker the pool starts later finds them parsed too, even through
+        // another Arc with the same contents.
+        let shared = records.clone();
+        let parsed = first[0].0.clone();
+        std::thread::spawn(move || {
+            for source in &shared {
+                Schema::load_shared(Some(source), usize::MAX).unwrap();
+            }
+            let copy = Arc::new((*shared[0]).clone());
+            let (equal, _) = Schema::load_shared(Some(&copy), usize::MAX).unwrap();
+            assert!(Arc::ptr_eq(&equal, &parsed));
+            assert_eq!(schema_parses(), 0);
+        })
+        .join()
+        .unwrap();
+        // Budget admission still applies to every call.
+        assert_eq!(
+            Schema::load_shared(Some(&records[1]), first[1].1 - 1)
+                .unwrap_err()
+                .code,
+            "EVALUATION_BUDGET"
+        );
+        assert_eq!(schema_parses() - before, records.len());
+    }
+
+    #[test]
+    fn the_schema_cache_keeps_the_most_recently_used_records_it_may() {
+        // A cache of its own, since the shared one serves the other tests.
+        let mut cache = SchemaCache {
+            entries: HashMap::new(),
+            clock: 0,
+        };
+        let schema = Arc::new(Schema::default());
+        let kept = (0..SCHEMA_CACHE_ENTRIES + 8)
+            .map(|n| record(&format!("c{n}")))
+            .collect::<Vec<_>>();
+        for (n, source) in kept.iter().enumerate() {
+            cache.keep(source, schema.clone(), 1);
+            if n == 200 {
+                // The first record, found again, is more recent than the next ones.
+                assert!(cache.find(&kept[0]).is_some());
+            }
+        }
+        assert_eq!(cache.entries.len(), SCHEMA_CACHE_ENTRIES);
+        assert!(cache.find(&kept[0]).is_some());
+        for evicted in &kept[1..9] {
+            assert!(cache.find(evicted).is_none());
+        }
+        assert!(kept[9..].iter().all(|source| cache.find(source).is_some()));
+        // Records nothing else holds go at the next lookup.
+        drop(kept);
+        cache.prune();
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn empty_schema_reuses_one_default_and_lets_go_of_records_nothing_else_holds() {
+        let source = record("empty-orders");
         Schema::load_shared(Some(&source), usize::MAX).unwrap();
         let retained = Arc::downgrade(&source);
         drop(source);
