@@ -8,7 +8,10 @@
 //! set is trimmed. Linux userfaultfd tracking lets the kernel resolve writes to
 //! protected pages without a signal. Each reset reads and re-protects exactly
 //! the pages written since the previous one; only frequently written pages
-//! stay hot, so an unusual callback does not inflate every later reset.
+//! stay hot, so an unusual callback does not inflate every later reset. Hot
+//! pages can't be watched, so every 128 resets they are all protected again
+//! and must earn their place anew: callbacks of different methods write
+//! different pages, and without that the hot set drifts towards their union.
 //!
 //! A new Store starts with its image's learned seed already hot: the pages two
 //! recent exact single-callback footprints both wrote. Seeded pages never take
@@ -31,13 +34,22 @@ mod uffd;
 /// Resets between complete re-protections. The next reset records an exact
 /// footprint for the image seed, and pages no longer written stop being hot.
 const RELEARN_RESETS: u32 = 1024;
+/// Userfaultfd tracking re-protects its hot pages this often: they cost a copy
+/// per reset while written or not, and a relearn only a fault per page that
+/// comes back, with one protection call for the lot.
+#[cfg(target_os = "linux")]
+const KERNEL_RELEARN_RESETS: u32 = 128;
 /// Signal tracking re-protects hot pages beyond the image seed once they exceed
 /// twice the expected hot set plus this allowance.
 const GROWTH_SLACK_BYTES: usize = 256 * 1024;
 /// Userfaultfd tracking keeps a page hot once two resets within this window
-/// both found it written. Rarer writes cost one fault instead of a copy per reset.
+/// both found it written, here two consecutive ones. Rarer writes cost one
+/// fault instead of a copy per reset. Replaying Ultimator's real reset
+/// footprints (134 pages written per callback, from ~2,000 pages) with a
+/// wider window of 4 resets and relearning every 1,024 copied 365 pages per
+/// reset; this window and KERNEL_RELEARN_RESETS copy 229 for 14 faults.
 #[cfg(target_os = "linux")]
-const PROMOTE_WITHIN: u32 = 4;
+const PROMOTE_WITHIN: u32 = 1;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -166,6 +178,23 @@ pub(super) fn prepare_write<S: AsContextMut<Data = Host>>(
         tracker.prepare_write(offset, length)?;
     }
     Ok(())
+}
+
+/// `runs` (ascending, disjoint) joined across every gap without a `hot` page.
+/// Kernel tracking protects them again after a reset: a gap's pages are
+/// protected already (the scan found them unwritten), protecting a page twice
+/// changes nothing, and each protection call flushes the TLB of every CPU
+/// running this process, which costs far more than walking a longer range.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(super) fn joined(runs: Vec<Range<usize>>, hot: impl Fn(usize) -> bool) -> Vec<Range<usize>> {
+    let mut joined: Vec<Range<usize>> = Vec::with_capacity(runs.len());
+    for run in runs {
+        match joined.last_mut() {
+            Some(last) if !(last.end..run.start).any(&hot) => last.end = run.end,
+            _ => joined.push(run),
+        }
+    }
+    joined
 }
 
 /// Maximal runs of page indexes satisfying `select`.
@@ -372,7 +401,7 @@ impl Tracker {
             };
         }
         self.faults.fetch_add(written, Ordering::Relaxed);
-        for run in reprotect {
+        for run in joined(reprotect, |page| self.hot[page].load(Ordering::Relaxed)) {
             if uffd
                 .protect(self.byte(run.start), run.len() * self.page_size)
                 .is_err()
@@ -386,8 +415,10 @@ impl Tracker {
         if let Some(footprint) = footprint {
             self.learning.observe(footprint);
         }
-        if adaptive.resets >= RELEARN_RESETS {
-            for run in runs(pages, |page| self.hot[page].load(Ordering::Relaxed)) {
+        if adaptive.resets >= KERNEL_RELEARN_RESETS {
+            let hot = runs(pages, |page| self.hot[page].load(Ordering::Relaxed)).collect();
+            // No page stays hot, so one call protects them all.
+            for run in joined(hot, |_| false) {
                 if uffd
                     .protect(self.byte(run.start), run.len() * self.page_size)
                     .is_err()

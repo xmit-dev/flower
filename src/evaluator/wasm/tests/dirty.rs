@@ -507,19 +507,39 @@ fn kernel_tracking_copies_exactly_the_pages_written_since_the_previous_reset() {
         libc::close(pipe[1]);
     }
     assert_eq!(direct.restore(), 5 * page);
+    // One protection call covers pages 0 to 6, across pages that were never
+    // written: those stay protected.
     assert_eq!(direct.restore(), 0, "each reset protects its pages again");
-    // A page written by two resets within the promotion window stays hot and
-    // is copied by every reset without further faults.
+    // A page written by two consecutive resets stays hot and is copied by
+    // every reset without further faults.
     direct.write(0, 2);
+    assert_eq!(direct.restore(), page);
+    assert_eq!(direct.tracker.hot_pages(), 0, "a gap between writes");
+    direct.write(0, 3);
     assert_eq!(direct.restore(), page);
     assert_eq!(direct.tracker.hot_pages(), 1);
     let faults = direct.tracker.faults();
     assert_eq!(direct.restore(), page);
-    direct.write(0, 3);
+    direct.write(0, 4);
     assert_eq!(direct.restore(), page);
     assert_eq!(direct.tracker.faults(), faults);
-    // Outside that window, one unusual callback writing every page does not
-    // make later resets copy more.
+    // Protection joined across unwritten pages never covers a hot page: a
+    // protected one would go unreported, and uncopied, until written.
+    direct.write(3 * page, 5);
+    assert_eq!(direct.restore(), 2 * page);
+    direct.write(3 * page, 6);
+    assert_eq!(direct.restore(), 2 * page);
+    assert_eq!(direct.tracker.hot_pages(), 2);
+    direct.write(2 * page, 7);
+    direct.write(4 * page, 7);
+    assert_eq!(direct.restore(), 4 * page);
+    assert_eq!(
+        direct.restore(),
+        2 * page,
+        "pages 0 and 3 stay hot and writable"
+    );
+    // One unusual callback writing every page does not make later resets
+    // copy more.
     for _ in 0..4 {
         direct.restore();
     }
@@ -527,7 +547,7 @@ fn kernel_tracking_copies_exactly_the_pages_written_since_the_previous_reset() {
         direct.write(index * page, 4);
     }
     assert_eq!(direct.restore(), direct.pages() * page);
-    assert_eq!(direct.restore(), page);
+    assert_eq!(direct.restore(), 2 * page);
     let out_of_bounds = direct.memory.data_size(&direct.store) as i32;
     let error = direct
         .store_i64
@@ -537,6 +557,54 @@ fn kernel_tracking_copies_exactly_the_pages_written_since_the_previous_reset() {
         error.downcast_ref::<wasmtime::Trap>(),
         Some(&wasmtime::Trap::MemoryOutOfBounds)
     );
+    assert_eq!(direct.restore(), 2 * page);
+}
+
+#[test]
+fn reprotection_joins_runs_across_unwritten_pages_but_never_across_hot_ones() {
+    let hot = |page| page == 5;
+    assert_eq!(
+        tracking::joined(vec![0..1, 2..4, 6..7, 8..9], hot),
+        vec![0..4, 6..9]
+    );
+    assert_eq!(tracking::joined(vec![4..5, 6..7], hot), vec![4..5, 6..7]);
+    assert_eq!(tracking::joined(vec![3..4], hot), vec![3..4]);
+    assert!(tracking::joined(Vec::new(), hot).is_empty());
+}
+
+#[test]
+fn kernel_tracking_relearns_its_hot_pages_every_128_resets() {
+    if !child("kernel_tracking_relearns_its_hot_pages_every_128_resets") {
+        return;
+    }
+    let mut direct = Direct::new(8);
+    if !direct.tracker.kernel_tracked() {
+        eprintln!("userfaultfd write protection is unavailable; signal tests cover this host");
+        return;
+    }
+    let page = direct.page;
+    // Pages written by consecutive callbacks turn hot, then stop being written.
+    for _ in 0..2 {
+        for index in [1, 3, 4, 6] {
+            direct.write(index * page, 1);
+        }
+        direct.restore();
+    }
+    assert_eq!(direct.tracker.hot_pages(), 4);
+    let mut resets = 2;
+    while direct.tracker.hot_pages() > 0 {
+        assert_eq!(
+            direct.restore(),
+            4 * page,
+            "hot pages are copied, written or not"
+        );
+        resets += 1;
+        assert!(resets <= 128, "hot pages outlived a relearn");
+    }
+    assert_eq!(resets, 128);
+    // Protected again, all of them, and nothing in between got hot.
+    assert_eq!(direct.restore(), 0);
+    direct.write(0, 2);
     assert_eq!(direct.restore(), page);
 }
 
