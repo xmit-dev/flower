@@ -57,18 +57,22 @@ impl PartialEq for Entry {
 }
 
 static NEXT_VERSION: AtomicU64 = AtomicU64::new(1);
+/// Versions below this may be stored already: `versions_after` raises it past
+/// what it read back, and a thread's block taken before stops there.
+static VERSION_FLOOR: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     static VERSIONS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
 }
 
-/// A version no earlier write in this process has: versions are compared for
-/// equality, never ordered. Threads take them in blocks to avoid contention.
+/// A version no earlier write in this process has, nor any record stored
+/// before `versions_after`: versions are compared for equality, never ordered.
+/// Threads take them in blocks to avoid contention.
 pub(crate) fn next_version() -> u64 {
     const BLOCK: u64 = 1024;
     VERSIONS.with(|block| {
         let (next, end) = block.get();
-        if next < end {
+        if next < end && next >= VERSION_FLOOR.load(Ordering::Acquire) {
             block.set((next + 1, end));
             return next;
         }
@@ -86,7 +90,9 @@ pub(crate) fn versions_high_water() -> u64 {
 /// Make later versions exceed every version stored so far, which a
 /// restarted process reads back from disk.
 pub(crate) fn versions_after(version: u64) {
-    NEXT_VERSION.fetch_max(version.saturating_add(1), Ordering::Relaxed);
+    let floor = version.saturating_add(1);
+    NEXT_VERSION.fetch_max(floor, Ordering::Relaxed);
+    VERSION_FLOOR.fetch_max(floor, Ordering::Release);
 }
 
 /// Values this instance read from its backing, so that references to them
@@ -1105,6 +1111,27 @@ impl<'de> Deserialize<'de> for Records {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn versions_after_a_restart_skip_what_a_thread_took_before() {
+        // A thread that took a block before the stored versions were read
+        // back (NEXT_VERSION starts at 1 in every process) must not hand out
+        // the rest of it: those versions name records already on disk, and
+        // caches keyed by version would serve one record for another.
+        std::thread::spawn(|| {
+            let early = next_version();
+            let stored = early + 10;
+            versions_after(stored);
+            let later = next_version();
+            assert!(
+                later > stored,
+                "{later} reuses a stored version (≤ {stored})"
+            );
+            assert!(next_version() > later);
+        })
+        .join()
+        .unwrap();
+    }
 
     const GRAPH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const GRAPH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

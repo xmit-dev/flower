@@ -157,12 +157,13 @@ struct StoredState {
     partitions: Partitions,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct StateMetadata {
     last_applied: Option<LogId<u64>>,
     membership: StoredMembership<u64, BasicNode>,
     revision: u64,
-    // Above every version stored so far, which a restart must not reuse.
+    // Above every version stored so far, which a restart must not reuse;
+    // persistence raises it to cover what it writes (persistence.rs).
     #[serde(default)]
     versions: u64,
 }
@@ -1799,7 +1800,7 @@ impl RaftStateMachine<TypeConfig> for Store {
                     })
                     .collect::<anyhow::Result<_>>()?,
                 deleted_requests: delta.deleted_requests.iter().cloned().collect(),
-                metadata: profile.encode(&metadata)?,
+                metadata: metadata.clone(),
                 partitions: partition_writes.clone(),
             };
             profile.phase(StoragePhase::Write);

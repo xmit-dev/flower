@@ -22,7 +22,7 @@ pub(super) struct StateWrite {
     pub(super) data: Vec<(String, Option<Vec<u8>>)>,
     pub(super) requests: Vec<(String, Vec<u8>)>,
     pub(super) deleted_requests: Vec<String>,
-    pub(super) metadata: Vec<u8>,
+    pub(super) metadata: StateMetadata,
     pub(super) partitions: BTreeMap<String, PartitionWrite>,
 }
 
@@ -208,10 +208,22 @@ impl Persistence {
                                 for (key, value) in &write.requests {
                                     requests.insert(key.as_bytes(), value.as_slice())?;
                                 }
-                                let mut meta = transaction.open_table(tables.meta)?;
-                                meta.insert(STATE_META, write.metadata.as_slice())?;
                             }
                             write_partitions(transaction, tables, &write.partitions, profile)?;
+                            // The version bound, taken now: it must exceed
+                            // every version this transaction stores, and
+                            // those are older than now, while the bound the
+                            // apply read is not (versioning its own writes
+                            // may begin a thread's next block, and partitions
+                            // store their records' current versions, which a
+                            // later apply may have given them). A restart
+                            // hands out versions above it.
+                            let mut metadata = write.metadata.clone();
+                            metadata.versions = metadata
+                                .versions
+                                .max(crate::consensus::versions_high_water());
+                            let mut meta = transaction.open_table(tables.meta)?;
+                            meta.insert(STATE_META, profile.encode(&metadata)?.as_slice())?;
                         }
                         Ok(())
                     },

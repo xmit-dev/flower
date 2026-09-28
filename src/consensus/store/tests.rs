@@ -275,6 +275,44 @@ async fn malformed_stored_snapshot_is_an_error_and_never_an_absent_snapshot() {
 }
 
 #[tokio::test]
+async fn stored_version_bound_covers_every_version_the_batch_stored() {
+    // A restart hands out versions above the stored bound, so the bound must
+    // exceed each version stored with it, including those of a block a
+    // thread began while versioning the batch (more writes than a block
+    // holds make sure one begins).
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(1, directory.path().into()).await.unwrap();
+    let keys = (0..1100)
+        .map(|index| format!("key-{index}"))
+        .collect::<Vec<_>>();
+    let puts = keys
+        .iter()
+        .map(|key| (key.as_str(), json!(1)))
+        .collect::<Vec<_>>();
+    store
+        .apply([entry(1, command("many", 0, &puts, &[]))])
+        .await
+        .unwrap();
+    store.inner.persistence.drain().await.unwrap();
+    let metadata =
+        read_meta::<StateMetadata>(store.inner.shared.database(), Tables::new(""), STATE_META)
+            .unwrap()
+            .unwrap();
+    let guard = store.inner.state.read().await;
+    let highest = keys
+        .iter()
+        .map(|key| guard.application.data.version(key).unwrap())
+        .chain(guard.application.requests.version("many"))
+        .max()
+        .unwrap();
+    assert!(
+        highest < metadata.versions,
+        "version {highest} stored above the bound {}",
+        metadata.versions
+    );
+}
+
+#[tokio::test]
 async fn grouped_deltas_preserve_order_dedup_cas_and_untouched_allocations() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(1, directory.path().into()).await.unwrap();
