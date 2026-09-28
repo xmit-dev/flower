@@ -126,7 +126,7 @@ export default define({ collections: [orders], http: { openOrders, tenantOrders 
 <ul>
 <li>Top-level code has no database access and no randomness. Do that work inside callbacks.</li>
 <li>Globals still reset: every callback gets a fresh copy, and changes to module state don't persist.</li>
-<li>A setup heap over 8 MiB isn't snapshotted; callbacks then start from the shared base image and your compiled code.</li>
+<li>A setup heap over 32 MiB isn't snapshotted; callbacks then start from the shared base image and your compiled code, rerunning setup every time, and the server logs a warning.</li>
 <li>To rerun module code in every callback instead, build or deploy with <code>--initialization per-invocation</code>.</li>
 </ul>
 </section>

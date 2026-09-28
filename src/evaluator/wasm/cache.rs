@@ -21,6 +21,12 @@ const WASM: &[u8] = include_bytes!("../../../vendor/quickjs-ng/quickjs.wasm");
 const WASM_HASH: &str = "4146efd6851a79d0f056cebd5e927682f51ef3a740ee006bceaa32eaeba0b822";
 const MAX_CACHE_BYTES: usize = 96 * 1024 * 1024;
 const MAX_CACHE_ENTRIES: usize = 8;
+/// The largest initialized heap a static-init bundle is snapshotted with; a
+/// larger one runs from the shared base image instead, reloading its bytecode
+/// and rerunning its module code in every callback. The fallback saves no guest
+/// memory (each callback rebuilds the same heap), only image-cache bytes, which
+/// MAX_CACHE_BYTES bounds as well.
+const STATIC_SNAPSHOT_MAX_BYTES: usize = 32 * 1024 * 1024;
 const TABLE_ELEMENTS: usize = 4096;
 
 /// What a bundle deploys: JavaScript for the pinned QuickJS guest, or a guest
@@ -378,75 +384,97 @@ impl Runtime {
 
     fn prepare_uncached(&self, bundle: &str, shared: Arc<Limits>) -> Result<Prepared> {
         shared.check()?;
+        // Compile in an instance of its own. The parser's garbage grows linear
+        // memory, which never shrinks: initializing in the same instance would
+        // measure and snapshot that garbage along with the application's heap.
+        let bytecode = {
+            let (mut store, _, abi) = profile::observe("initialize", || {
+                initialize(&self.engine, &self.instrumented, shared.clone())
+            })?;
+            profile::observe("bytecode_compile", || abi.compile(&mut store, bundle))?
+        };
+        if !bundle.starts_with(STATIC_INIT_MARKER) {
+            return self.on_base_image(bytecode, &shared);
+        }
+        // Explicit opt-in promises initialization independent of invocation.
+        // Database calls fail here: no host callback is bound yet.
         let (mut store, instance, abi) = profile::observe("initialize", || {
             initialize(&self.engine, &self.instrumented, shared.clone())
         })?;
-        let bytecode = profile::observe("bytecode_compile", || abi.compile(&mut store, bundle))?;
-        let prepared = if bundle.starts_with(STATIC_INIT_MARKER) {
-            // Explicit opt-in promises initialization independent of invocation.
-            // Database calls fail here: no host callback is bound yet.
-            profile::observe("static_initialize", || abi.bytecode(&mut store, &bytecode))?;
-            let memory_bytes = abi.memory.data_size(&store);
-            tracing::debug!(target: "flower::evaluator_profile", guest_memory_bytes = memory_bytes,
-                initialized_snapshot = memory_bytes <= 8 * 1024 * 1024,
-                "static QuickJS bundle image preparation");
-            // Large initialized heaps run from the shared base image instead:
-            // never construct/cache snapshots near the guest budget per bundle.
-            if memory_bytes > 8 * 1024 * 1024 {
-                let weight = bytecode.len() + self.base_memory_bytes;
-                Prepared::new(
-                    self.base.clone(),
-                    Some(bytecode),
-                    self.base_input,
-                    &self.base_reset_globals,
-                    weight,
-                )?
-            } else {
-                profile::observe("snapshot_prepare", || {
-                    abi.prepare_snapshot(&mut store, instance, "bundle")
-                })?;
-                let input_buffer = abi.reserve_input(&mut store)?;
-                let memory_bytes = abi.memory.data_size(&store);
-                let bytes = profile::observe("snapshot", || {
-                    futures_executor::block_on(self.wizer.snapshot(
-                        &self.context,
-                        &mut Snapshot {
-                            store: &mut store,
-                            instance,
-                        },
-                    ))
-                })?;
-                drop(store);
-                shared.check()?;
-                let (pre, compiled_bytes, reset_globals) =
-                    profile::observe("native_compile", || compile_image(&self.engine, &bytes))?;
-                let weight = bytes.len() + memory_bytes + compiled_bytes;
-                if weight > MAX_CACHE_BYTES {
-                    let weight = bytecode.len() + self.base_memory_bytes;
-                    Prepared::new(
-                        self.base.clone(),
-                        Some(bytecode),
-                        self.base_input,
-                        &self.base_reset_globals,
-                        weight,
-                    )?
-                } else {
-                    Prepared::new(pre, None, input_buffer, &reset_globals, weight)?
-                }
-            }
-        } else {
-            let weight = bytecode.len() + self.base_memory_bytes;
-            Prepared::new(
-                self.base.clone(),
-                Some(bytecode),
-                self.base_input,
-                &self.base_reset_globals,
+        profile::observe("static_initialize", || abi.bytecode(&mut store, &bytecode))?;
+        let memory_bytes = abi.memory.data_size(&store);
+        tracing::debug!(target: "flower::evaluator_profile", guest_memory_bytes = memory_bytes,
+            initialized_snapshot = memory_bytes <= STATIC_SNAPSHOT_MAX_BYTES,
+            "static QuickJS bundle image preparation");
+        if memory_bytes > STATIC_SNAPSHOT_MAX_BYTES {
+            fallback_warning(
+                bundle,
+                memory_bytes,
+                "its initialized heap exceeds",
+                STATIC_SNAPSHOT_MAX_BYTES,
+            );
+            return self.on_base_image(bytecode, &shared);
+        }
+        profile::observe("snapshot_prepare", || {
+            abi.prepare_snapshot(&mut store, instance, "bundle")
+        })?;
+        let input_buffer = abi.reserve_input(&mut store)?;
+        let memory_bytes = abi.memory.data_size(&store);
+        let bytes = profile::observe("snapshot", || {
+            futures_executor::block_on(self.wizer.snapshot(
+                &self.context,
+                &mut Snapshot {
+                    store: &mut store,
+                    instance,
+                },
+            ))
+        })?;
+        drop(store);
+        shared.check()?;
+        let (pre, compiled_bytes, reset_globals) =
+            profile::observe("native_compile", || compile_image(&self.engine, &bytes))?;
+        let weight = bytes.len() + memory_bytes + compiled_bytes;
+        if weight > MAX_CACHE_BYTES {
+            fallback_warning(
+                bundle,
                 weight,
-            )?
-        };
+                "its image would exceed the image cache's",
+                MAX_CACHE_BYTES,
+            );
+            return self.on_base_image(bytecode, &shared);
+        }
+        let prepared = Prepared::new(pre, None, input_buffer, &reset_globals, weight)?;
         shared.check()?;
         Ok(prepared)
     }
+
+    /// Run a bundle from the shared base image: every callback loads its
+    /// bytecode and runs its module code again.
+    fn on_base_image(&self, bytecode: Vec<u8>, shared: &Limits) -> Result<Prepared> {
+        let weight = bytecode.len() + self.base_memory_bytes;
+        let prepared = Prepared::new(
+            self.base.clone(),
+            Some(bytecode),
+            self.base_input,
+            &self.base_reset_globals,
+            weight,
+        )?;
+        shared.check()?;
+        Ok(prepared)
+    }
+}
+
+/// A static-init bundle that cannot keep its initialized snapshot still works,
+/// but at a price the operator should hear about: every callback reloads its
+/// bytecode and reruns its module code, for as long as it stays deployed.
+fn fallback_warning(bundle: &str, bytes: usize, reason: &str, limit: usize) {
+    tracing::warn!(
+        bundle = %crate::evaluator::hash(bundle.as_bytes()),
+        bytes,
+        limit,
+        "static-init bundle runs without its initialized snapshot: {reason} {} MiB, so every callback reloads its bytecode and reruns its module code",
+        limit / (1024 * 1024),
+    );
 }
 
 impl Runtime {
@@ -691,6 +719,79 @@ mod tests {
         );
         assert_eq!(memory.size(&store), initial_pages);
         assert!(shared.check().is_err(), "memory failure remains sticky");
+    }
+
+    fn prepare_static(code: String) -> Arc<Prepared> {
+        runtime()
+            .unwrap()
+            .prepare(
+                &format!("{STATIC_INIT_MARKER}{code}"),
+                super::super::tests::limits(),
+            )
+            .unwrap()
+    }
+
+    fn call(prepared: &Prepared) -> Value {
+        super::super::execute_prepared(
+            prepared,
+            "test",
+            &Value::Null,
+            "query",
+            &mut |_, _| Ok(Value::Null),
+            super::super::tests::limits(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn static_bundles_keep_their_snapshot_past_eight_mib() {
+        // Trinity's initialized heap outgrew 8 MiB, the old limit, and from then on
+        // every callback reloaded its bytecode and reran its module code.
+        let prepared = prepare_static(format!(
+            "const heap=new Uint8Array(12*1024*1024).fill(7);let runs=0;{}",
+            super::super::tests::bundle("()=>[heap.length,heap[12345],++runs]", false),
+        ));
+        assert!(
+            prepared.bytecode.is_none(),
+            "a 12 MiB initialized heap keeps its snapshot"
+        );
+        assert!(prepared.image.memory_bytes > 12 * 1024 * 1024);
+        for _ in 0..2 {
+            assert_eq!(
+                call(&prepared),
+                json!({"ok":true,"value":[12*1024*1024,7,1]})
+            );
+        }
+    }
+
+    #[test]
+    fn compiling_leaves_no_garbage_in_the_initialized_snapshot() {
+        let code = super::super::tests::bundle("()=>1", false);
+        let plain = prepare_static(code.clone());
+        // The parser holds this source, then drops it: none of it is the heap.
+        let padded = prepare_static(format!("/*{}*/{code}", "x".repeat(1536 * 1024)));
+        assert!(plain.bytecode.is_none() && padded.bytecode.is_none());
+        assert!(
+            padded.image.memory_bytes <= plain.image.memory_bytes + 256 * 1024,
+            "compiling 1.5 MiB of source grew the snapshot from {} to {} bytes",
+            plain.image.memory_bytes,
+            padded.image.memory_bytes,
+        );
+        assert_eq!(call(&padded), json!({"ok":true,"value":1}));
+    }
+
+    #[test]
+    fn heaps_past_the_snapshot_limit_still_run_from_the_base_image() {
+        let length = STATIC_SNAPSHOT_MAX_BYTES + 1024 * 1024;
+        let prepared = prepare_static(format!(
+            "const heap=new Uint8Array({length}).fill(7);{}",
+            super::super::tests::bundle("()=>heap.length", false),
+        ));
+        assert!(
+            prepared.bytecode.is_some(),
+            "a heap past the limit reruns its module code in every callback"
+        );
+        assert_eq!(call(&prepared), json!({"ok":true,"value":length}));
     }
 
     #[test]
