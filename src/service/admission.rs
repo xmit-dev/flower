@@ -1,5 +1,6 @@
 //! Node-wide preparation admission. Waiting requests own bytes, never snapshots.
-//! FIFO partition lanes rotate fairly; maintenance/control has separate capacity.
+//! FIFO partition lanes rotate fairly; maintenance/control has separate capacity,
+//! and so has deployment work, which can hold a slot for seconds.
 use super::{ApiError, App, tuning};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -15,25 +16,44 @@ pub(super) mod ingress;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Class {
     User,
+    /// Short operator work: maintenance, keys, retention, an online
+    /// deployment's cutover (evaluating for at most FLOWER_DEPLOYMENT_CUTOVER_MS).
+    /// Each logical database's writer waits for it while holding its lane.
     Control,
+    /// Preparing a bundle: online, blocking or staged deployment work. It
+    /// compiles and evaluates for seconds, so it must not hold a slot that
+    /// writers of other logical databases wait for.
+    Deployment,
 }
 impl Class {
+    const ALL: [Self; 3] = [Self::Control, Self::Deployment, Self::User];
     fn index(self) -> usize {
-        if self == Self::User { 0 } else { 1 }
+        match self {
+            Self::User => 0,
+            Self::Control => 1,
+            Self::Deployment => 2,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Control => "control",
+            Self::Deployment => "deployment",
+        }
     }
 }
 
 pub(super) struct Pool {
     state: Mutex<State>,
-    workers: [usize; 2],
-    memory: [usize; 2],
-    input: [usize; 2],
+    workers: [usize; 3],
+    memory: [usize; 3],
+    input: [usize; 3],
     per_job: usize,
     exhausted: &'static str,
 }
 #[derive(Default)]
 struct State {
-    classes: [Queue; 2],
+    classes: [Queue; 3],
     next: u64,
     rejected: u64,
     canceled: u64,
@@ -125,23 +145,48 @@ impl Pool {
     pub(super) fn configured() -> anyhow::Result<Arc<Self>> {
         let settings = tuning::settings()?;
         let evaluator = crate::evaluator::config::settings()?;
-        Ok(Self::new(
-            [settings.preparation_workers, settings.control_workers],
+        Ok(Self::with_deployment(
+            [
+                settings.preparation_workers,
+                settings.control_workers,
+                settings.deployment_workers,
+            ],
             [
                 settings.preparation_memory_bytes,
                 settings.control_memory_bytes,
+                settings.deployment_memory_bytes,
             ],
-            [settings.queued_bytes, settings.control_queued_bytes],
+            // Deployment inputs (bundles) are retained as control input.
+            [
+                settings.queued_bytes,
+                settings.control_queued_bytes,
+                settings.control_queued_bytes,
+            ],
             evaluator
                 .guest_memory_bytes
                 .checked_add(evaluator.rust_memory_bytes)
                 .ok_or_else(|| anyhow::anyhow!("evaluation memory reservation overflow"))?,
         ))
     }
+    /// User and control capacity; deployment work gets as much as control.
+    #[cfg(test)]
     pub(super) fn new(
         workers: [usize; 2],
         memory: [usize; 2],
         input: [usize; 2],
+        per_job: usize,
+    ) -> Arc<Self> {
+        Self::with_deployment(
+            [workers[0], workers[1], workers[1]],
+            [memory[0], memory[1], memory[1]],
+            [input[0], input[1], input[1]],
+            per_job,
+        )
+    }
+    pub(super) fn with_deployment(
+        workers: [usize; 3],
+        memory: [usize; 3],
+        input: [usize; 3],
         per_job: usize,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -158,9 +203,9 @@ impl Pool {
     pub(super) fn watches(bytes: usize) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(State::default()),
-            workers: [0; 2],
-            memory: [0; 2],
-            input: [bytes, 0],
+            workers: [0; 3],
+            memory: [0; 3],
+            input: [bytes, 0, 0],
             per_job: 0,
             exhausted: "watch byte budget exhausted (FLOWER_WATCH_RETAINED_BYTES); retry later",
         })
@@ -249,7 +294,7 @@ impl Pool {
             let mut deliveries = Vec::new();
             {
                 let mut state = self.state.lock().expect("admission mutex");
-                for class in [Class::Control, Class::User] {
+                for class in Class::ALL {
                     let queue = &mut state.classes[class.index()];
                     let capacity =
                         self.workers[class.index()].min(self.memory[class.index()] / self.per_job);
@@ -291,9 +336,10 @@ impl Pool {
     }
     pub(super) fn metrics(&self) -> Value {
         let state = self.state.lock().expect("admission mutex");
-        let classes:Vec<_> = state.classes.iter().enumerate().map(|(i,queue)| {
+        let classes:Vec<_> = [Class::User, Class::Control, Class::Deployment].into_iter().map(|class| {
+            let (i, queue) = (class.index(), &state.classes[class.index()]);
             let oldest = queue.lanes.values().filter_map(|lane|lane.front()).map(|waiter|waiter.queued_at.elapsed().as_millis()).max().unwrap_or(0);
-            json!({"class":if i==0{"user"}else{"control"},"active":queue.active,"queued":queue.queued,
+            json!({"class":class.name(),"active":queue.active,"queued":queue.queued,
                 "lanes":queue.lanes.len(),"retainedInputBytes":queue.input,"inputBudgetBytes":self.input[i],
                 "reservedEvaluationBytes":queue.active.saturating_mul(self.per_job),"memoryBudgetBytes":self.memory[i],
                 "workerBudget":self.workers[i],"oldestQueuedMs":oldest})

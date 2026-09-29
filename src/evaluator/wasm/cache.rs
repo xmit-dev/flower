@@ -98,6 +98,20 @@ thread_local! {
         Default::default();
 }
 
+// Set by a test on its own thread: after a static bundle's guest code has run,
+// its preparation waits until then, as a busy host would make it.
+#[cfg(test)]
+thread_local! {
+    static HOLD_AFTER_GUEST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn hold_after_guest() {
+    if let Some(until) = HOLD_AFTER_GUEST.with(std::cell::Cell::get) {
+        std::thread::sleep(until.saturating_duration_since(Instant::now()));
+    }
+}
+
 /// How many times this thread hashed `javascript` to find its image.
 #[cfg(test)]
 pub(in crate::evaluator) fn hashes(javascript: &str) -> usize {
@@ -324,6 +338,11 @@ impl Runtime {
         Ok(Some(prepared))
     }
 
+    /// Whether `source`'s image is in the cache.
+    pub(super) fn is_prepared(&self, source: Source<'_>) -> Result<bool> {
+        Ok(self.cached(&source.key())?.is_some())
+    }
+
     pub(super) fn prepare(&self, bundle: &str, shared: Arc<Limits>) -> Result<Arc<Prepared>> {
         self.prepare_source(Source::JavaScript(bundle), shared)
     }
@@ -458,7 +477,13 @@ impl Runtime {
             ))
         })?;
         drop(store);
-        shared.check()?;
+        #[cfg(test)]
+        hold_after_guest();
+        // The guest code has run. Compiling its snapshot takes seconds on a busy
+        // host but no guest time: finish it, and keep the image, even if this
+        // caller runs out of time meanwhile (its evaluation still fails at its
+        // next check), so that a retry finds the image instead of starting over.
+        shared.check_sound()?;
         let (pre, compiled_bytes, reset_globals) =
             profile::observe("native_compile", || compile_image(&self.engine, &bytes))?;
         let weight = bytes.len() + memory_bytes + compiled_bytes;
@@ -472,7 +497,7 @@ impl Runtime {
             return self.on_base_image(bytecode, &shared);
         }
         let prepared = Prepared::new(pre, None, input_buffer, &reset_globals, weight)?;
-        shared.check()?;
+        shared.check_sound()?;
         Ok(prepared)
     }
 
@@ -487,7 +512,7 @@ impl Runtime {
             &self.base_reset_globals,
             weight,
         )?;
-        shared.check()?;
+        shared.check_sound()?;
         Ok(prepared)
     }
 }
@@ -545,7 +570,7 @@ impl Runtime {
             },
         ))?;
         drop(store);
-        shared.check()?;
+        shared.check_sound()?;
         let (pre, compiled_bytes, reset_globals) = compile_image(&self.engine, &bytes)?;
         Prepared::new(
             pre,
@@ -779,6 +804,53 @@ mod tests {
             super::super::tests::limits(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn an_image_whose_caller_ran_out_of_time_after_its_guest_code_is_kept() {
+        // On a busy host, compiling a snapshot can take longer than the caller
+        // that asked for it may run: a deployment or the first call after a
+        // restart then failed, and so did each retry, compiling it all again.
+        let bundle = format!(
+            "{STATIC_INIT_MARKER}{}",
+            super::super::tests::bundle("()=>'kept past its caller'", false)
+        );
+        let runtime = runtime().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let late = Limits::new(deadline, super::super::MAX_MEMORY_BYTES);
+        HOLD_AFTER_GUEST.with(|hold| hold.set(Some(deadline + Duration::from_millis(20))));
+        let prepared = runtime.prepare(&bundle, late.clone());
+        HOLD_AFTER_GUEST.with(|hold| hold.set(None));
+        let prepared = prepared.expect("the compiled image is returned to its late caller");
+        assert!(late.check().is_err(), "the caller itself is out of time");
+        assert!(
+            prepared.bytecode.is_none(),
+            "its initialized snapshot is kept"
+        );
+        let again = runtime
+            .prepare(&bundle, super::super::tests::limits())
+            .unwrap();
+        assert!(Arc::ptr_eq(&prepared, &again), "a retry finds the image");
+        assert_eq!(
+            call(&again),
+            json!({"ok":true,"value":"kept past its caller"})
+        );
+        // Guest code that runs past its deadline still fails, and is not kept.
+        let looping = format!(
+            "{STATIC_INIT_MARKER}for(;;){{}}{}",
+            super::super::tests::bundle("()=>1", false)
+        );
+        let short = Limits::new(
+            Instant::now() + Duration::from_millis(200),
+            super::super::MAX_MEMORY_BYTES,
+        );
+        assert!(runtime.prepare(&looping, short).is_err());
+        assert!(
+            runtime
+                .cached(&Source::JavaScript(&looping).key())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

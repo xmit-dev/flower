@@ -105,6 +105,12 @@ pub(super) fn prepare_bundle(bundle: &Value, shared: Arc<Limits>) -> Result<Arc<
     cache::runtime()?.prepare_source(cache::Source::of(bundle, &mut decoded)?, shared)
 }
 
+/// Whether the image of a bundle being deployed is ready, without preparing it.
+pub(super) fn bundle_prepared(bundle: &Value) -> Result<bool> {
+    let mut decoded = Vec::new();
+    cache::runtime()?.is_prepared(cache::Source::of(bundle, &mut decoded)?)
+}
+
 /// Prepare the bundle record stored by write `version`, reading it with
 /// `bundle` only when needed (see `cache::Runtime::prepare_stored_bundle`).
 pub(super) fn prepare_stored_bundle(

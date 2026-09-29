@@ -837,6 +837,25 @@ async fn admit(
     pending: &PendingInput,
     deployment: bool,
 ) -> Result<admission::Permit, ApiError> {
+    // Preparing a bundle (online, or blocking in the lane) compiles and
+    // evaluates for seconds, so it takes a deployment slot. An online
+    // deployment's cutover evaluates nothing unless its base changed, and then
+    // for at most FLOWER_DEPLOYMENT_CUTOVER_MS, so it takes a control slot:
+    // that is never held for long, while another database's preparation may
+    // hold the deployment slot for seconds, and this lane would wait for it.
+    let class = if !deployment {
+        admission::Class::User
+    } else if pending
+        .state
+        .lock()
+        .expect("pending input")
+        .staged
+        .is_some()
+    {
+        admission::Class::Control
+    } else {
+        admission::Class::Deployment
+    };
     pending.dequeued();
     let enabled = crate::telemetry::enabled();
     let started = enabled.then(Instant::now);
@@ -849,7 +868,7 @@ async fn admit(
     let result = async { tokio::select! {
         biased;
         _=pending.canceled.notified()=>Err(unavailable(anyhow::anyhow!("request canceled before preparation"))),
-        permit=admission::acquire_retained(app, if deployment { admission::Class::Control } else { admission::Class::User })=>permit,
+        permit=admission::acquire_retained(app, class)=>permit,
     }}.instrument(trace.clone()).await;
     if let Some(started) = started {
         observability::status(&trace, observability::outcome(&result));
@@ -1042,28 +1061,46 @@ async fn prepare_candidate_inner(
         ));
     }
     super::transactions::ensure_write_capacity(state)?;
-    if deployment && let Some(prepared) = pending.state.lock().expect("pending input").staged.take()
-    {
+    // Set when a staged deployment's base changed and it prepares again here,
+    // in the lane, within FLOWER_DEPLOYMENT_CUTOVER_MS.
+    let mut again: Option<Instant> = None;
+    let staged = if deployment {
+        pending.state.lock().expect("pending input").staged.take()
+    } else {
+        None
+    };
+    if let Some(prepared) = staged {
         let command = prepared
             .command
             .as_ref()
             .expect("staged deployment command");
-        if command.expected_revision != state.revision {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "DEPLOYMENT_CONFLICT",
-                "Database changed during online preparation; retry the same request ID, or use preparation: blocking".into(),
-            ));
+        if command.expected_revision == state.revision {
+            crate::consensus::retention::validate_capacity_for(
+                state,
+                &request_id,
+                &fingerprint,
+                &command.result,
+                0,
+            )
+            .map_err(retention::error)?;
+            return Ok(speculation::Candidate::plain(prepared, admission));
         }
-        crate::consensus::retention::validate_capacity_for(
-            state,
-            &request_id,
-            &fingerprint,
-            &command.result,
-            0,
-        )
-        .map_err(retention::error)?;
-        return Ok(speculation::Candidate::plain(prepared, admission));
+        // Writes keep landing on a busy database, so an exact base would never
+        // hold. Evaluate again on this state, as blocking preparation does, if
+        // the online evaluation took no longer than writes may wait for it and
+        // its compiled image is still at hand (compiling here could take seconds).
+        // It runs under the lane's own admission, which this pass may share
+        // with the candidates around it: waiting for another slot here could
+        // wait for this very lease.
+        let limit = deployment_cutover()?;
+        if limit.is_zero()
+            || Duration::from_micros(prepared.evaluation_us) > limit
+            || !evaluator::deployment_prepared(&input["bundle"])
+        {
+            return Err(deployment_conflict(false));
+        }
+        drop(prepared);
+        again = Some(Instant::now() + limit);
     }
     let permit_started = Instant::now();
     let permit = if speculative_now.is_some() {
@@ -1101,7 +1138,14 @@ async fn prepare_candidate_inner(
         let _body = body;
         let _admission = held_admission;
         let _permit = permit;
-        if deployment {
+        if let Some(deadline) = again {
+            evaluator::evaluate_deployment_within(
+                data,
+                invocation,
+                now,
+                deadline.saturating_duration_since(Instant::now()),
+            )
+        } else if deployment {
             evaluator::evaluate_at(data, invocation, now)
         } else if speculative_now.is_some() {
             evaluator::invoke_speculative_as(data, invocation, now, callback_principal)
@@ -1109,8 +1153,22 @@ async fn prepare_candidate_inner(
             evaluator::invoke_as(data, invocation, "mutation", now, callback_principal)
         }
     };
-    let evaluation = execution.evaluate(evaluate).await?;
+    let evaluation = match execution.evaluate(evaluate).await {
+        // Out of time (the deadline is FLOWER_DEPLOYMENT_CUTOVER_MS away) is a
+        // conflict to retry; any other failure is the deployment's own.
+        Err(error)
+            if again.is_some_and(|deadline| Instant::now() >= deadline)
+                && error.message.contains("EVALUATION_BUDGET") =>
+        {
+            observability::stage("cutover_reevaluation", evaluating.elapsed(), "conflict");
+            return Err(deployment_conflict(true));
+        }
+        result => result?,
+    };
     let evaluation_us = evaluating.elapsed().as_micros() as u64;
+    if again.is_some() {
+        observability::stage("cutover_reevaluation", evaluating.elapsed(), "ok");
+    }
     crate::consensus::retention::validate_capacity_for(
         state,
         &request_id,
@@ -1161,6 +1219,28 @@ async fn prepare_candidate_inner(
         certificate,
         admission,
     })
+}
+
+/// FLOWER_DEPLOYMENT_CUTOVER_MS, at most the evaluation timeout.
+fn deployment_cutover() -> Result<Duration, ApiError> {
+    let limit = tuning::settings().map_err(unavailable)?.deployment_cutover;
+    let timeout = evaluator::config::settings()
+        .map_err(unavailable)?
+        .evaluation_timeout;
+    Ok(limit.min(timeout))
+}
+
+fn deployment_conflict(prepared_again: bool) -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "DEPLOYMENT_CONFLICT",
+        if prepared_again {
+            "Database changed during online preparation, and preparing again in the writer needed more than FLOWER_DEPLOYMENT_CUTOVER_MS; retry the same request ID, or use preparation: blocking"
+        } else {
+            "Database changed during online preparation; retry the same request ID, or use preparation: blocking"
+        }
+        .into(),
+    )
 }
 
 struct StagePlan {

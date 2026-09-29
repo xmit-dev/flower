@@ -51,6 +51,16 @@ impl Limits {
         );
         Ok(())
     }
+    /// Whether everything run so far stayed within its memory and stack,
+    /// whatever the time: once a bundle's guest code has run to completion,
+    /// what is left of preparing its image does not depend on the deadline.
+    pub(in crate::evaluator) fn check_sound(&self) -> Result<()> {
+        ensure!(
+            !self.failed.load(Ordering::SeqCst),
+            "EVALUATION_BUDGET: transaction exhausted its memory, stack, or execution deadline"
+        );
+        Ok(())
+    }
     pub(in crate::evaluator) fn fail(&self) {
         self.failed.store(true, Ordering::SeqCst);
     }

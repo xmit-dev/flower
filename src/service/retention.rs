@@ -488,7 +488,14 @@ mod tests {
                 class["active"], 0,
                 "writer waiters must not prevent the owner from admitting its next callback"
             );
-            assert!(class["retainedInputBytes"].as_u64().unwrap() > 0);
+            // A session waiter retains user input and the command control
+            // input; neither is deployment work.
+            let retained = class["retainedInputBytes"].as_u64().unwrap();
+            if class["class"] == "deployment" {
+                assert_eq!(retained, 0);
+            } else {
+                assert!(retained > 0, "{}", class["class"]);
+            }
         }
         drop(session);
         drop(control);

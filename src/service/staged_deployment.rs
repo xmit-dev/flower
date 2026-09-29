@@ -326,7 +326,9 @@ async fn start(app: &App, request_id: String, bundle: Value) -> Result<Value, Ap
     let fingerprint = authorization::fingerprint(&input, true, &Value::Null);
     // Analyze without pinning a live database or holding its writer. Drop the
     // worker permit before waiting for the writer, preserving admission order.
-    let permit = admission::acquire_retained(app, admission::Class::Control).await?;
+    // Deployment work takes its own class: control slots are what maintenance
+    // waits for while it holds a writer.
+    let permit = admission::acquire_retained(app, admission::Class::Deployment).await?;
     let analyze = input.clone();
     let (schema, permit) = tokio::task::spawn_blocking(move || {
         staging::analyze(analyze).map(|schema| (schema, permit))
@@ -443,7 +445,7 @@ async fn start(app: &App, request_id: String, bundle: Value) -> Result<Value, Ap
 async fn advance(app: &App, id: String, requested: Option<usize>) -> Result<Value, ApiError> {
     let max_bytes = budget(app, requested)?;
     let _writer = app.writer.lock().await;
-    let permit = admission::acquire_retained(app, admission::Class::Control).await?;
+    let permit = admission::acquire_retained(app, admission::Class::Deployment).await?;
     let state = app.consensus.read_for_writer().await.map_err(unavailable)?;
     transactions::ensure_unlocked(&state)?;
     let mut job = matching(&state, &id)?;
@@ -501,7 +503,7 @@ async fn advance(app: &App, id: String, requested: Option<usize>) -> Result<Valu
 
 async fn activate(app: &App, id: String) -> Result<Value, ApiError> {
     let _writer = app.writer.lock().await;
-    let permit = admission::acquire_retained(app, admission::Class::Control).await?;
+    let permit = admission::acquire_retained(app, admission::Class::Deployment).await?;
     let state = app.consensus.read_for_writer().await.map_err(unavailable)?;
     transactions::ensure_unlocked(&state)?;
     let mut job = matching(&state, &id)?;
@@ -656,7 +658,7 @@ async fn cancel(app: &App, id: String) -> Result<Value, ApiError> {
 async fn collect(app: &App, id: String, requested: Option<usize>) -> Result<Value, ApiError> {
     let max_bytes = budget(app, requested)?;
     let _writer = app.writer.lock().await;
-    let _permit = admission::acquire_retained(app, admission::Class::Control).await?;
+    let _permit = admission::acquire_retained(app, admission::Class::Deployment).await?;
     let state = app.consensus.read_for_writer().await.map_err(unavailable)?;
     transactions::ensure_unlocked(&state)?;
     let mut job = matching(&state, &id)?;

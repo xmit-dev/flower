@@ -21,8 +21,8 @@ pub(super) async fn stage(app: &App, input: &PendingInput) -> Result<Option<Valu
         .await
         .map_err(unavailable)?;
     let now = app.clock.sample(&state).map_err(unavailable)?;
-    // Some(now) skips the serial evaluation semaphore. Global Control admission
-    // still bounds native work and memory across all logical databases.
+    // Some(now) skips the serial evaluation semaphore. Global deployment
+    // admission still bounds native work and memory across all logical databases.
     let candidate =
         prepare_candidate_admitted(app, &state, input, true, Some(now), None, Some(admission))
             .await?;

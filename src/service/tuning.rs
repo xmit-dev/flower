@@ -30,8 +30,10 @@ pub(super) struct Settings {
     pub preparation_workers: usize,
     pub writer_preparation_workers: usize,
     pub control_workers: usize,
+    pub deployment_workers: usize,
     pub preparation_memory_bytes: usize,
     pub control_memory_bytes: usize,
+    pub deployment_memory_bytes: usize,
     pub queued_bytes: usize,
     pub control_queued_bytes: usize,
     pub watch_retained_bytes: usize,
@@ -39,6 +41,9 @@ pub(super) struct Settings {
     pub writer_window: Duration,
     pub writer_batch_time: Duration,
     pub deployment_page_time: Duration,
+    /// How long an online deployment whose base changed may prepare again
+    /// in the writer lane at cutover; zero never does.
+    pub deployment_cutover: Duration,
     pub maintenance_interval: Duration,
     pub maintenance_burst: Duration,
     pub watch_refresh: Duration,
@@ -135,13 +140,22 @@ pub(super) fn settings() -> Result<&'static Settings> {
             let query_workers = admission("FLOWER_QUERY_WORKERS", cpus)?;
             let preparation_workers = admission("FLOWER_PREPARATION_WORKERS", query_workers)?;
             let control_workers = admission("FLOWER_CONTROL_WORKERS", 1)?;
+            let deployment_workers = admission("FLOWER_DEPLOYMENT_WORKERS", 1)?;
             let evaluator = crate::evaluator::config::settings().map_err(|error| error.to_string())?;
             let per_job = evaluator.guest_memory_bytes.checked_add(evaluator.rust_memory_bytes)
                 .ok_or("evaluation memory reservation overflow")?;
             let preparation_memory_bytes = option("FLOWER_PREPARATION_MEMORY_BYTES", per_job.saturating_mul(preparation_workers))?;
             let control_memory_bytes = option("FLOWER_CONTROL_MEMORY_BYTES", per_job.saturating_mul(control_workers))?;
-            if preparation_memory_bytes < per_job || control_memory_bytes < per_job {
-                return Err("Preparation/control memory budgets must fit at least one guest + Rust evaluation reservation".into());
+            let deployment_memory_bytes = option("FLOWER_DEPLOYMENT_MEMORY_BYTES", per_job.saturating_mul(deployment_workers))?;
+            if preparation_memory_bytes < per_job || control_memory_bytes < per_job || deployment_memory_bytes < per_job {
+                return Err("Preparation/control/deployment memory budgets must fit at least one guest + Rust evaluation reservation".into());
+            }
+            let deployment_cutover = Duration::from_millis(
+                u64::try_from(bytes("FLOWER_DEPLOYMENT_CUTOVER_MS", 1000)?)
+                    .map_err(|_| "FLOWER_DEPLOYMENT_CUTOVER_MS exceeds the duration representation")?,
+            );
+            if std::time::Instant::now().checked_add(deployment_cutover).is_none() {
+                return Err("FLOWER_DEPLOYMENT_CUTOVER_MS exceeds the platform deadline representation".into());
             }
             Ok(Settings {
                 batch_mode,
@@ -160,8 +174,10 @@ pub(super) fn settings() -> Result<&'static Settings> {
                 preparation_workers,
                 writer_preparation_workers: admission("FLOWER_WRITER_PREPARATION_WORKERS", preparation_workers)?,
                 control_workers,
+                deployment_workers,
                 preparation_memory_bytes,
                 control_memory_bytes,
+                deployment_memory_bytes,
                 queued_bytes: option("FLOWER_QUEUED_INPUT_BYTES", 64 * 1024 * 1024)?,
                 control_queued_bytes: option("FLOWER_CONTROL_QUEUED_INPUT_BYTES", 16 * 1024 * 1024)?,
                 watch_retained_bytes: option("FLOWER_WATCH_RETAINED_BYTES", 256 * 1024 * 1024)?,
@@ -169,6 +185,7 @@ pub(super) fn settings() -> Result<&'static Settings> {
                 writer_window: duration("FLOWER_WRITER_WINDOW_MS", 250)?,
                 writer_batch_time: duration("FLOWER_WRITER_BATCH_MS", 50)?,
                 deployment_page_time: duration("FLOWER_DEPLOYMENT_PAGE_MS", 200)?,
+                deployment_cutover,
                 maintenance_interval: duration("FLOWER_MAINTENANCE_INTERVAL_MS", 250)?,
                 maintenance_burst: duration("FLOWER_MAINTENANCE_BURST_MS", 50)?,
                 watch_refresh: duration("FLOWER_WATCH_REFRESH_MS", 250)?,

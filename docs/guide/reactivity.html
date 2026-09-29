@@ -57,7 +57,7 @@ export default app;</code></pre></div>
 <li><code>remove</code> must exactly undo <code>add</code>. Integer sums and counts work well.</li>
 <li>The index name and the group type are checked: a two-field index takes a two-element tuple.</li>
 <li>List the aggregate in <code>definitions</code>. Its source collection is declared for you.</li>
-<li>A deploy builds new aggregates in the background. If a write lands meanwhile you get <code>DEPLOYMENT_CONFLICT</code>: retry with the same request ID, or deploy with <code>preparation: "blocking"</code>.</li>
+<li>A deploy builds new aggregates in the background. If writes land meanwhile, Flower builds them again on the latest data, holding writes for up to a second; when that isn't enough you get <code>DEPLOYMENT_CONFLICT</code>: retry with the same request ID, or deploy with <code>preparation: "blocking"</code>.</li>
 <li>For large collections, use a <a href="deployments.html#staged-deployment">staged deployment</a>.</li>
 </ul>
 <p>The <a href="https://github.com/xmit-dev/flower/blob/main/INDEXES.md">indexes and aggregates guide</a> has a full example.</p>

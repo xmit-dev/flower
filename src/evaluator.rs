@@ -271,14 +271,30 @@ fn evaluate_with_timeout(
 
 /// Host-sampled time is separate from the public request and cannot be supplied by a client.
 pub fn evaluate_at(data: impl Into<Records>, mutation: Value, now: u64) -> Result<Evaluation> {
+    evaluate_deployment_within(data, mutation, now, config::settings()?.evaluation_timeout)
+}
+
+/// A deployment given `timeout` instead of the evaluation timeout, at most it.
+pub fn evaluate_deployment_within(
+    data: impl Into<Records>,
+    mutation: Value,
+    now: u64,
+    timeout: Duration,
+) -> Result<Evaluation> {
     validate_mutation(&mutation)?;
     evaluate_inner(
         data.into(),
         mutation,
         "deployment",
-        config::settings()?.evaluation_timeout,
+        timeout.min(config::settings()?.evaluation_timeout),
         Some(now),
     )
+}
+
+/// Whether a deployment of `bundle` would find its compiled image prepared,
+/// without preparing it.
+pub fn deployment_prepared(bundle: &Value) -> bool {
+    wasm::bundle_prepared(bundle).unwrap_or(false)
 }
 
 pub fn validate_invocation(invocation: &Value, kind: &str) -> Result<()> {

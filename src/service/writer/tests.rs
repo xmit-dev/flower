@@ -501,6 +501,16 @@ async fn online_deployment_prepares_off_lane_conflicts_atomically_and_blocking_r
         .unwrap();
     assert_eq!(old_write["value"]["value"], 3);
     let changed = fixture.app.consensus.read().await.unwrap();
+    // An online evaluation longer than FLOWER_DEPLOYMENT_CUTOVER_MS is not
+    // evaluated again in the lane: its base changed, so it conflicts.
+    pending
+        .state
+        .lock()
+        .unwrap()
+        .staged
+        .as_mut()
+        .unwrap()
+        .evaluation_us = u64::MAX;
     let conflict = prepare_candidate(&fixture.app, &changed, &pending, true, None)
         .await
         .err()
@@ -552,6 +562,176 @@ async fn online_deployment_prepares_off_lane_conflicts_atomically_and_blocking_r
     assert_eq!(duplicate["duplicate"], true);
     assert_eq!(duplicate["revision"], receipt["revision"]);
     assert_eq!(fixture.app.consensus.read().await.unwrap(), after);
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_online_deployment_whose_base_changed_evaluates_again_in_the_lane() {
+    // Writes keep landing on a busy database, so its base always changes
+    // before cutover. A short online evaluation, whose image is compiled,
+    // runs again on the lane's state instead of conflicting forever.
+    let fixture = Fixture::new(16, true).await;
+    // Compile the bundle first, as an earlier attempt of a retrying deployer
+    // would have, so that the staged evaluation below is short.
+    let warm = PendingInput::from(deployment("online-rebased-warm", false));
+    deployment::stage(&fixture.app, &warm).await.unwrap();
+    drop(warm);
+    let input = deployment("online-rebased", false);
+    let pending = PendingInput::from(input.clone());
+    assert!(
+        deployment::stage(&fixture.app, &pending)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let staged_revision = pending
+        .state
+        .lock()
+        .unwrap()
+        .staged
+        .as_ref()
+        .unwrap()
+        .command
+        .as_ref()
+        .unwrap()
+        .expected_revision;
+    submit(&fixture.app, increment("after-staging", 5, None), false)
+        .await
+        .unwrap();
+    let changed = fixture.app.consensus.read().await.unwrap();
+    assert_eq!(changed.revision, staged_revision + 1);
+    let candidate = prepare_candidate(&fixture.app, &changed, &pending, true, None)
+        .await
+        .unwrap();
+    let command = candidate.prepared.command.clone().unwrap();
+    assert_eq!(command.expected_revision, changed.revision);
+    drop(candidate);
+    commit_group(&fixture.app, vec![command]).await.unwrap();
+    let state = fixture.app.consensus.read().await.unwrap();
+    assert_eq!(state.revision, changed.revision + 1);
+    assert_eq!(
+        http_method(&state, "counter.add", Some(MethodKind::Mutation))
+            .err()
+            .unwrap()
+            .code,
+        "METHOD_NOT_FOUND",
+        "the new bundle is deployed"
+    );
+    // Its derived values were computed from the write that landed after
+    // staging; the staged candidate would have published them from before it.
+    assert_eq!(state.data["source:[\"records\",\"value\"]"], 5);
+    assert_eq!(
+        state.data["cell:[\"doubled\",null]"]["outcome"]["value"],
+        10
+    );
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_online_deployment_whose_base_changed_cuts_over_through_the_writer_queue() {
+    // The lane admits a staged deployment's cutover and evaluates it again
+    // under that same lease, which the pass shares. Waiting for a second,
+    // deployment slot there waited for its own lease until
+    // FLOWER_DEPLOYMENT_CUTOVER_MS ran out, so every retry conflicted.
+    let fixture = Fixture::new(16, true).await;
+    let warm = PendingInput::from(deployment("lane-warm", false));
+    deployment::stage(&fixture.app, &warm).await.unwrap();
+    drop(warm);
+    let pending = PendingInput::from(deployment("lane-rebased", false));
+    assert!(
+        deployment::stage(&fixture.app, &pending)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    submit(&fixture.app, increment("before-cutover", 7, None), false)
+        .await
+        .unwrap();
+    let changed = fixture.app.consensus.read().await.unwrap();
+    let (reply, receive) = oneshot::channel();
+    pending.enqueued();
+    assert!(
+        fixture
+            .app
+            .writer_queue
+            .try_send(Pending {
+                input: pending,
+                deployment: true,
+                enqueued: Instant::now(),
+                reply,
+            })
+            .is_ok()
+    );
+    let receipt = tokio::time::timeout(Duration::from_secs(10), receive)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt["revision"], changed.revision + 1);
+    let state = fixture.app.consensus.read().await.unwrap();
+    assert_eq!(
+        state.data["cell:[\"doubled\",null]"]["outcome"]["value"],
+        14
+    );
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn online_deployment_preparation_leaves_control_capacity_to_maintenance() {
+    // Each database's maintenance takes a control slot while it holds that
+    // database's writer. A deployment preparing for seconds in the one control
+    // slot stopped every write of every database until it was done.
+    let fixture = Fixture::new(16, true).await;
+    let javascript = format!(
+        "{}\nglobalThis.deploymentClass = 1;",
+        application_bundle(false)
+    );
+    let pending = PendingInput::from(
+        json!({"requestId":"class","bundle":{"hash":evaluator::hash(javascript.as_bytes()),"javascript":javascript}}),
+    );
+    // Maintenance takes the writer before its control slot, so holding the
+    // writer keeps it out of the count; online preparation needs no writer.
+    let writer = fixture.app.writer.lock().await;
+    let app = fixture.app.clone();
+    let staging = tokio::spawn(async move { deployment::stage(&app, &pending).await.map(|_| ()) });
+    let (mut control, mut preparing) = (0, 0);
+    while !staging.is_finished() {
+        let metrics = fixture.app.admission.metrics();
+        control = control.max(metrics["classes"][1]["active"].as_u64().unwrap());
+        preparing = preparing.max(metrics["classes"][2]["active"].as_u64().unwrap());
+        tokio::time::sleep(Duration::from_micros(200)).await;
+    }
+    staging.await.unwrap().unwrap();
+    drop(writer);
+    assert_eq!(
+        fixture.app.admission.metrics()["classes"][2]["class"],
+        "deployment"
+    );
+    assert_eq!(
+        (control, preparing),
+        (0, 1),
+        "preparation holds a deployment slot only"
+    );
+    // With the deployment slot taken, maintenance and writes go on.
+    let held = admission::acquire_retained(&fixture.app, admission::Class::Deployment)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        super::super::maintain(&fixture.app),
+    )
+    .await
+    .expect("maintenance does not wait for deployment work")
+    .unwrap();
+    let written = tokio::time::timeout(
+        Duration::from_secs(10),
+        submit(&fixture.app, increment("while-preparing", 2, None), false),
+    )
+    .await
+    .expect("writes do not wait for deployment work")
+    .unwrap();
+    assert_eq!(written["value"]["value"], 2);
+    drop(held);
     fixture.close().await;
 }
 
