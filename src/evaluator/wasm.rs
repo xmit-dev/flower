@@ -140,8 +140,9 @@ pub(super) fn execute_prepared(
     host: &mut dyn FnMut(&str, Value) -> Result<Value>,
     shared: Arc<Limits>,
 ) -> Result<Value> {
+    let mut host = |method: &str, payload: Value| host(method, payload).map(wire::Reply::Value);
     Ok(
-        match execute_prepared_profiled(prepared, name, args, kind, host, shared, &None)? {
+        match execute_prepared_profiled(prepared, name, args, kind, &mut host, shared, &None)? {
             wire::Outcome::Success(value) => json!({"ok": true, "value": value}),
             wire::Outcome::Failure {
                 code,
@@ -173,7 +174,7 @@ pub(super) fn execute_prepared_profiled(
     name: &str,
     args: &Value,
     kind: &str,
-    host: &mut dyn FnMut(&str, Value) -> Result<Value>,
+    host: &mut dyn FnMut(&str, Value) -> Result<wire::Reply>,
     shared: Arc<Limits>,
     profile: &Option<Arc<super::profile::Invocation>>,
 ) -> Result<wire::Outcome> {

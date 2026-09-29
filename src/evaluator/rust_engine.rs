@@ -32,11 +32,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::Evaluation;
+use super::wire::Reply;
 use crate::consensus::Records;
 use json::canonical_json;
 use json::{
-    Key, allocation_cost, cell_id, collection_id, compare, depth, encoded_len, equal, normalize,
-    record, root_id, source_id, source_pair, string, string_len,
+    Key, Sizes, allocation_cost, cell_id, collection_id, compare, depth, encoded_len, equal,
+    normalize, record, root_id, sizes, source_id, source_pair, string, string_len,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -88,7 +89,7 @@ pub trait Executor {
         kind: &str,
         name: &str,
         args: &Value,
-        host: &mut dyn FnMut(&str, Value) -> EngineResult<Value>,
+        host: &mut dyn FnMut(&str, Value) -> EngineResult<Reply>,
     ) -> EngineResult<Value>;
 }
 
@@ -718,32 +719,81 @@ impl Engine<'_> {
         }
     }
 
-    fn copy_for_host(&mut self, value: &Value) -> EngineResult<Value> {
-        if encoded_len(value) > self.output_limit || allocation_cost(value) > self.retained_limit {
-            return self.abort(
-                "EVALUATION_BUDGET",
-                "Context result exceeds the JSON or Rust memory budget",
-            );
-        }
-        Ok(value.clone())
+    fn context_budget<T>(&mut self) -> EngineResult<T> {
+        self.abort(
+            "EVALUATION_BUDGET",
+            "Context result exceeds the JSON or Rust memory budget",
+        )
     }
 
-    fn rows_for_host(&mut self, rows: Vec<(String, Arc<Value>)>) -> EngineResult<Value> {
+    /// A stored value for the guest, shared rather than copied: the encoder
+    /// writes it from the snapshot's own tree.
+    fn copy_for_host(&mut self, value: Arc<Value>) -> EngineResult<Reply> {
+        let Sizes { encoded, held, .. } = sizes(&value);
+        if encoded > self.output_limit || held > self.retained_limit {
+            return self.context_budget();
+        }
+        Ok(Reply::Shared(value))
+    }
+
+    /// `[{key, value}, …]` for the guest; see `rows_budget`.
+    fn rows_for_host(&mut self, rows: Vec<(String, Arc<Value>)>) -> EngineResult<Reply> {
+        self.rows_budget(&rows, None)?;
+        Ok(Reply::Rows(rows))
+    }
+
+    /// `{rows: [{key, value}, …], cursor}` for the guest; see `rows_budget`.
+    fn page_for_host(
+        &mut self,
+        rows: Vec<(String, Arc<Value>)>,
+        cursor: Option<String>,
+    ) -> EngineResult<Reply> {
+        self.rows_budget(&rows, Some(cursor.as_deref()))?;
+        Ok(Reply::Page { rows, cursor })
+    }
+
+    /// Rows go to the guest as the shared values they are, sized once each,
+    /// but against the budgets the owned JSON used to meet: the rows' JSON
+    /// length and allocation as held (plus 256 bytes and the key for each row
+    /// object), and, for a page, the length and allocation of the page an
+    /// owned copy made (strings exactly their length) around them.
+    fn rows_budget(
+        &mut self,
+        rows: &[(String, Arc<Value>)],
+        cursor: Option<Option<&str>>,
+    ) -> EngineResult<()> {
+        // {"cursor":…,"rows":…} and its allocation around the rows array.
+        let (mut page_bytes, mut page_allocation) = match cursor {
+            None => (0, 0),
+            Some(None) => (19 + 4, 330),
+            Some(Some(cursor)) => (19 + string_len(cursor), 330 + cursor.len()),
+        };
         let mut bytes = 2usize;
         let mut allocation = 64usize;
         for (index, (key, value)) in rows.iter().enumerate() {
-            bytes = bytes.saturating_add(
-                17 + usize::from(index != 0) + string_len(key) + encoded_len(value),
-            );
-            allocation = allocation.saturating_add(256 + key.len() + allocation_cost(value));
+            let sizes = sizes(value);
+            // {"key":…,"value":…}
+            bytes = bytes
+                .saturating_add(17 + usize::from(index != 0) + string_len(key) + sizes.encoded);
+            allocation = allocation.saturating_add(256 + key.len() + sizes.held);
+            page_allocation = page_allocation.saturating_add(264 + key.len() + sizes.copied);
             if bytes > self.output_limit || allocation > self.retained_limit {
-                return self.abort(
-                    "EVALUATION_BUDGET",
-                    "Context result exceeds the JSON or Rust memory budget",
-                );
+                return self.context_budget();
+            }
+            if cursor.is_some()
+                && (page_bytes.saturating_add(bytes) > self.output_limit
+                    || page_allocation > self.retained_limit)
+            {
+                return self.context_budget();
             }
         }
-        Ok(rows_value(rows))
+        page_bytes = page_bytes.saturating_add(bytes);
+        if cursor.is_some()
+            && (page_bytes > self.output_limit || page_allocation > self.retained_limit)
+        {
+            return self.context_budget();
+        }
+        Ok(())
     }
 
     fn write_source(
@@ -922,7 +972,7 @@ impl Engine<'_> {
         Ok(())
     }
 
-    fn query_rows(&mut self, query: &Query, derived: bool) -> EngineResult<Value> {
+    fn query_rows(&mut self, query: &Query, derived: bool) -> EngineResult<Reply> {
         // Derived values have no caller; methods see what their caller may.
         let access = if derived {
             None
@@ -1046,25 +1096,21 @@ impl Engine<'_> {
         self.query_values(rows.into_iter().map(|(_, value)| value).collect())
     }
 
-    fn query_values(&mut self, values: Vec<Arc<Value>>) -> EngineResult<Value> {
+    fn query_values(&mut self, values: Vec<Arc<Value>>) -> EngineResult<Reply> {
         let mut bytes = 2usize;
         let mut allocation = 64usize;
         for (index, value) in values.iter().enumerate() {
-            bytes = bytes.saturating_add(usize::from(index != 0) + encoded_len(value));
-            allocation = allocation.saturating_add(allocation_cost(value));
+            let sizes = sizes(value);
+            bytes = bytes.saturating_add(usize::from(index != 0) + sizes.encoded);
+            allocation = allocation.saturating_add(sizes.held);
             if bytes > self.output_limit || allocation > self.retained_limit {
-                return self.abort(
-                    "EVALUATION_BUDGET",
-                    "Context result exceeds the JSON or Rust memory budget",
-                );
+                return self.context_budget();
             }
         }
-        Ok(Value::Array(
-            values.into_iter().map(|value| (*value).clone()).collect(),
-        ))
+        Ok(Reply::Values(values))
     }
 
-    fn method_host(&mut self, operation: &str, arguments: Value) -> EngineResult<Value> {
+    fn method_host(&mut self, operation: &str, arguments: Value) -> EngineResult<Reply> {
         self.check_fatal()?;
         if self.mode == "transaction" {
             return self.abort(
@@ -1081,25 +1127,25 @@ impl Engine<'_> {
         };
         let argument = |index: usize| arguments.get(index).unwrap_or(&Value::Null);
         match operation {
-            "principal" => Ok(self.principal.clone()),
+            "principal" => Ok(self.principal.clone().into()),
             "history" => {
                 self.marker_read(crate::consensus::HISTORY_MARKER);
-                Ok(self.base.get("$flower.retention").map_or(Value::Null, |state|json!({"database":state["database"],"incarnation":state["incarnation"]})))
+                Ok(self.base.get("$flower.retention").map_or(Value::Null, |state|json!({"database":state["database"],"incarnation":state["incarnation"]})).into())
             }
-            "managedKey" => self.managed_key(argument(0)),
+            "managedKey" => self.managed_key(argument(0)).map(Reply::Value),
             "now" => {
                 self.query_cacheable = false;
                 self.certifying = false;
                 self.clock_polled = true;
-                Ok(json!(self.now))
+                Ok(json!(self.now).into())
             }
             "clock" => {
                 self.query_cacheable = false;
-                Ok(json!(self.now))
+                Ok(json!(self.now).into())
             }
             "changesAt" => {
                 self.declare_change(argument(0))?;
-                Ok(Value::Null)
+                Ok(Value::Null.into())
             }
             "definer" => {
                 self.writable()?;
@@ -1119,7 +1165,7 @@ impl Engine<'_> {
                         ));
                     }
                 }
-                Ok(Value::Null)
+                Ok(Value::Null.into())
             }
             "get" => {
                 let reference = argument(0);
@@ -1131,7 +1177,7 @@ impl Engine<'_> {
                     self.record_read(&id);
                     let value = self.source(&id).cloned();
                     match (value, self.read_access(collection)) {
-                        (Some(value), None) => self.copy_for_host(&value),
+                        (Some(value), None) => self.copy_for_host(value),
                         (Some(value), Some(access)) => {
                             let shown = self.looking_up(|lookup| {
                                 access
@@ -1140,12 +1186,12 @@ impl Engine<'_> {
                             })?;
                             self.settle_access(&access)?;
                             match shown {
-                                Some(shown) => self.copy_for_host(&shown),
+                                Some(shown) => self.copy_for_host(shown),
                                 // A hidden row reads as absent.
-                                None => Ok(Value::Null),
+                                None => Ok(Value::Null.into()),
                             }
                         }
-                        (None, _) => Ok(Value::Null),
+                        (None, _) => Ok(Value::Null.into()),
                     }
                 } else {
                     let name = reference_name(reference, "derived")?.to_owned();
@@ -1162,14 +1208,14 @@ impl Engine<'_> {
                     let cell = self.staged.get(&id).ok_or_else(|| {
                         EngineError::new("INPUT_INVALID", "Missing evaluated cell")
                     })?;
-                    outcome_value(&cell["outcome"])
+                    outcome_value(&cell["outcome"]).map(Reply::Value)
                 }
             }
             "scan" => {
                 if let Some(options) = arguments.get(1) {
                     let query = ranges::RangeQuery::parse_scan(argument(0), options)?;
                     let rows = self.range_rows(&query, true)?.rows;
-                    self.count_operations(rows.as_array().expect("scan rows").len())?;
+                    self.count_operations(scanned_len(&rows))?;
                     return Ok(rows);
                 }
                 let collection = reference_name(argument(0), "collection")?;
@@ -1236,12 +1282,12 @@ impl Engine<'_> {
                         self.settle_access(&access)?;
                         match admitted? {
                             access::Admitted::Write(value) => value,
-                            access::Admitted::Skip => return Ok(Value::Null),
+                            access::Admitted::Skip => return Ok(Value::Null.into()),
                         }
                     }
                 };
                 self.write_source(collection, key, value)?;
-                Ok(Value::Null)
+                Ok(Value::Null.into())
             }
             "materialize" | "unmaterialize" => {
                 self.writable()?;
@@ -1257,7 +1303,7 @@ impl Engine<'_> {
                     self.root_changes.insert(id, None);
                 }
                 self.preview_dirty = true;
-                Ok(Value::Null)
+                Ok(Value::Null.into())
             }
             _ => Err(EngineError::new(
                 "INVALID_REFERENCE",
@@ -1619,6 +1665,14 @@ fn changes(
     )
 }
 
+/// How many rows a scan (`Scanned::rows` of a scan query) returned.
+fn scanned_len(rows: &Reply) -> usize {
+    match rows {
+        Reply::Rows(rows) => rows.len(),
+        _ => unreachable!("scan rows"),
+    }
+}
+
 fn outcome_value(outcome: &Value) -> EngineResult<Value> {
     if outcome["ok"] == true {
         Ok(outcome["value"].clone())
@@ -1630,14 +1684,6 @@ fn outcome_value(outcome: &Value) -> EngineResult<Value> {
                 .unwrap_or("evaluation failed"),
         ))
     }
-}
-
-fn rows_value(rows: Vec<(String, Arc<Value>)>) -> Value {
-    Value::Array(
-        rows.into_iter()
-            .map(|(key, value)| json!({"key":key,"value":*value}))
-            .collect(),
-    )
 }
 
 struct Query {

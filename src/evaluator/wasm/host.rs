@@ -1,22 +1,22 @@
 use super::{Host, failure_parts, max_json_bytes};
-use crate::evaluator::wire;
+use crate::evaluator::wire::{self, Reply};
 use anyhow::{Result, bail, ensure};
 use serde_json::Value;
 use wasmtime::{Caller, Engine, Linker};
 
-type HostCall<'a> = dyn FnMut(&str, Value) -> Result<Value> + 'a;
+type HostCall<'a> = dyn FnMut(&str, Value) -> Result<Reply> + 'a;
 
 #[derive(Clone, Copy)]
 pub(super) struct Callback {
     data: *mut (),
-    call: unsafe fn(*mut (), &str, Value) -> Result<Value>,
+    call: unsafe fn(*mut (), &str, Value) -> Result<Reply>,
 }
 impl Callback {
     /// Caller must keep the borrowed bridge alive for every synchronous guest
     /// Store that contains this token. Tokens are detached or their Store is
     /// dropped before execute() returns; a recycled Store never retains one.
     pub(super) unsafe fn scoped(bridge: &mut &mut HostCall<'_>) -> Self {
-        unsafe fn dispatch(data: *mut (), method: &str, args: Value) -> Result<Value> {
+        unsafe fn dispatch(data: *mut (), method: &str, args: Value) -> Result<Reply> {
             // SAFETY: execute owns the pointed-to bridge on its stack, and
             // synchronous Wasmtime callbacks cannot outlive that scope.
             let callback = unsafe { &mut *(data as *mut &mut HostCall<'static>) };
@@ -27,9 +27,14 @@ impl Callback {
             call: dispatch,
         }
     }
-    pub(super) unsafe fn invoke(self, method: &str, args: Value) -> Result<Value> {
+    pub(super) unsafe fn invoke(self, method: &str, args: Value) -> Result<Reply> {
         // SAFETY: same scoped execution invariant as scoped().
         unsafe { (self.call)(self.data, method, args) }
+    }
+    /// `invoke` for Rust callers that read the result as owned JSON.
+    pub(super) unsafe fn invoke_value(self, method: &str, args: Value) -> Result<Value> {
+        // SAFETY: same scoped execution invariant as scoped().
+        unsafe { self.invoke(method, args) }.map(Reply::into_value)
     }
 }
 
@@ -82,7 +87,7 @@ fn host_call(
                 let result = unsafe { callback.invoke(method, Value::Array(arguments)) };
                 caller.data().shared.check()?;
                 match result {
-                    Ok(value) => wire::success(&value)?,
+                    Ok(reply) => wire::success_reply(&reply)?,
                     Err(error) => {
                         let (code, message, details) = failure_parts(error);
                         wire::failure(&code, &message, details.as_ref())

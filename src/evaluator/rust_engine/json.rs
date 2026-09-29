@@ -103,15 +103,61 @@ fn append_string(value: &str, output: &mut String) {
 pub(super) fn string_len(value: &str) -> usize {
     // Count the original UTF-8 bytes once, then only the extra ASCII escaping.
     // Decoding every Unicode scalar adds work without changing its byte count.
-    2 + value.len()
-        + value
-            .bytes()
-            .map(|byte| match byte {
-                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 1,
-                0..=0x1f => 5,
-                _ => 0,
-            })
-            .sum::<usize>()
+    fn escaping(byte: u8) -> usize {
+        match byte {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 1,
+            0..=0x1f => 5,
+            _ => 0,
+        }
+    }
+    // The same count without branches, a byte per lane: 32 bytes add at most
+    // 160, so a block's sum fits in a u8. A match per byte ran 5 cycles a byte;
+    // this runs about half a cycle, which matters for the strings of every
+    // stored row a range sizes.
+    let mut blocks = value.as_bytes().chunks_exact(32);
+    let mut extra = 0usize;
+    for block in &mut blocks {
+        let mut sum = 0u8;
+        for &byte in block {
+            let control = u8::from(byte < 0x20);
+            let short = u8::from((byte.wrapping_sub(8) < 6) & (byte != 0x0b));
+            let quoted = u8::from((byte == b'"') | (byte == b'\\'));
+            sum = sum.wrapping_add(control * 5 - short * 4 + quoted);
+        }
+        extra += usize::from(sum);
+    }
+    extra += blocks
+        .remainder()
+        .iter()
+        .copied()
+        .map(escaping)
+        .sum::<usize>();
+    2 + value.len() + extra
+}
+
+/// JSON.stringify's length for a number. Integers within 2^53 print as their
+/// digits, which is what ryu_js would format; others take ryu_js's word.
+fn number_len(number: &serde_json::Number) -> usize {
+    const EXACT: u64 = 1 << 53;
+    if let Some(value) = number.as_u64().filter(|value| *value <= EXACT) {
+        return digits(value);
+    }
+    if let Some(value) = number
+        .as_i64()
+        .filter(|value| value.unsigned_abs() <= EXACT)
+    {
+        return usize::from(value < 0) + digits(value.unsigned_abs());
+    }
+    let value = number.as_f64().expect("JSON number");
+    if value == 0.0 {
+        1
+    } else {
+        ryu_js::Buffer::new().format_finite(value).len()
+    }
+}
+
+fn digits(value: u64) -> usize {
+    value.checked_ilog10().map_or(1, |log| log as usize + 1)
 }
 
 /// Exact JSON.stringify byte count without allocating or cloning output JSON.
@@ -125,14 +171,7 @@ pub(super) fn encoded_len(value: &Value) -> usize {
                 5
             }
         }
-        Value::Number(number) => {
-            let value = number.as_f64().expect("JSON number");
-            if value == 0.0 {
-                1
-            } else {
-                ryu_js::Buffer::new().format_finite(value).len()
-            }
-        }
+        Value::Number(number) => number_len(number),
         Value::String(value) => string_len(value),
         Value::Array(values) => {
             2 + values.len().saturating_sub(1) + values.iter().map(encoded_len).sum::<usize>()
@@ -145,6 +184,65 @@ pub(super) fn encoded_len(value: &Value) -> usize {
                     .sum::<usize>()
         }
     }
+}
+
+/// What a value costs as part of a host reply, from one walk over it:
+/// `encoded_len`, `allocation_cost` as it is held, and `allocation_cost` of
+/// an owned copy, whose strings and keys have exactly their length.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Sizes {
+    pub encoded: usize,
+    pub held: usize,
+    pub copied: usize,
+}
+
+pub(super) fn sizes(value: &Value) -> Sizes {
+    fn walk(value: &Value, sizes: &mut Sizes) {
+        match value {
+            Value::Null => {
+                sizes.encoded += 4;
+                sizes.held += 64;
+                sizes.copied += 64;
+            }
+            Value::Bool(value) => {
+                sizes.encoded += if *value { 4 } else { 5 };
+                sizes.held += 64;
+                sizes.copied += 64;
+            }
+            Value::Number(number) => {
+                sizes.encoded += number_len(number);
+                sizes.held += 64;
+                sizes.copied += 64;
+            }
+            Value::String(value) => {
+                sizes.encoded += string_len(value);
+                sizes.held += 64 + value.capacity();
+                sizes.copied += 64 + value.len();
+            }
+            Value::Array(values) => {
+                sizes.encoded += 2 + values.len().saturating_sub(1);
+                sizes.held += 64;
+                sizes.copied += 64;
+                for value in values {
+                    walk(value, sizes);
+                }
+            }
+            Value::Object(values) => {
+                sizes.encoded += 2 + values.len().saturating_sub(1);
+                sizes.held += 64;
+                sizes.copied += 64;
+                for (key, value) in values {
+                    sizes.encoded += string_len(key) + 1;
+                    sizes.held += 64 + key.capacity();
+                    sizes.copied += 64 + key.len();
+                    walk(value, sizes);
+                }
+            }
+        }
+    }
+    let mut sizes = Sizes::default();
+    walk(value, &mut sizes);
+    sizes
 }
 
 /// Conservative retained JSON allocation estimate, including structural costs
@@ -319,12 +417,104 @@ mod normalization_tests {
         }
         // Include every valid scalar, with multibyte sequences crossing many
         // positions in the encoder's scan, without constructing invalid UTF-8.
+        // Every byte at every position of a block and of the tail.
+        let specials = format!("{all_controls}é\"\\");
+        for start in 0..40 {
+            let shifted = format!("{}{specials}{specials}", "x".repeat(start));
+            for end in (0..=shifted.len()).filter(|end| shifted.is_char_boundary(*end)) {
+                let value = &shifted[..end];
+                assert_eq!(
+                    string_len(value),
+                    serde_json::to_string(value).unwrap().len()
+                );
+            }
+        }
         let unicode: String = (0..=0x10ffff).filter_map(char::from_u32).collect();
         let expected = serde_json::to_string(&unicode).unwrap();
         assert_eq!(string_len(&unicode), expected.len());
         let mut actual = String::new();
         append_string(&unicode, &mut actual);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn number_lengths_are_what_ryu_js_formats() {
+        let formatted = |number: &serde_json::Number| {
+            let value = number.as_f64().unwrap();
+            if value == 0.0 {
+                1
+            } else {
+                ryu_js::Buffer::new().format_finite(value).len()
+            }
+        };
+        let mut numbers: Vec<Value> = vec![
+            json!(0),
+            json!(-0.0),
+            json!(0.1),
+            json!(1e21),
+            json!(1e20),
+            json!(-1.5e-7),
+            json!(u64::MAX),
+            json!(i64::MIN),
+            json!(i64::MAX),
+        ];
+        for exponent in 0..=19 {
+            let power = 10u64.pow(exponent);
+            for value in [power - 1, power, power + 1, 2 * power, 9 * power] {
+                numbers.push(json!(value));
+                numbers.push(json!(-(value.min(i64::MAX as u64) as i64)));
+            }
+        }
+        for value in [(1u64 << 53) - 1, 1 << 53, (1 << 53) + 1, (1 << 53) + 2] {
+            numbers.push(json!(value));
+            numbers.push(json!(-(value as i64)));
+        }
+        for value in numbers {
+            let Value::Number(number) = &value else {
+                unreachable!()
+            };
+            assert_eq!(number_len(number), formatted(number), "{value}");
+            assert_eq!(encoded_len(&value), canonical_json(&value).len(), "{value}");
+        }
+    }
+
+    #[test]
+    fn sizes_are_encoded_length_and_allocation_held_and_copied() {
+        let mut spare = String::with_capacity(100);
+        spare.push_str("é\"x\u{1}");
+        let mut key = String::with_capacity(50);
+        key.push_str("k");
+        let value = json!({
+            "a": [0, -0.0, 1, -1, 9_007_199_254_740_993u64, 1e21, 0.125, null, true, false, []],
+            "😀": {"nested": [{"": "é"}], "empty": {}},
+        });
+        let mut value = value;
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(key, Value::String(spare));
+        let copied = serde_json::to_value(&value).unwrap();
+        let actual = sizes(&value);
+        assert_eq!(
+            actual,
+            Sizes {
+                encoded: canonical_json(&value).len(),
+                held: allocation_cost(&value),
+                copied: allocation_cost(&copied),
+            }
+        );
+        assert_eq!(actual.encoded, encoded_len(&value));
+        assert_eq!(actual.held - actual.copied, (100 - 5) + (50 - 1));
+        for scalar in [json!(null), json!("x"), json!(7), json!([]), json!({})] {
+            assert_eq!(
+                sizes(&scalar),
+                Sizes {
+                    encoded: encoded_len(&scalar),
+                    held: allocation_cost(&scalar),
+                    copied: allocation_cost(&scalar),
+                }
+            );
+        }
     }
 
     #[test]

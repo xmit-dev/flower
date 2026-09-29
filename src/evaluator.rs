@@ -633,7 +633,7 @@ impl rust_engine::Executor for CellExecutor {
         kind: &str,
         name: &str,
         args: &Value,
-        host: &mut dyn FnMut(&str, Value) -> rust_engine::EngineResult<Value>,
+        host: &mut dyn FnMut(&str, Value) -> rust_engine::EngineResult<wire::Reply>,
     ) -> rust_engine::EngineResult<Value> {
         let _depth = profile::enter_cell(&self.profile);
         let _wall = profile::timer(&self.profile, profile::Stage::CellWall);

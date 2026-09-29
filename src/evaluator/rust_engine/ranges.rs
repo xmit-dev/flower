@@ -178,7 +178,7 @@ pub(super) fn entry(spec: &IndexSpec, key: &str, value: &Value) -> Option<String
 
 /// Rows and what determines them.
 pub(super) struct Scanned {
-    pub rows: Value,
+    pub rows: Reply,
     pub dependency: Dependency,
 }
 
@@ -585,9 +585,12 @@ impl Engine<'_> {
         if query.lower >= query.upper || query.limit == 0 {
             return Ok(Scanned {
                 rows: if query.scan {
-                    json!([])
+                    Reply::Rows(Vec::new())
                 } else {
-                    json!({"rows":[],"cursor":null})
+                    Reply::Page {
+                        rows: Vec::new(),
+                        cursor: None,
+                    }
                 },
                 dependency: Dependency::None,
             });
@@ -853,15 +856,12 @@ impl Engine<'_> {
             }
             None => rows,
         };
-        let rows = self.rows_for_host(rows)?;
-        if query.scan {
-            return Ok(Scanned { rows, dependency });
-        }
-        let page = json!({"rows":rows,"cursor":cursor});
-        Ok(Scanned {
-            rows: self.copy_for_host(&page)?,
-            dependency,
-        })
+        let rows = if query.scan {
+            self.rows_for_host(rows)?
+        } else {
+            self.page_for_host(rows, cursor)?
+        };
+        Ok(Scanned { rows, dependency })
     }
 }
 

@@ -127,7 +127,7 @@ fn declare_decryption_change(
         },
     };
     // SAFETY: same synchronous scoped lifetime as host_call.
-    unsafe { callback.invoke(operation, arguments)? };
+    unsafe { callback.invoke_value(operation, arguments)? };
     Ok(())
 }
 
@@ -155,7 +155,7 @@ fn declare_verification_change(
         caller.data().callback,
     ) {
         // SAFETY: same synchronous scoped lifetime as host_call.
-        unsafe { callback.invoke("changesAt", json!([time]))? };
+        unsafe { callback.invoke_value("changesAt", json!([time]))? };
     }
     Ok(())
 }
@@ -201,7 +201,7 @@ pub(super) fn call(
                 // SAFETY: same synchronous scoped lifetime as host_call. This
                 // also records a time dependency, preventing stale query caching.
                 // Validation then reports when its outcome changes.
-                unsafe { callback.invoke("clock", Value::Array(Vec::new()))? }
+                unsafe { callback.invoke_value("clock", Value::Array(Vec::new()))? }
                     .as_u64()
                     .context("invalid invocation clock")?
             } else {
@@ -370,7 +370,7 @@ fn managed_dispatch(caller: &mut Caller<'_, Host>, ranges: &[Range<usize>; 4]) -
         // SAFETY: same synchronous scoped lifetime as host_call. This initial
         // resolution records dependencies even when the operation later fails.
         let value = unsafe {
-            callback.invoke(
+            callback.invoke_value(
                 "managedKey",
                 json!([{"key":declaration,"operation":operation,"kid":kid}]),
             )?
@@ -406,7 +406,7 @@ fn managed_dispatch(caller: &mut Caller<'_, Host>, ranges: &[Range<usize>; 4]) -
         // As for raw keys: this records the time dependency that prevents
         // caching validity past exp. Validation then reports when its
         // outcome changes.
-        unsafe { callback.invoke("clock", json!([]))? }
+        unsafe { callback.invoke_value("clock", json!([]))? }
             .as_u64()
             .context("Invalid invocation clock")?
     } else {
@@ -515,7 +515,7 @@ fn shared_dispatch(
     // A derive grant does not grant encryption/decryption. Authorization is
     // pinned to the same invocation snapshot as the underlying private key.
     unsafe {
-        callback.invoke(
+        callback.invoke_value(
             "managedKey",
             json!([{"key":declaration,"operation":operation,"kid":null}]),
         )?;

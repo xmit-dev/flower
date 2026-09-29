@@ -681,6 +681,7 @@ pub(super) fn release(prepared: &Prepared) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evaluator::wire::Reply;
 
     #[test]
     fn reset_overwrites_every_guest_byte_and_mutable_global_and_detaches_host() {
@@ -691,9 +692,8 @@ mod tests {
         )
         .unwrap();
         let runtime = super::super::cache::runtime().unwrap();
-        let mut host = |_: &str, _: serde_json::Value| Ok(serde_json::Value::Null);
-        let mut bridge: &mut dyn FnMut(&str, serde_json::Value) -> Result<serde_json::Value> =
-            &mut host;
+        let mut host = |_: &str, _: serde_json::Value| Ok(Reply::Value(serde_json::Value::Null));
+        let mut bridge: &mut dyn FnMut(&str, serde_json::Value) -> Result<Reply> = &mut host;
         // The callback lives until both checked-out Stores below are detached.
         let callback = unsafe { Callback::scoped(&mut bridge) };
         let mut cell =
@@ -731,11 +731,10 @@ mod tests {
         std::thread::scope(|scope| {
             scope
                 .spawn(|| {
-                    let mut host = |_: &str, _: serde_json::Value| Ok(serde_json::Value::Null);
-                    let mut bridge: &mut dyn FnMut(
-                        &str,
-                        serde_json::Value,
-                    ) -> Result<serde_json::Value> = &mut host;
+                    let mut host =
+                        |_: &str, _: serde_json::Value| Ok(Reply::Value(serde_json::Value::Null));
+                    let mut bridge: &mut dyn FnMut(&str, serde_json::Value) -> Result<Reply> =
+                        &mut host;
                     // Detached by discard() before this thread's bridge ends.
                     let callback = unsafe { Callback::scoped(&mut bridge) };
                     let mut cell = checkout(

@@ -70,8 +70,10 @@ impl Executor for Reducer {
         kind: &str,
         name: &str,
         args: &Value,
-        host: &mut Host<'_>,
+        host: &mut EngineHost<'_>,
     ) -> EngineResult<Value> {
+        let mut host = owned(host);
+        let host: &mut Host<'_> = &mut host;
         if kind == "derived" && name == "total" {
             self.payloads.borrow_mut().push(args.clone());
             let mut sum = if args["initialize"] == true {

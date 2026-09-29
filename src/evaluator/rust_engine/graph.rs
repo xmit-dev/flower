@@ -533,7 +533,7 @@ impl Engine<'_> {
         operation: &str,
         arguments: Value,
         observed: &mut BTreeSet<Key>,
-    ) -> EngineResult<Value> {
+    ) -> EngineResult<Reply> {
         self.check_fatal()?;
         if self.mode != "deployment" {
             self.count_operations(1)?;
@@ -548,7 +548,7 @@ impl Engine<'_> {
                 // missing key must repair the stored error on the next commit.
                 self.count_reads(1)?;
                 self.observe(observed, "managedKeys".into())?;
-                self.managed_key(argument(0))
+                self.managed_key(argument(0)).map(Reply::Value)
             }
             "now" | "clock" => {
                 self.count_reads(1)?;
@@ -556,12 +556,12 @@ impl Engine<'_> {
                 // Deployments build cells; only queries and mutations report time use.
                 self.clock_polled |= operation == "now" && self.mode != "deployment";
                 self.observe(observed, "clock".into())?;
-                Ok(json!(self.now))
+                Ok(json!(self.now).into())
             }
             "changesAt" => {
                 self.count_reads(1)?;
                 self.declare_change(argument(0))?;
-                Ok(Value::Null)
+                Ok(Value::Null.into())
             }
             "get" => {
                 self.count_reads(1)?;
@@ -575,8 +575,8 @@ impl Engine<'_> {
                         self.observe(observed, id.clone())?;
                         let value = self.staged.get_shared(&id).cloned();
                         match value {
-                            Some(value) => self.copy_for_host(&value),
-                            None => Ok(Value::Null),
+                            Some(value) => self.copy_for_host(value),
+                            None => Ok(Value::Null.into()),
                         }
                     }
                     Some("derived") => {
@@ -586,7 +586,7 @@ impl Engine<'_> {
                         self.ensure(name, &args)?;
                         self.check_materialized_keys(&id)?;
                         let cell = self.staged.get(&id).expect("evaluated cell exists");
-                        outcome_value(&cell["outcome"])
+                        outcome_value(&cell["outcome"]).map(Reply::Value)
                     }
                     _ => Err(EngineError::new(
                         "INVALID_REFERENCE",
@@ -598,7 +598,7 @@ impl Engine<'_> {
                 if let Some(options) = arguments.get(1) {
                     let query = ranges::RangeQuery::parse_scan(argument(0), options)?;
                     let rows = self.observed_range(observed, &query)?;
-                    let count = rows.as_array().expect("scan rows").len();
+                    let count = scanned_len(&rows);
                     self.count_reads(1 + count)?;
                     if self.mode != "deployment" {
                         self.count_operations(count)?;
@@ -651,7 +651,7 @@ impl Engine<'_> {
         &mut self,
         observed: &mut BTreeSet<Key>,
         query: &ranges::RangeQuery,
-    ) -> EngineResult<Value> {
+    ) -> EngineResult<Reply> {
         match self.range_rows(query, false) {
             Ok(scanned) => {
                 if let Some(dependency) = scanned.dependency.id() {

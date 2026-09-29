@@ -4,7 +4,7 @@
 //! so neither side transcodes or re-interns what it has already seen.
 use rustc_hash::FxHashMap;
 use serde_json::{Map, Number, Value};
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 pub(crate) const MAX_DEPTH: usize = 128;
 
@@ -102,6 +102,50 @@ impl<'a> Encoder<'a> {
         self.nested(value, 1)
     }
 
+    /// Append a host call's result: the bytes `value(&reply.into_value())`
+    /// would write, taken from shared stored values without copying them.
+    pub(crate) fn reply(&mut self, reply: &'a Reply) -> Result<(), Invalid> {
+        match reply {
+            Reply::Value(value) => self.nested(value, 1),
+            Reply::Shared(value) => self.nested(value, 1),
+            Reply::Values(values) => {
+                self.array_head(values.len());
+                values.iter().try_for_each(|value| self.nested(value, 2))
+            }
+            Reply::Rows(rows) => self.rows(rows, 1),
+            Reply::Page { rows, cursor } => {
+                // Canonical order: "cursor" < "rows".
+                self.map_head(2);
+                self.key("cursor");
+                match cursor {
+                    Some(cursor) => self.text(cursor),
+                    None => self.out.push(NULL),
+                }
+                self.key("rows");
+                self.rows(rows, 2)
+            }
+        }
+    }
+
+    /// `[{key, value}, …]` at `depth`, keys in canonical order.
+    fn rows(&mut self, rows: &'a [(String, Arc<Value>)], depth: usize) -> Result<(), Invalid> {
+        if depth > MAX_DEPTH {
+            return Err(NESTING);
+        }
+        self.array_head(rows.len());
+        for (key, value) in rows {
+            if depth + 1 > MAX_DEPTH {
+                return Err(NESTING);
+            }
+            self.map_head(2);
+            self.key("key");
+            self.text(key);
+            self.key("value");
+            self.nested(value, depth + 2)?;
+        }
+        Ok(())
+    }
+
     fn nested(&mut self, value: &'a Value, depth: usize) -> Result<(), Invalid> {
         if depth > MAX_DEPTH {
             return Err(NESTING);
@@ -147,12 +191,84 @@ pub(crate) fn encode(value: &Value) -> Result<Vec<u8>, Invalid> {
     Ok(encoder.out)
 }
 
-/// A success outcome: status byte, then the value.
+/// A success outcome: status byte, then the value. Host calls answer with
+/// `success_reply`.
+#[cfg(test)]
 pub(crate) fn success(value: &Value) -> Result<Vec<u8>, Invalid> {
     let mut encoder = Encoder::with_capacity(64);
     encoder.out.push(SUCCESS);
     encoder.value(value)?;
     Ok(encoder.out)
+}
+
+/// A host call's success outcome, byte for byte `success(&reply.into_value())`.
+pub(crate) fn success_reply(reply: &Reply) -> Result<Vec<u8>, Invalid> {
+    let mut encoder = Encoder::with_capacity(64);
+    encoder.out.push(SUCCESS);
+    encoder.reply(reply)?;
+    Ok(encoder.out)
+}
+
+/// What a host operation returns to the guest. Rows read from the store stay
+/// the shared values the snapshot holds until the encoder writes them, so a
+/// page of rows costs the guest one encoding rather than owned copies first.
+#[derive(Debug)]
+pub(crate) enum Reply {
+    Value(Value),
+    /// One stored value.
+    Shared(Arc<Value>),
+    /// `[value, …]`
+    Values(Vec<Arc<Value>>),
+    /// `[{key, value}, …]`
+    Rows(Vec<(String, Arc<Value>)>),
+    /// `{rows: [{key, value}, …], cursor}`, the cursor null on the last page.
+    Page {
+        rows: Vec<(String, Arc<Value>)>,
+        cursor: Option<String>,
+    },
+}
+
+impl Reply {
+    /// The JSON the guest decodes, owned: shared values are copied unless
+    /// this reply held their last reference.
+    pub(crate) fn into_value(self) -> Value {
+        fn rows(rows: Vec<(String, Arc<Value>)>) -> Value {
+            Value::Array(
+                rows.into_iter()
+                    .map(|(key, value)| {
+                        Value::Object(Map::from_iter([
+                            ("key".to_owned(), Value::String(key)),
+                            ("value".to_owned(), Arc::unwrap_or_clone(value)),
+                        ]))
+                    })
+                    .collect(),
+            )
+        }
+        match self {
+            Self::Value(value) => value,
+            Self::Shared(value) => Arc::unwrap_or_clone(value),
+            Self::Values(values) => {
+                Value::Array(values.into_iter().map(Arc::unwrap_or_clone).collect())
+            }
+            Self::Rows(values) => rows(values),
+            Self::Page {
+                rows: values,
+                cursor,
+            } => Value::Object(Map::from_iter([
+                (
+                    "cursor".to_owned(),
+                    cursor.map_or(Value::Null, Value::String),
+                ),
+                ("rows".to_owned(), rows(values)),
+            ])),
+        }
+    }
+}
+
+impl From<Value> for Reply {
+    fn from(value: Value) -> Self {
+        Self::Value(value)
+    }
 }
 
 /// A failure outcome: status byte, then `{code, message, details?}` with keys
@@ -406,6 +522,56 @@ pub(crate) fn outcome(bytes: &[u8]) -> Result<Outcome, Invalid> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn replies_encode_exactly_as_their_owned_json() {
+        // Row values use the reply's own keys, so their back references
+        // interleave with the page's.
+        let row = |text: &str| {
+            Arc::new(
+                json!({"value": text, "key": [1, {"key": "nested", "ü": 2.5}], "cursor": null, "rows": {}}),
+            )
+        };
+        let rows = vec![
+            ("a".to_owned(), row("x")),
+            ("é\u{0}".to_owned(), row("y")),
+            ("b".to_owned(), Arc::new(json!("plain"))),
+        ];
+        let deep = |levels: usize| (0..levels).fold(json!(0), |value, _| json!([value]));
+        let mut replies = vec![
+            Reply::Value(json!({"z": 1, "a": [2]})),
+            Reply::Shared(row("s")),
+            Reply::Values(vec![row("p"), Arc::new(json!(3))]),
+            Reply::Values(Vec::new()),
+            Reply::Rows(rows.clone()),
+            Reply::Rows(Vec::new()),
+            Reply::Page {
+                rows: rows.clone(),
+                cursor: Some("{\"last\":\"é\"}".into()),
+            },
+            Reply::Page { rows, cursor: None },
+            Reply::Page {
+                rows: Vec::new(),
+                cursor: None,
+            },
+        ];
+        // Around the nesting limit, rows sit two levels deeper than values and
+        // pages three.
+        for levels in 124..=128 {
+            replies.push(Reply::Shared(Arc::new(deep(levels))));
+            replies.push(Reply::Values(vec![Arc::new(deep(levels))]));
+            replies.push(Reply::Rows(vec![("k".into(), Arc::new(deep(levels)))]));
+            replies.push(Reply::Page {
+                rows: vec![("k".into(), Arc::new(deep(levels)))],
+                cursor: None,
+            });
+        }
+        for reply in replies {
+            let encoded = success_reply(&reply);
+            let owned = reply.into_value();
+            assert_eq!(encoded, success(&owned), "{owned}");
+        }
+    }
 
     fn round_trip(value: Value) {
         assert_eq!(decode(&encode(&value).unwrap()).unwrap(), value, "{value}");

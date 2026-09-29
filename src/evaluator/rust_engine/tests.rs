@@ -3,6 +3,13 @@ use std::cell::RefCell;
 use super::*;
 
 type Host<'a> = dyn FnMut(&str, Value) -> EngineResult<Value> + 'a;
+/// The engine's side of the host: replies as the guest's encoder takes them.
+type EngineHost<'a> = dyn FnMut(&str, Value) -> EngineResult<Reply> + 'a;
+
+/// Host calls as fixtures read them: owned JSON, as the guest decodes it.
+fn owned<'a>(host: &'a mut EngineHost<'_>) -> impl FnMut(&str, Value) -> EngineResult<Value> + 'a {
+    move |operation, arguments| host(operation, arguments).map(Reply::into_value)
+}
 type Callback = fn(&Value, &mut Host<'_>) -> EngineResult<Value>;
 
 struct Fixture {
@@ -25,13 +32,14 @@ impl Executor for Fixture {
         _kind: &str,
         name: &str,
         args: &Value,
-        host: &mut Host<'_>,
+        host: &mut EngineHost<'_>,
     ) -> EngineResult<Value> {
         self.calls.borrow_mut().push(name.into());
         self.callbacks
             .get(name)
             .ok_or_else(|| EngineError::new("DEFINITION_MISSING", format!("Missing {name}")))?(
-            args, host,
+            args,
+            &mut owned(host),
         )
     }
 }
@@ -102,8 +110,14 @@ fn final_patch_moves_new_json_allocations_and_preserves_retained_snapshots() {
         value: RefCell<Option<Value>>,
     }
     impl Executor for MoveExecutor {
-        fn execute(&self, _: &str, _: &str, _: &Value, host: &mut Host<'_>) -> EngineResult<Value> {
-            host(
+        fn execute(
+            &self,
+            _: &str,
+            _: &str,
+            _: &Value,
+            host: &mut EngineHost<'_>,
+        ) -> EngineResult<Value> {
+            owned(host)(
                 "set",
                 Value::Array(vec![
                     json!({"kind":"collection","name":"payloads"}),

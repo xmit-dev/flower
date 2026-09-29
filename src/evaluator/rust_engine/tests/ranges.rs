@@ -342,3 +342,333 @@ fn wasm_range_context_serves_mutations_queries_and_derived_phantoms() {
     assert_eq!(keys(&result.value), vec!["due"]);
     assert!(result.value["cursor"].is_string());
 }
+
+/// The budgets e082330 applied to rows on their way to the guest as owned JSON:
+/// each row sized as held (`rows_for_host`), then, for a page, the owned page
+/// that `json!` built sized again (`copy_for_host`). The smallest output and
+/// retained limits that let the reply through.
+fn owned_reply_limits(rows: &[(String, Arc<Value>)], page: Option<Option<&str>>) -> (usize, usize) {
+    let mut bytes = 2usize;
+    let mut allocation = 64usize;
+    for (index, (key, value)) in rows.iter().enumerate() {
+        bytes += 17 + usize::from(index != 0) + string_len(key) + encoded_len(value);
+        allocation += 256 + key.len() + allocation_cost(value);
+    }
+    let owned = Value::Array(
+        rows.iter()
+            .map(|(key, value)| json!({"key":key,"value":**value}))
+            .collect(),
+    );
+    match page {
+        None => (bytes, allocation),
+        Some(cursor) => {
+            let page = json!({"rows":owned,"cursor":cursor});
+            (
+                bytes.max(encoded_len(&page)),
+                allocation.max(allocation_cost(&page)),
+            )
+        }
+    }
+}
+
+/// Values as the engine holds them. With FLOWER_TEST_BACKED, the engine reads
+/// a stored copy instead, whose strings have no spare capacity.
+fn held_rows(data: &Records, keys: &[&str]) -> Vec<(String, Arc<Value>)> {
+    keys.iter()
+        .map(|key| {
+            let value = data.get_shared(&source_id("items", key)).unwrap().clone();
+            let value = if std::env::var_os("FLOWER_TEST_BACKED").is_some() {
+                Arc::new(serde_json::from_slice(&serde_json::to_vec(&*value).unwrap()).unwrap())
+            } else {
+                value
+            };
+            ((*key).to_owned(), value)
+        })
+        .collect()
+}
+
+fn budget_fixture() -> Fixture {
+    // Each method returns only a count, so that the reply is the one
+    // allocation near the limit.
+    Fixture::new([
+        (
+            "page",
+            (|args, host| {
+                let page = host("range", json!([args]))?;
+                Ok(json!([
+                    page["rows"].as_array().unwrap().len(),
+                    page["cursor"]
+                ]))
+            }) as Callback,
+        ),
+        (
+            "scanned",
+            (|args, host| {
+                let rows = host("scan", json!([{"kind":"collection","name":"items"}, args]))?;
+                Ok(json!(rows.as_array().unwrap().len()))
+            }) as Callback,
+        ),
+        (
+            "all",
+            (|_, host| {
+                let rows = host("scan", json!([{"kind":"collection","name":"items"}]))?;
+                Ok(json!(rows.as_array().unwrap().len()))
+            }) as Callback,
+        ),
+        (
+            "one",
+            (|args, host| {
+                let row = host("get", json!([{"kind":"collection","name":"items"}, args]))?;
+                Ok(json!(row.is_object()))
+            }) as Callback,
+        ),
+        (
+            "matching",
+            (|args, host| {
+                let rows = host(
+                    "query",
+                    json!([{"kind":"query","collection":"items","fields":["tenant"],"value":args}]),
+                )?;
+                Ok(json!(rows.as_array().unwrap().len()))
+            }) as Callback,
+        ),
+    ])
+}
+
+/// Run `name` with the retained limit just at and just below `limit`: at it the
+/// reply goes through, one byte less fails with the context budget.
+fn trips_just_below(data: &Records, name: &str, args: Value, limit: usize) -> Value {
+    let invocation = json!({"name":name,"args":args});
+    let fixture = budget_fixture();
+    let value = run_with_limit(
+        data.clone(),
+        invocation.clone(),
+        "query",
+        None,
+        &fixture,
+        limit,
+    )
+    .unwrap_or_else(|error| panic!("{name} at {limit}: {error:?}"))
+    .value;
+    let error =
+        run_with_limit(data.clone(), invocation, "query", None, &fixture, limit - 1).unwrap_err();
+    assert_eq!(
+        (error.code.as_str(), error.message.as_str()),
+        (
+            "EVALUATION_BUDGET",
+            "Context result exceeds the JSON or Rust memory budget"
+        ),
+        "{name} at {}",
+        limit - 1
+    );
+    value
+}
+
+fn page_args(limit: usize) -> Value {
+    reference(json!({"prefix":["a"],"limit":limit}))
+}
+
+/// The cursor a page of `limit` rows returns, as `budget_fixture`'s "page" reports it.
+fn page_cursor(data: &Records, limit: usize) -> Option<String> {
+    let value = run(
+        data.clone(),
+        json!({"name":"page","args":page_args(limit)}),
+        "query",
+        None,
+        &budget_fixture(),
+    )
+    .unwrap()
+    .value;
+    value[1].as_str().map(str::to_owned)
+}
+
+#[test]
+fn shared_row_replies_trip_their_budgets_exactly_where_owned_copies_did() {
+    let mut data = Records::default();
+    let keys = ["k0", "k1", "k2", "k3", "k4", "k5"];
+    for (n, key) in keys.iter().enumerate() {
+        // Strings, numbers, nesting, escapes and non-ASCII keys: every kind of
+        // size the budgets count.
+        let mut row = json!({"tenant":"a","score":n,"memory":{"é":[1.5,-3,null,true,0.1]},"at":1_790_000_000_000u64+n as u64,"big":u64::MAX});
+        // Moved in, not through json!, which would copy it to its length.
+        let mut text = String::with_capacity(if n == 5 { 12_000 } else { 0 });
+        text.push_str(&"x\"\n".repeat(700 + n));
+        row["memory"]["text"] = Value::String(text);
+        data.insert(source_id("items", key), row);
+    }
+    install(&mut data, &fixture());
+    let rows = held_rows(&data, &keys);
+    let held = |value: &Value| allocation_cost(value);
+
+    // A page with a cursor: the owned page's allocation (its object, keys and
+    // strings copied to their length) binds.
+    let cursor = page_cursor(&data, 3).expect("a page with more");
+    let (_, limit) = owned_reply_limits(&rows[..3], Some(Some(&cursor)));
+    assert_eq!(
+        trips_just_below(&data, "page", page_args(3), limit),
+        json!([3, cursor])
+    );
+    // The last page, through the row with spare capacity: the rows as held bind.
+    assert_eq!(page_cursor(&data, 9), None);
+    let (_, limit) = owned_reply_limits(&rows, Some(None));
+    if std::env::var_os("FLOWER_TEST_BACKED").is_none() {
+        let (_, as_held) = owned_reply_limits(&rows, None);
+        assert_eq!(limit, as_held, "the rows as held are what binds here");
+    }
+    assert_eq!(
+        trips_just_below(&data, "page", page_args(9), limit),
+        json!([6, null])
+    );
+    // Scans: rows as held, no page around them.
+    let (_, limit) = owned_reply_limits(&rows[..4], None);
+    assert_eq!(
+        trips_just_below(&data, "scanned", json!({"limit":4}), limit),
+        json!(4)
+    );
+    let (_, limit) = owned_reply_limits(&rows, None);
+    assert_eq!(trips_just_below(&data, "all", Value::Null, limit), json!(6));
+    // One row, and the values a query matches.
+    assert_eq!(
+        trips_just_below(&data, "one", json!("k5"), held(&rows[5].1)),
+        json!(true)
+    );
+    let limit = 64 + rows.iter().map(|(_, value)| held(value)).sum::<usize>();
+    assert_eq!(
+        trips_just_below(&data, "matching", json!("a"), limit),
+        json!(6)
+    );
+}
+
+#[test]
+fn shared_row_replies_trip_the_output_limit_exactly_where_owned_copies_did() {
+    let limit = crate::evaluator::config::settings()
+        .unwrap()
+        .result_max_bytes;
+    let insert = |data: &mut Records, length: usize| {
+        data.insert(
+            source_id("items", "k0"),
+            json!({"tenant":"a","score":0,"text":format!("é\t{}", "x".repeat(length))}),
+        );
+    };
+    let mut data = Records::default();
+    // Both rows exist before the index does; k0 then changes only its text.
+    insert(&mut data, 0);
+    data.insert(source_id("items", "k1"), json!({"tenant":"a","score":1}));
+    install(&mut data, &fixture());
+    for (name, args, page) in [
+        ("page", page_args(1), true),
+        ("scanned", json!({"limit":1}), false),
+    ] {
+        // Grow k0 until the reply's JSON is exactly the limit long.
+        insert(&mut data, 0);
+        let cursor = page.then(|| Some(page_cursor(&data, 1).expect("a page with more")));
+        let length = |data: &Records| {
+            let rows = held_rows(data, &["k0"]);
+            owned_reply_limits(&rows, cursor.as_ref().map(Option::as_deref)).0
+        };
+        let short = limit - length(&data);
+        insert(&mut data, short);
+        assert_eq!(length(&data), limit);
+        let invocation = json!({"name":name,"args":args});
+        run(
+            data.clone(),
+            invocation.clone(),
+            "query",
+            None,
+            &budget_fixture(),
+        )
+        .unwrap_or_else(|error| panic!("{name} at the limit: {error:?}"));
+        insert(&mut data, short + 1);
+        assert_eq!(length(&data), limit + 1);
+        let error = run(data.clone(), invocation, "query", None, &budget_fixture()).unwrap_err();
+        assert_eq!(
+            error.message, "Context result exceeds the JSON or Rust memory budget",
+            "{name}"
+        );
+    }
+}
+
+/// Microbench: pages of 64 rows of about 10 KB (Ultimator session rows: a
+/// memory snapshot of about half the row, then a hundred small fields) read
+/// through the engine and written by the guest ABI encoder, as a guest's
+/// ctx.range receives them. Reports thread CPU time per page:
+///
+/// ```sh
+/// FLOWER_RANGE_BENCH_CALLS=2000 cargo test --release --lib range_reply_costs -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn range_reply_costs() {
+    struct Encoding;
+    impl Executor for Encoding {
+        fn execute(
+            &self,
+            _: &str,
+            _: &str,
+            args: &Value,
+            host: &mut EngineHost<'_>,
+        ) -> EngineResult<Value> {
+            let reply = host("range", json!([args]))?;
+            let bytes = crate::evaluator::wire::success_reply(&reply).unwrap();
+            Ok(json!(bytes.len()))
+        }
+    }
+    fn thread_cpu() -> f64 {
+        let mut time = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: clock_gettime writes the timespec it is given.
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+        time.tv_sec as f64 + time.tv_nsec as f64 * 1e-9
+    }
+    let mut data = Records::default();
+    let at = 1_790_000_000_000u64;
+    for n in 0..200u64 {
+        let row = json!({
+            "tenant": "a",
+            "score": n,
+            "id": format!("s{n:015}"),
+            "org": "org-2qi5nxyequ5l7t3b",
+            "title": format!("Session {n}: make every range reply cheaper"),
+            "status": if n % 3 == 0 { "working" } else { "idle" },
+            "createdAt": at + n,
+            "updatedAt": at + 1000 * n,
+            "memory": format!("# Memory index {n}\n\n{}", "- `notes.md` — **what a session learned, its numbers and scripts** — with a path .dev/workspace/x.\n".repeat(64)),
+            "skills": (0..8).map(|i| json!({"name": format!("skill-{i}"), "description": "Load when the work matches: steps, checks and the files they need, in a sentence or two of text."})).collect::<Vec<_>>(),
+            "checkpoints": (0..12).map(|i| json!({"at": at + i, "seq": i, "tokens": 123_456 + i, "cost": 0.125 * i as f64, "model": "claude"})).collect::<Vec<_>>(),
+            "lastText": "The page went from three copies to one encoding. ".repeat(16),
+            "tasks": (0..6).map(|i| json!({"text": format!("Task {i}: measure and land"), "status": "done", "note": null})).collect::<Vec<_>>(),
+            "turn": {"started": at, "tools": 12, "model": "claude", "thinking": true, "usage": {"input": 1234, "output": 567}},
+            "labels": ["flower", "cpu"],
+            "assignees": ["d62qtenunf6oifeg"],
+            "unread": 3,
+            "archived": false,
+        });
+        data.insert(source_id("items", &format!("key{n:04}")), row);
+    }
+    install(&mut data, &fixture());
+    let row = data.get(&source_id("items", "key0007")).unwrap();
+    let row_bytes = encoded_len(row);
+    let calls: usize =
+        std::env::var("FLOWER_RANGE_BENCH_CALLS").map_or(500, |calls| calls.parse().unwrap());
+    let page = |offset: usize| {
+        let invocation = json!({"name":"read","args":reference(json!({"prefix":["a"],"gte":offset,"limit":64}))});
+        run(data.clone(), invocation, "query", None, &Encoding)
+            .unwrap()
+            .value
+    };
+    let encoded = page(0);
+    for index in 0..calls / 10 {
+        page(index % 100);
+    }
+    let (cpu, wall) = (thread_cpu(), std::time::Instant::now());
+    for index in 0..calls {
+        page(index % 100);
+    }
+    let cpu = (thread_cpu() - cpu) * 1e6 / calls as f64;
+    let wall = wall.elapsed().as_secs_f64() * 1e6 / calls as f64;
+    println!(
+        "64-row pages of {row_bytes}-byte rows ({encoded} wire bytes): {cpu:.1} µs CPU, {wall:.1} µs wall per page over {calls}"
+    );
+}
