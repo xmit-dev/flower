@@ -14,7 +14,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, watch};
 
-use super::{failure, json_patch, wakes};
+use super::{
+    budget::{Budget, Share, Turn},
+    failure, json_patch, wakes,
+};
 use crate::{
     consensus::{
         Consensus, Progress, Snapshot,
@@ -22,13 +25,18 @@ use crate::{
     },
     evaluator::{DependencyCertificate, HttpMethod},
     service::{
-        ApiError, App, QueryAdmission, QueryEvaluation, QueryResult, Validity, admission,
+        ApiError, App, QueryAdmission, QueryEvaluation, QueryResult, Validity, Work, admission,
         evaluate_query_authorized, unavailable,
     },
 };
 
-#[derive(Default)]
 pub(crate) struct Registry(Arc<RegistryInner>);
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self(Arc::new(RegistryInner::new(Budget::server())))
+    }
+}
 
 struct RegistryInner {
     hubs: Mutex<HashMap<String, Weak<Hub>>>,
@@ -40,10 +48,13 @@ struct RegistryInner {
     everything: watch::Sender<u64>,
     dispatching: OnceLock<()>,
     next_hub: AtomicU64,
+    /// The time write-woken refreshes may take, shared by every registry
+    /// on this server.
+    refreshes: Arc<Budget>,
 }
 
-impl Default for RegistryInner {
-    fn default() -> Self {
+impl RegistryInner {
+    fn new(refreshes: Arc<Budget>) -> Self {
         let bytes = crate::service::tuning::settings()
             .expect("validated watch budget")
             .watch_retained_bytes;
@@ -54,11 +65,10 @@ impl Default for RegistryInner {
             everything: watch::Sender::new(0),
             dispatching: OnceLock::new(),
             next_hub: AtomicU64::new(0),
+            refreshes,
         }
     }
-}
 
-impl RegistryInner {
     fn wakes(&self) -> std::sync::MutexGuard<'_, wakes::Wakes> {
         self.wakes.lock().expect("watch wakes mutex")
     }
@@ -175,10 +185,17 @@ impl Registry {
         self.0.budget.retain(admission::Class::User, bytes)
     }
 
-    /// Bytes open watches hold, and their budget.
+    /// A registry whose write-woken refreshes share `refreshes`.
+    #[cfg(test)]
+    pub(super) fn with_budget(refreshes: Arc<Budget>) -> Self {
+        Self(Arc::new(RegistryInner::new(refreshes)))
+    }
+
+    /// Bytes open watches hold, and their budget; the server's budget of
+    /// write-woken refreshes.
     pub(crate) fn metrics(&self) -> Value {
         let (retained, budget) = self.0.budget.retained();
-        json!({"retainedBytes":retained,"budgetBytes":budget})
+        json!({"retainedBytes":retained,"budgetBytes":budget,"refreshes":self.0.refreshes.metrics()})
     }
 
     /// One watch's own wakes: writes to what its access decision read.
@@ -203,7 +220,11 @@ impl Registry {
             signal: Arc::new(watch::Sender::new(0)),
             registry: Arc::downgrade(&self.0),
             state: tokio::sync::Mutex::new(State::default()),
-            paced: Mutex::new(None),
+            paced: Mutex::new(Pace::default()),
+            revision: AtomicU64::new(0),
+            queue: tokio::sync::Mutex::new(()),
+            refreshes: self.0.refreshes.clone(),
+            share: Share::default(),
             _retained: retained,
         });
         entries.insert(scope.into(), Arc::downgrade(&hub));
@@ -259,9 +280,41 @@ pub(super) struct Hub {
     signal: wakes::Signal,
     registry: Weak<RegistryInner>,
     state: tokio::sync::Mutex<State>,
-    /// No refresh for a write starts before this: see `pace`.
-    paced: Mutex<Option<tokio::time::Instant>>,
+    /// No refresh for a write starts before this, and what the last one
+    /// took: see `pace`.
+    paced: Mutex<Pace>,
+    /// The revision of its current result.
+    revision: AtomicU64,
+    /// Subscribers woken by writes wait for a turn one at a time.
+    queue: tokio::sync::Mutex<()>,
+    refreshes: Arc<Budget>,
+    share: Share,
     _retained: admission::Input,
+}
+
+#[derive(Default)]
+struct Pace {
+    until: Option<tokio::time::Instant>,
+    cost: Duration,
+}
+
+/// Leave for a write to refresh a hub: its place in the hub's queue, and its
+/// turn of the server's budget unless another subscriber's refresh already
+/// covered the write.
+pub(super) struct Gate<'a> {
+    hub: &'a Hub,
+    _queued: Option<tokio::sync::MutexGuard<'a, ()>>,
+    turn: Option<Turn<'a>>,
+}
+
+impl Gate<'_> {
+    /// Charge what a refresh under this leave took.
+    pub fn spend(&mut self, cost: Duration) {
+        match &mut self.turn {
+            Some(turn) => turn.spend(cost),
+            None => self.hub.charge(cost),
+        }
+    }
 }
 
 /// When a hub whose last refresh started at `started` and took `cost` may
@@ -315,22 +368,66 @@ impl Hub {
         self.signal.subscribe()
     }
 
+    fn paced(&self) -> std::sync::MutexGuard<'_, Pace> {
+        self.paced.lock().expect("watch pace mutex")
+    }
+
     /// The earliest a write may refresh this hub again, if later than now.
     pub fn paced_until(&self) -> Option<tokio::time::Instant> {
-        let until = (*self.paced.lock().expect("watch pace mutex"))?;
+        let until = self.paced().until?;
         (until > tokio::time::Instant::now()).then_some(until)
+    }
+
+    /// Whether its current result reflects every write up to `woken`.
+    pub fn covers(&self, woken: u64) -> bool {
+        self.revision.load(Ordering::Acquire) >= woken
+    }
+
+    /// Wait until a write whose latest revision touching this hub is
+    /// `woken` may refresh it: its own duty (see `pace`), then its
+    /// subscribers' queue, then a turn of the server's budget, which its
+    /// last refresh's cost is expected to take. A subscriber whose write
+    /// another's refresh covered meanwhile goes at once, without a turn.
+    pub async fn gate(&self, woken: u64) -> Gate<'_> {
+        let mut gate = Gate {
+            hub: self,
+            _queued: None,
+            turn: None,
+        };
+        if self.covers(woken) {
+            return gate;
+        }
+        if let Some(until) = self.paced_until() {
+            tokio::time::sleep_until(until).await;
+        }
+        gate._queued = Some(self.queue.lock().await);
+        if !self.covers(woken) {
+            let cost = self.paced().cost;
+            gate.turn = Some(self.refreshes.turn(&self.share, cost).await);
+        }
+        gate
+    }
+
+    /// Charge the server's budget for a write-woken refresh without a turn.
+    pub fn charge(&self, cost: Duration) {
+        self.refreshes.charge(&self.share, cost);
     }
 
     // None means another admitted subscriber advanced past this authorization
     // snapshot. The caller must reacquire and reauthorize, never borrow a newer
-    // result under an older policy decision.
+    // result under an older policy decision. A refresh for writes up to
+    // `woken` may serve a result that already reflects them, though older
+    // than its snapshot, as a subscriber woken before that result would
+    // have. Along with the result comes the CPU time evaluating, diffing and
+    // encoding it took, if this call did.
     pub async fn refresh(
         &self,
         app: &App,
         authorized: Authorized,
         joined: Option<Instant>,
         coalesce: bool,
-    ) -> Result<Option<Arc<Frame>>, ApiError> {
+        woken: Option<u64>,
+    ) -> Result<Option<(Arc<Frame>, Option<Duration>)>, ApiError> {
         let mut state = match self.state.try_lock() {
             Ok(state) => state,
             Err(_) => {
@@ -350,7 +447,8 @@ impl Hub {
                 .map_err(unavailable)?
                 .watch_refresh;
             let fresh_join = joined.is_none_or(|joined| refreshed >= joined);
-            let reusable = current.query.revision == authorized.state.revision
+            let covered = woken.is_some_and(|woken| current.query.revision >= woken);
+            let reusable = (current.query.revision == authorized.state.revision || covered)
                 && match current.query.validity {
                     Validity::Stable => true,
                     // Exact until then, for newly joined subscribers too.
@@ -360,7 +458,7 @@ impl Hub {
                     Validity::Polled => fresh_join && refreshed.elapsed() < refresh,
                 };
             if reusable {
-                return Ok(Some(current.clone()));
+                return Ok(Some((current.clone(), None)));
             }
         }
         let started = Instant::now();
@@ -380,13 +478,14 @@ impl Hub {
             authorized.principal,
         )
         .await?;
-        let QueryEvaluation::Ready(next, permit) = result else {
+        let QueryEvaluation::Ready(next, permit, evaluated) = result else {
             return Ok(None);
         };
         let previous = state.current.clone();
-        let mut frame = tokio::task::spawn_blocking(move || {
+        let (mut frame, prepared) = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            prepare_sync(previous.as_deref(), next)
+            let work = Work::start();
+            prepare_sync(previous.as_deref(), next).map(|frame| (frame, work.elapsed()))
         })
         .await
         .map_err(|error| failure("WORKER_FAILED", &error.to_string()))??;
@@ -405,19 +504,26 @@ impl Hub {
         }
         state.current = Some(frame.clone());
         state.started = Some(started);
+        self.revision.store(frame.query.revision, Ordering::Release);
         let duty = super::super::tuning::settings()
             .map_err(unavailable)?
             .watch_duty_percent;
-        *self.paced.lock().expect("watch pace mutex") = pace(
-            tokio::time::Instant::from_std(started),
-            started.elapsed(),
-            duty,
-        );
+        // Its own duty counts the time it kept a worker, the server's budget
+        // the CPU its evaluation, diff and encoding took.
+        let cost = evaluated.saturating_add(prepared);
+        *self.paced() = Pace {
+            until: pace(
+                tokio::time::Instant::from_std(started),
+                started.elapsed(),
+                duty,
+            ),
+            cost,
+        };
         #[cfg(test)]
         {
             state.evaluations += 1;
         }
-        Ok(Some(frame))
+        Ok(Some((frame, Some(cost))))
     }
 
     #[cfg(test)]

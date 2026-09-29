@@ -1,4 +1,5 @@
 //! Ephemeral watches with shared authorized producers and bounded subscribers.
+mod budget;
 pub(super) mod hubs;
 mod json_patch;
 #[cfg(test)]
@@ -86,6 +87,9 @@ struct Refreshed {
     wake: Option<tokio::time::Instant>,
     /// The revision access was decided at.
     access: u64,
+    /// The CPU time evaluating, diffing and encoding it took, if this
+    /// refresh did.
+    cost: Option<Duration>,
 }
 
 /// Idle watches have no timer. Commits that write what a result or its
@@ -121,6 +125,19 @@ async fn refresh(
     joined: Option<Instant>,
     subscriber: Option<&Subscriber>,
 ) -> Result<Refreshed, ApiError> {
+    refresh_after(app, input, expected_scope, joined, subscriber, None).await
+}
+
+/// `refresh`, for writes up to `woken` when a write woke it: a result that
+/// already reflects them serves (see `Hub::refresh`).
+async fn refresh_after(
+    app: &App,
+    input: &Value,
+    expected_scope: Option<&str>,
+    joined: Option<Instant>,
+    subscriber: Option<&Subscriber>,
+    woken: Option<u64>,
+) -> Result<Refreshed, ApiError> {
     let mut coalesce = true;
     loop {
         // Every subscriber independently enters admission before capturing a
@@ -151,13 +168,17 @@ async fn refresh(
             ));
         }
         let hub = app.watch_hubs.get(app, &scope)?;
-        if let Some(frame) = hub.refresh(app, authorized, joined, coalesce).await? {
+        let refreshed = hub
+            .refresh(app, authorized, joined, coalesce, woken)
+            .await?;
+        if let Some((frame, evaluated)) = refreshed {
             let wake = wake_at(app, frame.query.validity.and(access), committed)?;
             return Ok(Refreshed {
                 hub,
                 frame,
                 wake,
                 access: decided,
+                cost: evaluated,
             });
         }
         coalesce = false;
@@ -185,6 +206,7 @@ pub(super) async fn watch(
         frame,
         wake,
         access,
+        ..
     } = tokio::time::timeout(
         query_timeout(&app)?,
         refresh(&app, &input, None, Some(Instant::now()), Some(&subscriber)),
@@ -297,6 +319,27 @@ async fn lapsed(lapse: &mut Option<notifications::Receiver<()>>) {
     }
 }
 
+/// Whatever wakes a watch besides a write: Raft, its access decision, its
+/// declared time, or its partition's lapse.
+async fn unpaced(
+    everything: &mut notifications::Receiver<u64>,
+    access_signal: &mut notifications::Receiver<u64>,
+    access: u64,
+    wake: Option<tokio::time::Instant>,
+    lapse: &mut Option<notifications::Receiver<()>>,
+) -> Result<(), ApiError> {
+    tokio::select! {
+        changed = everything.changed() => {
+            changed.map_err(|_| failure("UNAVAILABLE", "Raft notifications stopped"))
+        }
+        woken = access_signal.wait_for(|woken| *woken > access) => {
+            woken.map(|_| ()).map_err(|_| failure("UNAVAILABLE", "watch notifications stopped"))
+        }
+        _ = sleep_until(wake) => Ok(()),
+        _ = lapsed(lapse) => Ok(()),
+    }
+}
+
 async fn sleep_until(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -385,25 +428,47 @@ async fn produce(
         // A write to what the result read refreshes it no more often than its
         // cost allows (FLOWER_WATCH_DUTY_PERCENT of the time), so that a result
         // that reads much, watched while what it read keeps changing, does not
-        // keep a worker busy; later writes join the refresh that follows.
-        // Access, code and time changes refresh at once.
-        if written && let Some(until) = hub.paced_until() {
+        // keep a worker busy, and only on its turn of the server's budget
+        // (FLOWER_WATCH_BUDGET_PERCENT of a core), so that many such results
+        // do not either; later writes join the refresh that follows. Access,
+        // code, Raft and time changes refresh at once, also while waiting.
+        let mut woken = written.then(|| *signal.borrow());
+        let mut gate = None;
+        if let Some(latest) = woken {
             tokio::select! {
                 biased;
                 _ = sender.closed() => return Ok(()),
-                _ = tokio::time::sleep_until(until) => {}
+                interrupted = unpaced(&mut everything, &mut access_signal, access, wake, &mut lapse) => {
+                    interrupted?;
+                    woken = None;
+                }
+                opened = hub.gate(latest) => gate = Some(opened),
             }
         }
         everything.borrow_and_update();
         ensure_running(&progress.borrow())?;
         let mut capacity = None;
+        // Only the refresh right after the gate may serve a result that
+        // covers the write: after backpressure, the latest state is due.
+        let mut covering = woken;
         loop {
             let refreshed = tokio::select! {
                 biased;
                 _ = sender.closed() => return Ok(()),
-                result = tokio::time::timeout(query_timeout(&app)?, refresh(&app, &input, Some(&hub.scope), None, Some(&subscriber))) =>
+                result = tokio::time::timeout(query_timeout(&app)?, refresh_after(&app, &input, Some(&hub.scope), None, Some(&subscriber), covering.take())) =>
                     result.map_err(|_| failure("UNAVAILABLE", "watch query timed out"))??,
             };
+            // What writes cost counts against the budget, and the hub's other
+            // subscribers go once its result covers their writes.
+            if woken.is_some()
+                && let Some(cost) = refreshed.cost
+            {
+                match gate.as_mut() {
+                    Some(gate) => gate.spend(cost),
+                    None => hub.charge(cost),
+                }
+            }
+            drop(gate.take());
             wake = refreshed.wake;
             access = refreshed.access;
             let frame = refreshed.frame;

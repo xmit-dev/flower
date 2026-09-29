@@ -45,6 +45,9 @@ pub(super) struct Settings {
     pub watch_keepalive: Duration,
     pub watch_send_timeout: Duration,
     pub watch_duty_percent: usize,
+    /// Share of one core every write-woken watch refresh together may take;
+    /// 0 means no budget.
+    pub watch_budget_percent: usize,
 }
 
 fn nonnegative(name: &str, value: Option<String>, default: usize) -> Result<usize, String> {
@@ -172,6 +175,7 @@ pub(super) fn settings() -> Result<&'static Settings> {
                 watch_keepalive: duration("FLOWER_WATCH_KEEPALIVE_MS", 15_000)?,
                 watch_send_timeout: duration("FLOWER_WATCH_SEND_TIMEOUT_MS", 5000)?,
                 watch_duty_percent: option("FLOWER_WATCH_DUTY_PERCENT", 10)?,
+                watch_budget_percent: bytes("FLOWER_WATCH_BUDGET_PERCENT", 50)?,
             })
         })
         .as_ref()

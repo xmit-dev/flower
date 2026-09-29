@@ -730,9 +730,55 @@ impl Validity {
     }
 }
 
+/// An evaluated query, its admission, and what evaluating it took (see
+/// `Work`; nothing for a cached result).
 enum QueryEvaluation {
-    Ready(QueryResult, admission::Permit),
+    Ready(QueryResult, admission::Permit, Duration),
     Retry,
+}
+
+/// The CPU time this thread spends from `start` on, or the time that
+/// passes where threads have no CPU clock.
+pub(super) struct Work {
+    cpu: Option<Duration>,
+    wall: Instant,
+}
+
+impl Work {
+    pub fn start() -> Self {
+        Self {
+            cpu: thread_cpu(),
+            wall: Instant::now(),
+        }
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        match (self.cpu, thread_cpu()) {
+            (Some(start), Some(now)) => now.saturating_sub(start),
+            _ => self.wall.elapsed(),
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn thread_cpu() -> Option<Duration> {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime writes one timespec through a valid pointer.
+    let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    (status == 0).then(|| {
+        Duration::new(
+            u64::try_from(time.tv_sec).unwrap_or(0),
+            u32::try_from(time.tv_nsec).unwrap_or(0),
+        )
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn thread_cpu() -> Option<Duration> {
+    None
 }
 
 struct QueryAdmission {
@@ -777,7 +823,7 @@ async fn evaluate_query(
         )
         .await?
         {
-            QueryEvaluation::Ready(result, _permit) => return Ok(result),
+            QueryEvaluation::Ready(result, _permit, _) => return Ok(result),
             QueryEvaluation::Retry => {
                 // Do not chase an indefinitely moving snapshot under writes.
                 // After one wait, a cache miss executes the newly admitted read.
@@ -817,6 +863,7 @@ async fn evaluate_query_authorized(
                 certificate: Some(certificate),
             },
             permit,
+            Duration::ZERO,
         ));
     }
     // Identical concurrent requests share a first evaluation, then recheck the
@@ -861,6 +908,7 @@ async fn evaluate_query_authorized(
                 certificate: Some(certificate),
             },
             permit,
+            Duration::ZERO,
         ));
     }
     if flight.as_ref().is_some_and(|pending| !**pending) {
@@ -886,7 +934,9 @@ async fn evaluate_query_authorized(
                 );
             }
             let _permit = held_permit;
-            evaluator::invoke_as(state.data, invocation, "query", now, principal)
+            let work = Work::start();
+            let result = evaluator::invoke_as(state.data, invocation, "query", now, principal);
+            result.map(|result| (result, work.elapsed()))
         })
         .await
         .map_err(|e| {
@@ -902,7 +952,7 @@ async fn evaluate_query_authorized(
     if let Some(pending) = flight.as_mut() {
         **pending = false;
     }
-    let result = result?;
+    let (result, work) = result?;
     let validity = Validity::of(&result);
     // A result that read the clock keeps its certificate for watches, which
     // also wake when it declared time changes it; only others are reusable.
@@ -923,6 +973,7 @@ async fn evaluate_query_authorized(
             certificate,
         },
         permit,
+        work,
     ))
 }
 

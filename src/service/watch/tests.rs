@@ -337,6 +337,7 @@ async fn commits_between_subscription_and_producer_start_are_not_lost() {
         frame,
         wake,
         access,
+        ..
     } = refresh(&app, &input, None, Some(Instant::now()), Some(&subscriber))
         .await
         .unwrap();
@@ -388,6 +389,7 @@ async fn queued_producer(
         frame,
         wake,
         access,
+        ..
     } = refresh(app, &input, None, Some(Instant::now()), Some(&subscriber))
         .await
         .unwrap();
@@ -1174,5 +1176,171 @@ async fn draining_ends_open_watches_with_a_reconnectable_error() {
             .unwrap()
             .contains("event: error")
     );
+    app.consensus.shutdown().await.unwrap();
+}
+
+/// An application whose write-woken refreshes share a budget of `percent`
+/// of one core, apart from every other test's.
+async fn budgeted(percent: usize) -> (tempfile::TempDir, Arc<App>) {
+    crate::service::tests::application_with_watches(
+        bundle(),
+        hubs::Registry::with_budget(super::budget::Budget::new(percent)),
+    )
+    .await
+}
+
+async fn next_event(
+    body: &mut (impl futures_util::Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    within: Duration,
+) -> Option<String> {
+    let event = tokio::time::timeout(within, body.next()).await.ok()?;
+    Some(String::from_utf8(event.unwrap().unwrap().to_vec()).unwrap())
+}
+
+#[tokio::test]
+async fn a_write_waits_for_its_hub_to_leave_the_budget_while_first_results_do_not() {
+    let (_directory, app) = budgeted(1).await;
+    let input = json!({"name":"read"});
+    let begun = Instant::now();
+    let response = watch(State(app.clone()), Json(input.clone()))
+        .await
+        .unwrap();
+    let mut body = response.into_body().into_data_stream();
+    let first = next_event(&mut body, Duration::from_secs(2)).await.unwrap();
+    assert_eq!(payload(&first)["value"]["value"], 6);
+    let Refreshed { hub, .. } = refresh(&app, &input, None, None, None).await.unwrap();
+    // As if its last write-woken refresh took 40 ms: at 1% of a core, alone,
+    // it stays in service for 4 s.
+    hub.charge(Duration::from_millis(40));
+    // A new subscriber of another hub still gets its first result at once.
+    let other = watch(State(app.clone()), Json(json!({"name":"clock"})))
+        .await
+        .unwrap();
+    let mut other = other.into_body().into_data_stream();
+    assert!(
+        next_event(&mut other, Duration::from_secs(2))
+            .await
+            .is_some()
+    );
+    assert!(
+        begun.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        begun.elapsed()
+    );
+    drop(other);
+    write_value(&app, 7).await;
+    let written = Instant::now();
+    assert!(
+        next_event(&mut body, Duration::from_millis(1_000))
+            .await
+            .is_none(),
+        "the write waits for the budget"
+    );
+    let update = next_event(&mut body, Duration::from_secs(8)).await.unwrap();
+    assert_eq!(
+        payload(&update)["patch"],
+        json!([{"op":"replace","path":"/value","value":7}])
+    );
+    let waited = written.elapsed();
+    assert!(waited >= Duration::from_millis(1_000), "{waited:?}");
+    assert_eq!(hub.evaluations().await, 2);
+    let refreshes = app.watch_hubs.metrics()["refreshes"].clone();
+    assert_eq!(refreshes["budgetPercent"], 1);
+    assert!(refreshes["turns"].as_u64() >= Some(1), "{refreshes}");
+    drop(body);
+    app.consensus.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_declared_time_refreshes_at_once_while_a_write_waits_for_the_budget() {
+    let (_directory, app) = budgeted(1).await;
+    let now = app
+        .clock
+        .sample(&app.consensus.read_query().await.unwrap())
+        .unwrap();
+    let _ = super::super::commit_method(
+        app.clone(),
+        json!({"name":"schedule","args":now + 600,"requestId":"deadline"}),
+        false,
+    )
+    .await
+    .unwrap();
+    let input = json!({"name":"due"});
+    let response = watch(State(app.clone()), Json(input.clone()))
+        .await
+        .unwrap();
+    let mut body = response.into_body().into_data_stream();
+    let first = next_event(&mut body, Duration::from_secs(2)).await.unwrap();
+    assert_eq!(payload(&first)["value"], false);
+    let Refreshed { hub, .. } = refresh(&app, &input, None, None, None).await.unwrap();
+    // 100 ms at 1% of a core: a write would wait 10 s for the budget.
+    hub.charge(Duration::from_millis(100));
+    let _ = super::super::commit_method(
+        app.clone(),
+        json!({"name":"schedule","args":now + 1_200,"requestId":"later"}),
+        false,
+    )
+    .await
+    .unwrap();
+    // The declared time of the result it holds (600 ms) refreshes it at once,
+    // which reads the new deadline, and that one refreshes it at 1.2 s.
+    let due = next_event(&mut body, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(payload(&due)["value"], true);
+    let at = app
+        .clock
+        .sample(&app.consensus.read_query().await.unwrap())
+        .unwrap();
+    assert!(at >= now + 1_200, "due at {} ms", at - now);
+    assert!(at < now + 5_000, "due at {} ms", at - now);
+    drop(body);
+    app.consensus.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn subscribers_of_one_hub_share_one_turn_and_one_evaluation_per_write() {
+    let (_directory, app) = budgeted(50).await;
+    let input = json!({"name":"read"});
+    let mut bodies = Vec::new();
+    for _ in 0..3 {
+        let response = watch(State(app.clone()), Json(input.clone()))
+            .await
+            .unwrap();
+        let mut body = response.into_body().into_data_stream();
+        next_event(&mut body, Duration::from_secs(2)).await.unwrap();
+        bodies.push(body);
+    }
+    let Refreshed { hub, .. } = refresh(&app, &input, None, None, None).await.unwrap();
+    assert_eq!(hub.evaluations().await, 1);
+    // Unrelated commits keep moving the revision, so that a subscriber that
+    // came second would find the first one's result older than its own
+    // snapshot.
+    let busy = tokio::spawn({
+        let app = app.clone();
+        async move {
+            for deadline in 0.. {
+                let committed = super::super::commit_method(
+                    app.clone(),
+                    json!({"name":"schedule","args":deadline,"requestId":format!("busy-{deadline}")}),
+                    false,
+                )
+                .await;
+                if committed.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    write_value(&app, 7).await;
+    for body in &mut bodies {
+        let update = next_event(body, Duration::from_secs(5)).await.unwrap();
+        assert_eq!(
+            payload(&update)["patch"],
+            json!([{"op":"replace","path":"/value","value":7}])
+        );
+    }
+    assert_eq!(hub.evaluations().await, 2, "one evaluation for the write");
+    busy.abort();
+    drop(bodies);
     app.consensus.shutdown().await.unwrap();
 }

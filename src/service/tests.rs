@@ -84,18 +84,28 @@ async fn application_with_admission(
     javascript: String,
     pool: Option<Arc<admission::Pool>>,
 ) -> (TempDir, Arc<App>) {
-    build_application(javascript, pool, false).await
+    build_application(javascript, pool, false, None).await
+}
+
+/// An application whose watches use `watch_hubs`, such as one with a budget
+/// of write-woken refreshes of its own.
+pub(super) async fn application_with_watches(
+    javascript: String,
+    watch_hubs: crate::service::watch::hubs::Registry,
+) -> (TempDir, Arc<App>) {
+    build_application(javascript, None, false, Some(watch_hubs)).await
 }
 
 /// The production writer actor, which schedules maintenance on its own.
 pub(super) async fn application_with_maintenance(javascript: String) -> (TempDir, Arc<App>) {
-    build_application(javascript, None, true).await
+    build_application(javascript, None, true, None).await
 }
 
 async fn build_application(
     javascript: String,
     pool: Option<Arc<admission::Pool>>,
     automatic_maintenance: bool,
+    watch_hubs: Option<crate::service::watch::hubs::Registry>,
 ) -> (TempDir, Arc<App>) {
     let directory = tempfile::tempdir().unwrap();
     let address = "127.0.0.1:7101".to_owned();
@@ -157,7 +167,7 @@ async fn build_application(
         admission: pool.unwrap_or_else(|| crate::service::admission::Pool::configured().unwrap()),
         query_cache: query_cache::QueryCache::default(),
         authorizations: crate::service::authorization::memo::Memo::default(),
-        watch_hubs: crate::service::watch::hubs::Registry::default(),
+        watch_hubs: watch_hubs.unwrap_or_default(),
         admin_token: "test-only-secret".into(),
         clock: clock::Clock::new(),
         cross_group: transactions::Runtime::new().unwrap(),
