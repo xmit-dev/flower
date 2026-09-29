@@ -23,6 +23,8 @@ struct Instruments {
     speculative: Counter<u64>,
     serial_jobs: Counter<u64>,
     serial_requests: Counter<u64>,
+    maintenance_runs: Counter<u64>,
+    maintenance_wakes: Counter<u64>,
 }
 
 fn instruments() -> Option<&'static Instruments> {
@@ -60,6 +62,10 @@ fn instruments() -> Option<&'static Instruments> {
                 .with_description("Serial blocking-worker batches").build(),
             serial_requests: meter.u64_counter("flower.writer.serial.requests")
                 .with_description("Requests prepared inside serial blocking-worker batches").build(),
+            maintenance_runs: meter.u64_counter("flower.writer.maintenance.runs")
+                .with_description("Maintenance turns by outcome: idle, committed, failed, follower (nothing run), or skipped (a writer window yielded with nothing due)").build(),
+            maintenance_wakes: meter.u64_counter("flower.writer.maintenance.wakes")
+                .with_description("Writes and leadership changes of a database seen by its maintenance: write (touched what the last run read), unrelated (left its timer alone), leadership").build(),
         }
     }))
 }
@@ -90,6 +96,22 @@ pub(super) fn status(span: &tracing::Span, outcome: &'static str) {
 // tracing's unsigned values from falling back to debug strings in the bridge.
 pub(super) fn count(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+pub(super) fn maintenance_run(outcome: &'static str) {
+    if let Some(metrics) = instruments() {
+        metrics
+            .maintenance_runs
+            .add(1, &[KeyValue::new("outcome", outcome)]);
+    }
+}
+
+pub(super) fn maintenance_wake(reason: &'static str) {
+    if let Some(metrics) = instruments() {
+        metrics
+            .maintenance_wakes
+            .add(1, &[KeyValue::new("reason", reason)]);
+    }
 }
 
 pub(super) fn stage(stage: &'static str, duration: Duration, execution: &'static str) {

@@ -58,6 +58,7 @@ export default app;</code></pre></div>
 <ul>
 <li>Each maintenance run picks the task whose due time is earliest and runs it in its own commit.</li>
 <li>The leader runs maintenance when a task is due, and keeps going while work is due, for up to 50 ms at a time. It starts at most one run every 250 ms. Both are <a href="../operate/capacity.html#budgets">operator settings</a>.</li>
+<li>A write that changes what some <code>due</code> read, such as a new timer or a lease, wakes maintenance early to find the new time; writes to anything else don't.</li>
 <li>If a run fails and the task has no <code>onError</code>, that task alone backs off: 1 s, doubling up to 60 s. Other tasks keep running, and the next success clears the backoff.</li>
 <li><code>error.code</code> is the real failure: your <code>fail()</code> code, <code>COMPUTE_ERROR</code> for a plain throw, or <code>EVALUATION_BUDGET</code>.</li>
 <li>A run can be evaluated more than once before it commits. Send external side effects through a <a href="leases.html">queue</a>.</li>

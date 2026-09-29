@@ -250,6 +250,173 @@ async fn maintenance_sleeps_until_the_declared_due_time() {
     app.consensus.shutdown().await.unwrap();
 }
 
+/// Commit `value` to `records/key` directly, as another writer would, in
+/// turn with maintenance (its commit would otherwise fail on the revision).
+async fn put_record(app: &App, key: &str, value: Value) {
+    let _writer = app.writer.lock().await;
+    let state = app.consensus.read().await.unwrap();
+    app.consensus
+        .commit(Commit {
+            internal: true,
+            request_id: format!("put-{key}-{}", state.revision),
+            fingerprint: String::new(),
+            expected_revision: state.revision,
+            puts: BTreeMap::from([(format!("source:[\"records\",\"{key}\"]"), value)]),
+            deletes: vec![],
+            result: Value::Null,
+        })
+        .await
+        .unwrap();
+}
+
+fn record(state: &Snapshot, key: &str) -> Option<Value> {
+    state
+        .data
+        .get(&format!("source:[\"records\",\"{key}\"]"))
+        .cloned()
+}
+
+/// Wait until `records/key` holds `value`, or panic after `within`.
+async fn until_record(app: &App, key: &str, value: Value, within: Duration) {
+    let found = tokio::time::timeout(within, async {
+        loop {
+            let state = app.consensus.read().await.unwrap();
+            if record(&state, key).as_ref() == Some(&value) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    if found.is_err() {
+        let state = app.consensus.read().await.unwrap();
+        panic!("records/{key} is {:?}, not {value}", record(&state, key));
+    }
+}
+
+#[tokio::test]
+async fn maintenance_runs_again_only_after_writes_to_what_it_read() {
+    // Every run counts itself (so each commits), reads records.watched and
+    // says nothing is scheduled: only a write to what it read may change that.
+    let javascript = bundle(
+        r#"
+        ctx.get(records,'watched');
+        ctx.set(records,'runs',(ctx.get(records,'runs') ?? 0) + 1);
+        return {$flower:{next:null}};
+        "#,
+        None,
+    );
+    let (_directory, app) = application_with_maintenance(javascript).await;
+    until_record(&app, "runs", json!(1), Duration::from_secs(10)).await;
+    // Writes of other records, more than a maintenance interval apart, used
+    // to run it again every time.
+    for count in 0..5 {
+        put_record(&app, "unrelated", json!(count)).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let state = app.consensus.read().await.unwrap();
+    assert_eq!(
+        record(&state, "runs"),
+        Some(json!(1)),
+        "ran for unrelated writes"
+    );
+    let written = Instant::now();
+    put_record(&app, "watched", json!(true)).await;
+    until_record(&app, "runs", json!(2), Duration::from_secs(3)).await;
+    assert!(
+        written.elapsed() < Duration::from_millis(2_000),
+        "{:?}",
+        written.elapsed()
+    );
+    // Its own commit is not a reason to run again.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let state = app.consensus.read().await.unwrap();
+    assert_eq!(record(&state, "runs"), Some(json!(2)));
+    app.consensus.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn maintenance_wakes_on_time_for_a_write_that_moves_its_task_earlier() {
+    let javascript = bundle(
+        r#"
+        const now=ctx.now(), due=ctx.get(records,'due');
+        if(due===null || ctx.get(records,'ran')!==null) return {$flower:{next:null}};
+        if(ctx.get(records,'seen')!==due) ctx.set(records,'seen',due);
+        if(now<due) return {$flower:{next:due}};
+        ctx.set(records,'ran',now);
+        return {$flower:{next:null}};
+        "#,
+        None,
+    );
+    let (_directory, app) = application_with_maintenance(javascript).await;
+    let state = app.consensus.read().await.unwrap();
+    let now = app.clock.sample(&state).unwrap();
+    // Due in a minute, then moved to 600 ms from now by a later write, while
+    // unrelated writes keep coming. A run has seen the first time (and
+    // prepared the bundle) before the second is written.
+    put_record(&app, "due", json!(now + 60_000)).await;
+    until_record(&app, "seen", json!(now + 60_000), Duration::from_secs(10)).await;
+    let state = app.consensus.read().await.unwrap();
+    let due = app.clock.sample(&state).unwrap() + 600;
+    put_record(&app, "due", json!(due)).await;
+    let noise = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            for count in 0.. {
+                put_record(&app, "unrelated", json!(count)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+    };
+    let ran = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let state = app.consensus.read().await.unwrap();
+            if let Some(ran) = record(&state, "ran") {
+                return ran.as_u64().unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    noise.abort();
+    assert!(ran >= due, "ran at {ran}, due {due}");
+    // At its time, not a minute later (a loaded test host can delay it some).
+    assert!(ran < due + 1_000, "ran {} ms late", ran - due);
+    app.consensus.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn maintenance_without_a_hint_is_still_polled() {
+    let javascript = bundle(
+        "ctx.set(records,'runs',(ctx.get(records,'runs') ?? 0) + 1); return null;",
+        None,
+    );
+    let (_directory, app) = application_with_maintenance(javascript).await;
+    until_record(&app, "runs", json!(1), Duration::from_secs(10)).await;
+    // No write at all: polled every FLOWER_MAINTENANCE_INTERVAL_MS (250 ms).
+    until_record(&app, "runs", json!(4), Duration::from_secs(3)).await;
+    app.consensus.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn maintenance_runs_after_any_write_while_a_stored_cell_reads_the_clock() {
+    // A clock reader could change with time alone, which no read set covers.
+    let javascript = bundle(
+        r#"
+        ctx.materialize(transient);
+        ctx.set(records,'runs',(ctx.get(records,'runs') ?? 0) + 1);
+        return {$flower:{next:null}};
+        "#,
+        None,
+    );
+    let (_directory, app) = application_with_maintenance(javascript).await;
+    until_record(&app, "runs", json!(1), Duration::from_secs(10)).await;
+    put_record(&app, "unrelated", json!(1)).await;
+    until_record(&app, "runs", json!(2), Duration::from_secs(3)).await;
+    app.consensus.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn maintenance_failure_rolls_back_sources_previews_and_roots_before_recovery() {
     let javascript = bundle(

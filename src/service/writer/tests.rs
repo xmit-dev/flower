@@ -222,6 +222,7 @@ async fn early_drain_runs_maintenance_before_saturated_queues_without_a_timer_wa
     // Exercise the production actor's selection with maintenance scheduled a
     // minute out. Early drains must not rely on another poll or a clock tick.
     let mut progress = None;
+    let mut changes = None;
     let later = Some(Instant::now() + Duration::from_secs(60));
     for _ in 0..3 {
         assert!(matches!(
@@ -229,6 +230,7 @@ async fn early_drain_runs_maintenance_before_saturated_queues_without_a_timer_wa
                 &mut receiver,
                 &mut deferred,
                 &mut progress,
+                &mut changes,
                 later,
                 true,
                 true
@@ -250,6 +252,7 @@ async fn early_drain_runs_maintenance_before_saturated_queues_without_a_timer_wa
             &mut receiver,
             &mut deferred,
             &mut progress,
+            &mut changes,
             later,
             due,
             enabled,
@@ -265,6 +268,7 @@ async fn early_drain_runs_maintenance_before_saturated_queues_without_a_timer_wa
             &mut receiver,
             &mut deferred,
             &mut progress,
+            &mut changes,
             later,
             false,
             true

@@ -221,6 +221,10 @@ impl MutationCertificate {
     pub fn allocation_cost(&self) -> usize {
         self.reads.allocation_cost().saturating_add(64)
     }
+    /// What the mutation read, as `touched` names writes.
+    pub fn observations(&self) -> impl Iterator<Item = Observation<'_>> {
+        self.reads.observations()
+    }
     #[cfg(test)]
     pub(crate) fn observed(&self) -> Vec<&str> {
         self.reads.observed()

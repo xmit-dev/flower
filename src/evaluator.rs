@@ -409,6 +409,26 @@ pub(crate) fn invoke_speculative_as(
     )
 }
 
+/// The application's maintenance handler, as the system. Its mutation
+/// certificate records what it read (there is none while a staged deployment
+/// maintains its graph, or when tracking would pass the memory budget), so the
+/// writer can leave it be until a write touches that.
+pub(crate) fn invoke_maintenance_at(
+    data: Records,
+    mut invocation: Value,
+    now: u64,
+) -> Result<Evaluation> {
+    validate_invocation(&invocation, "mutation")?;
+    invocation["$speculate"] = Value::Bool(true);
+    evaluate_inner(
+        data,
+        invocation,
+        "mutation",
+        config::settings()?.evaluation_timeout,
+        Some(now),
+    )
+}
+
 /// Operator-only policy update. The encrypted catalog and all affected
 /// materialized values form one ordinary revision-checked Raft commit.
 pub fn update_keys_at(data: impl Into<Records>, catalog: Value, now: u64) -> Result<Evaluation> {

@@ -397,7 +397,7 @@ impl ReactiveIndex {
         }
     }
 
-    pub(super) fn cacheable(&self) -> bool {
+    pub(crate) fn cacheable(&self) -> bool {
         self.clock_readers == 0
     }
 

@@ -1011,11 +1011,13 @@ impl NextRun {
     }
 }
 
-/// What a maintenance run found, and whether it committed a group.
+/// What a maintenance run found, whether it committed a group, and which
+/// writes can make its hint stale.
 #[derive(Debug)]
 pub(super) struct Maintained {
     pub next: NextRun,
     pub committed: bool,
+    pub interest: writer::Interest,
 }
 
 async fn maintain(app: &Arc<App>) -> anyhow::Result<Maintained> {
@@ -1029,13 +1031,14 @@ async fn maintain(app: &Arc<App>) -> anyhow::Result<Maintained> {
     let mut bytes = 0;
     let mut failure = None;
     let mut next = NextRun::Unknown;
+    // What the evaluation that gave `next` read, when that is known.
+    let mut reads = None;
     // Each callback has its own rollback boundary and logical revision. Flush
     // their successful patches together, keeping earlier work if a later
     // callback fails. Bound the burst so customer methods make progress too.
     loop {
         match prepare_maintenance(app, &state, &admission).await {
-            Ok((Some((command, again)), hint)) => {
-                next = hint;
+            Ok((Some((command, again)), hint, certificate)) => {
                 let size = serde_json::to_vec(&command)?.len();
                 if !app
                     .consensus
@@ -1047,8 +1050,13 @@ async fn maintain(app: &Arc<App>) -> anyhow::Result<Maintained> {
                             app.consensus.limits().transaction_max_bytes,
                         ));
                     }
+                    // Its work is left undone, so still due.
+                    next = NextRun::Now;
+                    reads = None;
                     break;
                 }
+                next = hint;
+                reads = certificate;
                 bytes += size;
                 writer::stage(&mut state, &command)
                     .map_err(|error| anyhow::anyhow!(error.message))?;
@@ -1057,8 +1065,9 @@ async fn maintain(app: &Arc<App>) -> anyhow::Result<Maintained> {
                     break;
                 }
             }
-            Ok((None, hint)) => {
+            Ok((None, hint, certificate)) => {
                 next = hint;
+                reads = certificate;
                 break;
             }
             Err(error) => {
@@ -1074,7 +1083,29 @@ async fn maintain(app: &Arc<App>) -> anyhow::Result<Maintained> {
     if let Some(error) = failure {
         return Err(error);
     }
-    Ok(Maintained { next, committed })
+    // The hint reflects every write up to the staged revision, its own
+    // commit's included. A timer or idleness it declares then holds until a
+    // write to what it read, unless a stored cell reads the clock now (the
+    // run may have materialized one): time alone could change that cell in a
+    // later run's preview. More work, or no hint, is run or polled anyway.
+    let interest = match (next, &reads) {
+        (NextRun::Idle | NextRun::At(_), Some(reads)) if state.data.reactive().cacheable() => {
+            writer::Interest::reads(state.revision, reads)
+        }
+        _ => writer::Interest::any(state.revision),
+    };
+    tracing::debug!(
+        revision = state.revision,
+        committed,
+        ?next,
+        observed = ?interest.observed(),
+        "maintenance ran"
+    );
+    Ok(Maintained {
+        next,
+        committed,
+        interest,
+    })
 }
 
 #[cfg(test)]
@@ -1083,7 +1114,7 @@ async fn maintain_one(app: &Arc<App>) -> anyhow::Result<bool> {
         .await
         .map_err(|error| anyhow::anyhow!(error.message))?;
     let state = app.consensus.read_for(None).await?;
-    let (Some((command, again)), _) = prepare_maintenance(app, &state, &admission).await? else {
+    let (Some((command, again)), _, _) = prepare_maintenance(app, &state, &admission).await? else {
         return Ok(false);
     };
     app.consensus.commit(command).await?;
@@ -1094,17 +1125,23 @@ async fn prepare_maintenance(
     app: &Arc<App>,
     state: &Snapshot,
     admission: &admission::Permit,
-) -> anyhow::Result<(Option<(Commit, bool)>, NextRun)> {
+) -> anyhow::Result<(
+    Option<(Commit, bool)>,
+    NextRun,
+    Option<evaluator::MutationCertificate>,
+)> {
     if transactions::ensure_unlocked(state).is_err() {
         // The lock's release is a commit, which schedules maintenance again.
-        return Ok((None, NextRun::Idle));
+        return Ok((None, NextRun::Idle, None));
     }
     let Some(entry) = state
         .data
         .get("maintenanceMethod")
         .filter(|value| !value.is_null())
     else {
-        return Ok((None, NextRun::Idle));
+        // A deployment registers a handler; its registry key is a write
+        // that concerns every reader.
+        return Ok((None, NextRun::Idle, None));
     };
     let method: MaintenanceMethod = serde_json::from_value(entry.clone())?;
     anyhow::ensure!(
@@ -1118,13 +1155,14 @@ async fn prepare_maintenance(
     let permit = app.evaluations.clone().acquire_owned().await?;
     let now = app.clock.sample(state)?;
     let request_id = "__flower.maintenance".to_owned();
-    let evaluation = match evaluate_maintenance(
+    let mut evaluation = match evaluate_maintenance(
         state,
         &method.name,
         Value::Null,
         now,
         permit,
         admission.clone(),
+        true,
     )
     .await
     {
@@ -1149,15 +1187,30 @@ async fn prepare_maintenance(
                 })),
                 "failedAt": failed_at,
             });
-            evaluate_maintenance(state, &on_error.name, args, now, permit, admission.clone())
-                .await?
+            evaluate_maintenance(
+                state,
+                &on_error.name,
+                args,
+                now,
+                permit,
+                admission.clone(),
+                false,
+            )
+            .await?
         }
     };
     let next = NextRun::of(&evaluation.value, now);
+    // What the run read, which only a write can change, unless a stored cell
+    // reads the clock: a later run's preview could then change it by time
+    // alone, as an idle run with nothing due may.
+    let reads = evaluation
+        .mutation_certificate
+        .take()
+        .filter(|_| state.data.reactive().cacheable());
     // Idle maintenance need not replicate a clock tick. Actual cleanup or a
     // changed reactive outcome commits the sampled clock with its changes.
     if evaluation.puts.keys().all(|key| key == "clock") && evaluation.deletes.is_empty() {
-        return Ok((None, next));
+        return Ok((None, next, reads));
     }
     transactions::ensure_write_capacity(state)
         .map_err(|error| anyhow::anyhow!("{}: {}", error.code, error.message))?;
@@ -1180,6 +1233,7 @@ async fn prepare_maintenance(
             again,
         )),
         next,
+        reads,
     ))
 }
 
@@ -1190,13 +1244,18 @@ async fn evaluate_maintenance(
     now: u64,
     permit: OwnedSemaphorePermit,
     admission: admission::Permit,
+    record_reads: bool,
 ) -> anyhow::Result<evaluator::Evaluation> {
     let data = state.data.clone();
     let invocation = json!({"name":name,"args":args,"requestId":"__flower.maintenance"});
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let _admission = admission;
-        evaluator::invoke_at(data, invocation, "mutation", now)
+        if record_reads {
+            evaluator::invoke_maintenance_at(data, invocation, now)
+        } else {
+            evaluator::invoke_at(data, invocation, "mutation", now)
+        }
     })
     .await?
 }

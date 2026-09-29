@@ -41,7 +41,7 @@ command supplies its own run and group identities.
 | --- | --- |
 | HTTP | Request count through duration histogram counts, active handlers, matched route, method, response status and outcome; body reception and application JSON extraction stages; duration ends when response headers are ready |
 | Queries | Encoded/value cache hits, misses, coalesced waits, admission, authorization, fresh snapshots, blocking worker queue and evaluation |
-| Writer | Submission through response, queue wait and rejection, admission, preparation, serial worker batches, speculation, staging, batch fill/read/commit, batch sizes and bytes, duplicates, errors, deferred work and replication lag |
+| Writer | Submission through response, queue wait and rejection, admission, preparation, serial worker batches, speculation, staging, batch fill/read/commit, batch sizes and bytes, duplicates, errors, deferred work and replication lag; maintenance runs by outcome (`flower.writer.maintenance.runs`) and the writes and leadership changes that woke it or left it asleep (`flower.writer.maintenance.wakes`) |
 | Evaluator | Invocation, bundle preparation, manifest, result validation, coordinator execution/read waits, nested cell execution/load/reset, cell creation/reuse, nesting, memory initialized/reset |
 | Cold bundle preparation | One preparation per exact bundle content, coalesced wait, QuickJS initialization, bytecode compilation, static initialization, snapshot preparation/capture, native compilation |
 | Storage | State lock, I/O queue, blocking pool queue, preparation, transaction begin/write/encoding/commit/publication; entries, commands, changed keys, receipts and bytes |

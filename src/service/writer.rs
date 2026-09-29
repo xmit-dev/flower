@@ -4,6 +4,7 @@
 
 mod batching;
 mod deployment;
+mod interest;
 mod observability;
 mod serial;
 mod shared;
@@ -11,6 +12,7 @@ mod speculation;
 use super::*;
 use crate::consensus::{ApplyResult, Receipt, encoded_json_len};
 use batching::{Controller, Decision};
+pub(super) use interest::Interest;
 use shared::SharedCommit;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -228,8 +230,24 @@ async fn run_actor(
             .expect("validated maintenance cadence")
             .maintenance_interval,
     );
-    // Applied writes and leadership changes can move a task's due time.
-    let mut progress = weak.upgrade().map(|app| app.consensus.progress());
+    // Leadership changes can move a task's due time; so can writes, which
+    // `changes` names key by key, for every state of the Raft group: those
+    // of this database concern it, and only those touching what the last run
+    // read call for another. Subscribed before the first run reads.
+    let (mut progress, mut changes, partition) = match weak.upgrade() {
+        Some(app) => (
+            Some(app.consensus.progress()),
+            automatic_maintenance.then(|| app.consensus.changes()),
+            app.consensus
+                .partition_binding()
+                .map(|binding| binding.partition.clone()),
+        ),
+        None => (None, None, None),
+    };
+    let mut observed = progress
+        .as_mut()
+        .map(|progress| progress.borrow_and_update().clone());
+    let mut interest = Interest::any(0);
     let mut maintenance_due = false;
     loop {
         // There is only one mutation owner. Drain the pipeline before timer
@@ -238,6 +256,7 @@ async fn run_actor(
             &mut receiver,
             &mut deferred,
             &mut progress,
+            &mut changes,
             schedule.next,
             maintenance_due,
             automatic_maintenance,
@@ -246,42 +265,88 @@ async fn run_actor(
         {
             Work::Maintenance => {
                 let Some(app) = weak.upgrade() else { return };
-                // What the run will read. A commit applied while it runs, by
-                // another writer, may move a due time the run never saw.
-                let before = progress
-                    .as_mut()
-                    .map(|progress| progress.borrow_and_update().applied);
-                let mut committed = false;
+                if maintenance_due && changes.is_some() && !schedule.due() {
+                    // An early drain yields the writer to maintenance, which
+                    // has nothing due unless the writes the pipeline just
+                    // applied say otherwise: hear those first.
+                    while let Some(receiver) = changes.as_mut() {
+                        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+                        let received = match receiver.try_recv() {
+                            Ok(changes) => Ok(changes),
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Lagged(count)) => Err(RecvError::Lagged(count)),
+                            Err(TryRecvError::Closed) => Err(RecvError::Closed),
+                        };
+                        if !hear(received, partition.as_deref(), &mut interest, &mut schedule) {
+                            changes = None;
+                        }
+                    }
+                    if !schedule.due() {
+                        observability::maintenance_run("skipped");
+                        maintenance_due = false;
+                        continue;
+                    }
+                }
                 let outcome = if app.consensus.metrics().state == openraft::ServerState::Leader {
                     let outcome = maintain(&app).await;
                     if let Err(error) = &outcome {
                         tracing::warn!(%error, "application maintenance did not commit");
                     }
-                    committed = outcome
-                        .as_ref()
-                        .is_ok_and(|maintained| maintained.committed);
-                    Some(outcome.map(|maintained| maintained.next))
+                    Some(outcome)
                 } else {
                     None
                 };
-                schedule.ran(&app, outcome);
-                // The run's hint covers its own commit, one Raft entry, but
-                // anything else applied since calls for another run soon.
-                if let (Some(progress), Some(before)) = (progress.as_mut(), before) {
-                    let after = progress.borrow().applied;
-                    let own = committed
-                        && before
-                            .zip(after)
-                            .is_some_and(|(before, after)| after.index == before.index + 1);
-                    if after == before || own {
-                        progress.borrow_and_update();
-                    }
+                observability::maintenance_run(match &outcome {
+                    None => "follower",
+                    Some(Err(_)) => "failed",
+                    Some(Ok(maintained)) if maintained.committed => "committed",
+                    Some(Ok(_)) => "idle",
+                });
+                // Writes the run could not have read, and any while it failed,
+                // call for another run soon.
+                let outcome = outcome.map(|outcome| {
+                    outcome.map(|maintained| {
+                        interest = maintained.interest;
+                        maintained.next
+                    })
+                });
+                match &outcome {
+                    None => interest = Interest::never(),
+                    Some(Err(_)) => interest = Interest::any(0),
+                    Some(Ok(_)) => {}
                 }
+                schedule.ran(&app, outcome);
                 maintenance_due = false;
                 continue;
             }
-            Work::Changed => {
-                schedule.soon();
+            Work::Progress => {
+                let latest = progress.as_mut().map(|progress| progress.borrow().clone());
+                let (leadership, applied) = match (&observed, &latest) {
+                    (Some(before), Some(after)) => (
+                        before.suspicion != after.suspicion || before.running != after.running,
+                        before.applied != after.applied,
+                    ),
+                    _ => (true, true),
+                };
+                observed = latest;
+                if leadership {
+                    // A new leader, term or lapsed lease: whatever the last
+                    // run saw may be stale.
+                    interest = Interest::any(0);
+                    observability::maintenance_wake("leadership");
+                    schedule.soon();
+                } else if applied && changes.is_none() {
+                    // Without the keys of each write (the feed closed), every
+                    // apply of the group counts, as it did before the feed.
+                    observability::maintenance_wake("write");
+                    schedule.soon();
+                }
+                continue;
+            }
+            Work::Wrote(received) => {
+                if !hear(received, partition.as_deref(), &mut interest, &mut schedule) {
+                    changes = None;
+                }
                 continue;
             }
             Work::Request(first) => first,
@@ -302,6 +367,40 @@ async fn run_actor(
         )
         .await;
     }
+}
+
+/// Take in one apply's keys: maintenance runs again soon when they concern
+/// this database (`partition`, the root's for `None`) and touch what its last
+/// run read. False once the feed has closed, which also counts as a write.
+fn hear(
+    received: Result<
+        Arc<crate::consensus::changes::Changes>,
+        tokio::sync::broadcast::error::RecvError,
+    >,
+    partition: Option<&str>,
+    interest: &mut Interest,
+    schedule: &mut Schedule,
+) -> bool {
+    use tokio::sync::broadcast::error::RecvError;
+    let (wake, open) = match received {
+        Ok(changes) if !changes.concern(partition) => (None, true),
+        Ok(changes) => (Some(interest.touched_by(&changes)), true),
+        Err(RecvError::Lagged(_)) => {
+            // Writes went unheard: whatever the last run saw may be stale.
+            *interest = Interest::any(0);
+            (Some(true), true)
+        }
+        Err(RecvError::Closed) => (Some(true), false),
+    };
+    match wake {
+        Some(true) => {
+            observability::maintenance_wake("write");
+            schedule.soon();
+        }
+        Some(false) => observability::maintenance_wake("unrelated"),
+        None => {}
+    }
+    open
 }
 
 /// Maintenance has no timer of its own. It runs when a task is due, as the
@@ -331,6 +430,10 @@ impl Schedule {
         self.next = Some(self.next.map_or(at, |next| next.min(at)));
     }
 
+    fn due(&self) -> bool {
+        self.next.is_some_and(|next| next <= Instant::now())
+    }
+
     fn ran(&mut self, app: &App, outcome: Option<anyhow::Result<NextRun>>) {
         let now = Instant::now();
         self.last = Some(now);
@@ -352,7 +455,12 @@ impl Schedule {
 
 enum Work {
     Maintenance,
-    Changed,
+    /// Raft progress moved: an apply, or a leadership change.
+    Progress,
+    /// The keys one apply wrote, to some state of the Raft group.
+    Wrote(
+        Result<Arc<crate::consensus::changes::Changes>, tokio::sync::broadcast::error::RecvError>,
+    ),
     Request(Pending),
     Closed,
 }
@@ -361,6 +469,7 @@ async fn next_work(
     receiver: &mut mpsc::Receiver<Pending>,
     deferred: &mut VecDeque<Pending>,
     progress: &mut Option<tokio::sync::watch::Receiver<crate::consensus::Progress>>,
+    changes: &mut Option<tokio::sync::broadcast::Receiver<Arc<crate::consensus::changes::Changes>>>,
     next_maintenance: Option<Instant>,
     maintenance_due: bool,
     automatic_maintenance: bool,
@@ -386,8 +495,14 @@ async fn next_work(
                 }
                 Err(_) => *progress = None,
             }
-            Work::Changed
+            Work::Progress
         }
+        received = async {
+            match changes.as_mut() {
+                Some(changes) => changes.recv().await,
+                None => std::future::pending().await,
+            }
+        }, if automatic_maintenance => Work::Wrote(received),
         first = async {
             if let Some(first) = deferred.pop_front() {
                 Some(first)
