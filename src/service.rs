@@ -3,6 +3,7 @@ mod clock;
 mod forwarding;
 mod keys;
 mod partitions;
+mod process;
 mod query_cache;
 mod staged_deployment;
 #[cfg(test)]
@@ -70,6 +71,7 @@ pub fn validate_configuration() -> anyhow::Result<()> {
 /// Named methods are the entire public data API. Control-plane routes require
 /// the operator token; authenticated peer transport may use a separate token.
 pub fn router(consensus: Consensus, admin_token: String) -> Router {
+    process::started();
     let raft_routes = consensus.router();
     let query_evaluations = Arc::new(Semaphore::new(
         tuning::settings()
@@ -1290,5 +1292,6 @@ async fn resource_metrics(
     metrics["authorizations"] = app.authorizations.metrics();
     metrics["snapshots"] = app.consensus.snapshot_policy_metrics();
     metrics["storage"] = app.consensus.storage_metrics();
+    metrics["process"] = process::metrics();
     Ok(Json(metrics))
 }
