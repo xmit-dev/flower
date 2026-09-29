@@ -222,6 +222,116 @@ async fn renewal_keeps_a_job_alive_through_many_short_leases() {
     );
 }
 
+/// A queue whose leases may last 5 minutes (`examples/workers.ts` allows 30 s).
+fn long_leases(ids: &[&str]) -> FakeFlower {
+    let flower = FakeFlower::new(Clock::tokio());
+    flower.add_queue("jobs", flower_worker::testing::QueueConfig::default());
+    flower.enqueue(ids);
+    flower
+}
+
+/// `until` for work that takes minutes of (paused) time.
+async fn until_minutes(condition: impl Fn() -> bool) {
+    let started = tokio::time::Instant::now();
+    while !condition() {
+        assert!(
+            started.elapsed().as_secs() < 300,
+            "Timed out waiting for the worker"
+        );
+        sleep(2).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn renewals_and_reports_may_wait_in_flowers_queue_until_they_stop_mattering() {
+    // A busy Flower answers queued mutations late, and an attempt given up waits at the back of the
+    // queue again: each attempt gets until its call stops mattering, not the client's 20 s.
+    let flower = long_leases(&["long"]);
+    let client = flower.client();
+    flower.follow_clock();
+    let worker = start(
+        &client,
+        |options| QueueWorkerOptions {
+            lease_ms: Some(90_000),
+            ..options
+        },
+        |_: Job, _, _| async move {
+            sleep(60_000).await;
+            Ok("done")
+        },
+    );
+    until_minutes(|| worker.types().contains(&"completed")).await;
+    worker.stop().await.unwrap();
+    // The margin is 18 s: work stops 72 s after its lease was taken or last renewed, and renewals
+    // come once 24 s passed, so the first renewal may wait 48 s.
+    let renewals = client.calls_to("jobs.renew");
+    let renewal = renewals[0].retry.clone().expect("a mutation's policy");
+    let timeout = renewal.timeout_ms.expect("an attempt timeout");
+    assert!((47_000..=48_000).contains(&timeout), "renewal {renewal:?}");
+    // Renewed again at 48 s, the job's work would stop at 120 s and its lease end at 138 s: the
+    // report made at 60 s may wait 78 s.
+    let report = client.calls_to("jobs.complete")[0]
+        .retry
+        .clone()
+        .expect("a mutation's policy");
+    let timeout = report.timeout_ms.expect("an attempt timeout");
+    assert!((77_000..=78_000).contains(&timeout), "report {report:?}");
+    assert_eq!(renewals.len(), 2);
+    let last = renewals[1].retry.clone().expect("a mutation's policy");
+    let later = report.until.unwrap() - last.until.unwrap();
+    assert!(
+        (41_000..=42_000).contains(&later),
+        "report {report:?}, renewal {last:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn attempts_keep_the_clients_20_s_or_a_timeout_the_worker_was_given() {
+    let flower = workers(&["a", "b"]);
+    let client = flower.client();
+    flower.follow_clock();
+    let worker = start(
+        &client,
+        |options| QueueWorkerOptions {
+            lease_ms: Some(3_000),
+            concurrency: Some(Concurrency::Fixed(1)),
+            ..options
+        },
+        |_: Job, _, _| async move {
+            sleep(5_000).await;
+            Ok("done")
+        },
+    );
+    until_minutes(|| worker.count("completed") == 2).await;
+    worker.stop().await.unwrap();
+    for call in client.calls_to("jobs.renew") {
+        assert_eq!(call.retry.unwrap().timeout_ms, Some(20_000));
+    }
+    let flower = long_leases(&["given"]);
+    let client = flower.client();
+    flower.follow_clock();
+    let worker = start(
+        &client,
+        |options| QueueWorkerOptions {
+            lease_ms: Some(90_000),
+            retry: RetryPolicy {
+                timeout_ms: Some(5_000),
+                ..RetryPolicy::default()
+            },
+            ..options
+        },
+        |_: Job, _, _| async move {
+            sleep(30_000).await;
+            Ok("done")
+        },
+    );
+    until_minutes(|| worker.types().contains(&"completed")).await;
+    worker.stop().await.unwrap();
+    let renewal = client.calls_to("jobs.renew")[0].retry.clone().unwrap();
+    assert_eq!(renewal.timeout_ms, Some(5_000));
+    assert!(renewal.until.is_some());
+}
+
 #[tokio::test(start_paused = true)]
 async fn work_still_running_at_the_end_of_its_lease_is_aborted_and_failed_with_the_reason() {
     let flower = workers(&["slow"]);

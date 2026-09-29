@@ -636,7 +636,8 @@ impl<C: QueueClient> Worker<C> {
         self.settings.scope.as_deref()
     }
 
-    /// `send(method, args, until)`: a mutation retried until `until`.
+    /// `send(method, args, until)`: a mutation retried until `until`, an attempt waiting until then
+    /// if need be ([`RetryPolicy::until_deadline`]).
     fn send(
         &self,
         method: &str,
@@ -645,10 +646,7 @@ impl<C: QueueClient> Worker<C> {
     ) -> impl Future<Output = Result<Value, C::Error>> + Send + 'static {
         let client = self.client.clone();
         let name = format!("{}.{}", self.settings.queue, method);
-        let retry = RetryPolicy {
-            until: Some(until),
-            ..self.settings.retry.clone()
-        };
+        let retry = self.settings.retry.until_deadline(until, self.now());
         async move { client.mutate(&name, args, retry).await }
     }
 

@@ -598,7 +598,8 @@ impl<C: QueueClient> LeasedPool<C> {
         self.clock.now_ms()
     }
 
-    /// `send(method, args, until, abort?)`.
+    /// `send(method, args, until, abort?)`, an attempt waiting until `until` if need be
+    /// ([`RetryPolicy::until_deadline`]).
     fn send(
         &self,
         method: &str,
@@ -607,10 +608,11 @@ impl<C: QueueClient> LeasedPool<C> {
     ) -> impl Future<Output = Result<Value, C::Error>> + Send + 'static {
         let client = self.client.clone();
         let name = format!("{}.{}", self.external, method);
-        let retry = RetryPolicy {
-            until: Some(until),
-            ..self.retry.clone().unwrap_or_default()
-        };
+        let retry = self
+            .retry
+            .clone()
+            .unwrap_or_default()
+            .until_deadline(until, self.now());
         async move { client.mutate(&name, args, retry).await }
     }
 

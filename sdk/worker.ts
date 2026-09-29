@@ -106,6 +106,14 @@ const leaseLost = (error: unknown) => error instanceof FlowerError && error.fail
 
 /** How long work may take to stop once a drain aborted it, before a stopping worker gives up on it. */
 const ABANDON_AFTER_MS = 5_000;
+/**
+ * A worker call that matters until `until` retries until then, and unless the policy sets its own
+ * timeout, one attempt may wait until then too (the client's 20 s at least): a busy Flower answers a
+ * queued mutation late, and an attempt given up waits at the back of the queue again. With mutations
+ * waiting 20 s and more behind a deployment, 20 s attempts kept renewals from ever landing before
+ * their leases ran out, where one attempt waiting a little longer would have.
+ */
+const untilDeadline = (retry: RetryPolicy | undefined, until: number): RetryPolicy => ({ ...retry, until, timeoutMs: retry?.timeoutMs ?? Math.max(20_000, until - Date.now()) });
 
 /**
  * Run jobs from a queue until stopped. One readiness watch serves the whole process: after it fires,
@@ -136,7 +144,7 @@ export async function runQueueWorker<P = Json, R = Json>(client: FlowerClient<an
   const scope: Record<string, Json> = options.scope === undefined ? {} : { scope: options.scope };
   const readyArgs: Json = wait ? { ...scope, owner } : options.scope === undefined ? null : scope;
   const send = async <T>(method: string, args: Json, until: number): Promise<T> =>
-    (await untyped.mutate(`${queue}.${method}`, args, { retry: { ...options.retry, until } })).value as T;
+    (await untyped.mutate(`${queue}.${method}`, args, { retry: untilDeadline(options.retry, until) })).value as T;
 
   type Held = { readonly job: Claim<P>; readonly identity: Record<string, Json>; readonly stop: AbortController; deadline: number; renewedAt: number; timer?: ReturnType<typeof setTimeout>; drained?: boolean };
   const held = new Set<Held>();
@@ -535,7 +543,7 @@ async function leasedPool<A, I, R>(client: FlowerClient, options: ReconcileOptio
   const signal = AbortSignal.any([options.signal, halt.signal]);
   let failed: { error: unknown } | undefined;
   const send = async <T>(method: string, args: unknown, until: number, abort?: AbortSignal): Promise<T> =>
-    (await client.mutate(`${external}.${method}`, args as Json, { retry: { ...options.retry, until }, ...(abort ? { signal: abort } : {}) })).value as T;
+    (await client.mutate(`${external}.${method}`, args as Json, { retry: untilDeadline(options.retry, until), ...(abort ? { signal: abort } : {}) })).value as T;
   type Held = { readonly claim: ExternalClaim<A, I>; readonly lost: AbortController; deadline: number; timer?: ReturnType<typeof setTimeout> };
   const held = new Set<Held>();
   const identity = ({ claim: { args, key, owner, attempt } }: Held) => ({ args, key, owner, attempt });

@@ -42,6 +42,26 @@ pub struct RetryPolicy {
     pub timeout_ms: Option<u64>,
 }
 
+/// The client's own per-attempt timeout, which a worker's calls always get at least.
+pub const ATTEMPT_TIMEOUT_MS: u64 = 20_000;
+
+impl RetryPolicy {
+    /// This policy for a worker's call that matters until `until`, made at `now`: no retry starts
+    /// after `until`, and unless the policy sets its own timeout, one attempt may wait until then
+    /// ([`ATTEMPT_TIMEOUT_MS`] at least). A busy Flower answers a queued mutation late, and an
+    /// attempt given up waits at the back of the queue again: with mutations waiting 20 s and more
+    /// behind a deployment, 20 s attempts kept renewals from ever landing before their leases ran
+    /// out, where one attempt waiting a little longer would have.
+    pub fn until_deadline(&self, until: i64, now: i64) -> RetryPolicy {
+        let left = u64::try_from(until.saturating_sub(now)).unwrap_or(0);
+        RetryPolicy {
+            until: Some(until),
+            timeout_ms: Some(self.timeout_ms.unwrap_or(left.max(ATTEMPT_TIMEOUT_MS))),
+            ..self.clone()
+        }
+    }
+}
+
 /// Whether a watched value is the one awaited.
 pub type Predicate = fn(&Value) -> bool;
 

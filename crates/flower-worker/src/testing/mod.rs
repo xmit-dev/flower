@@ -138,6 +138,8 @@ pub struct Call {
     /// The mutation's request ID; `None` for a watch.
     pub request_id: Option<String>,
     pub watch: bool,
+    /// The retry policy the worker gave the mutation; `None` for a watch.
+    pub retry: Option<RetryPolicy>,
 }
 
 impl Call {
@@ -456,6 +458,7 @@ impl QueueClient for FakeClient {
             args: args.get().to_owned(),
             request_id: Some(request_id),
             watch: false,
+            retry: Some(retry.clone()),
         };
         let value: Value = serde_json::from_str(args.get()).expect("arguments are JSON");
         let attempts = retry.attempts.unwrap_or(8);
@@ -495,6 +498,7 @@ impl QueueClient for FakeClient {
             args: args.get().to_owned(),
             request_id: None,
             watch: true,
+            retry: None,
         };
         let value: Value = serde_json::from_str(args.get()).expect("arguments are JSON");
         let flower = &self.inner.flower;
