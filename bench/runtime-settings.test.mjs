@@ -23,6 +23,11 @@ test("report deployment page and ordinary writer windows independently", () => {
     { FLOWER_DEPLOYMENT_PAGE_MS: "75" });
 });
 
+test("report the allocator settings a run overrode", () => {
+  assert.deepEqual(runtimeSettings({ MIMALLOC_ALLOW_THP: "1", MIMALLOC_PURGE_DELAY: "1000", MIMALLOC_VERBOSE: "1" }),
+    { MIMALLOC_ALLOW_THP: "1", MIMALLOC_PURGE_DELAY: "1000" });
+});
+
 test("report safe OpenTelemetry settings without collector credentials or resource attributes", () => {
   assert.deepEqual(runtimeSettings({ FLOWER_OTEL_ENABLED: "1", OTEL_SDK_DISABLED: "false",
     OTEL_TRACES_SAMPLER: "parentbased_traceidratio", OTEL_TRACES_SAMPLER_ARG: "0.01", OTEL_METRIC_EXPORT_INTERVAL: "1000",

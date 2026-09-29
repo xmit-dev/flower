@@ -56,4 +56,5 @@
 <tr><td><code>FLOWER_REDB_CACHE_BYTES</code></td><td>1 GiB</td><td>The database's own cache of file pages, and its buffer for pages being written.</td></tr>
 </tbody></table></div>
 <p>A few structures still grow with the data: the scan windows of derived values that scan ranges, and a deployment that changes the bundle without staging, which walks every materialized value at once. Receiving a Raft snapshot writes it to a temporary file next to the database first, so leave free disk space for a second copy of the state.</p>
+<p>On Linux, the server starts its allocator, mimalloc, without transparent huge pages (<code>MIMALLOC_ALLOW_THP=0</code>) and keeps memory it frees for 10 seconds before returning it to the kernel (<code>MIMALLOC_PURGE_DELAY=10000</code>), so the kernel never compacts memory while a request waits, whatever its huge page settings. Set either variable to change it; the <a href="https://github.com/xmit-dev/flower/blob/main/bench/LIMITS.md#allocator">settings reference</a> says why.</p>
 </section>

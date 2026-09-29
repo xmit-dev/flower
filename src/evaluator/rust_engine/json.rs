@@ -347,10 +347,13 @@ pub(super) fn string<'a>(value: &'a Value, label: &str, code: &str) -> EngineRes
 }
 
 pub(super) fn source_id(collection: &str, key: &str) -> String {
-    format!(
-        "source:{}",
-        serde_json::to_string(&[collection, key]).expect("source identity")
-    )
+    // The bytes format!("source:{}", serde_json::to_string(&[collection, key]))
+    // wrote, in one allocation sized for them without escapes instead of three:
+    // every row a scan reads and every source a method touches names one.
+    let mut id = Vec::with_capacity("source:[\"\",\"\"]".len() + collection.len() + key.len());
+    id.extend_from_slice(b"source:");
+    serde_json::to_writer(&mut id, &[collection, key]).expect("source identity");
+    String::from_utf8(id).expect("source identity")
 }
 
 pub(super) fn collection_id(collection: &str) -> String {
@@ -392,6 +395,28 @@ pub(super) fn source_pair(id: &str) -> EngineResult<(String, String)> {
 mod normalization_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn source_ids_are_the_json_array_of_collection_and_key() {
+        let all_controls: String = (0u8..=127).map(char::from).collect();
+        for collection in ["", "sessions", "quote\"slash\\", "é中文🌸"] {
+            for key in [
+                "",
+                "2qi5",
+                "quote\"slash\\",
+                "\u{2028}\u{10ffff}",
+                &all_controls,
+            ] {
+                assert_eq!(
+                    source_id(collection, key),
+                    format!(
+                        "source:{}",
+                        serde_json::to_string(&[collection, key]).unwrap()
+                    )
+                );
+            }
+        }
+    }
 
     #[test]
     fn string_encoding_and_byte_counts_match_json_for_controls_and_unicode() {

@@ -18,6 +18,48 @@ mod server;
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// The mimalloc settings Flower starts with, as the `MIMALLOC_*` environment
+/// variables mimalloc reads once when the process starts; a variable already
+/// in the environment keeps its value. bench/LIMITS.md, "Allocator", has the
+/// measurements.
+///
+/// `MIMALLOC_ALLOW_THP=0`: no transparent huge pages. mimalloc otherwise
+/// advises its arenas MADV_HUGEPAGE, and under the kernel's default THP
+/// defrag setting (`madvise`) a fault on an advised region that finds no
+/// free 2 MiB page compacts memory first, in the faulting thread: whenever
+/// mimalloc touched 2 MiB it had purged, that thread could stall there (on
+/// the live Ultimator Flower at 02:35 UTC on 2026-09-29, 10.7% of its CPU
+/// samples, compaction that mostly failed). With 0, mimalloc does not advise
+/// and disables huge pages for the process (PR_SET_THP_DISABLE), so the heap
+/// faults in 4 KiB pages on any host.
+///
+/// `MIMALLOC_PURGE_DELAY=10000`: memory freed stays with the process for 10 s
+/// instead of 1 s before it goes back to the kernel (MADV_DONTNEED), so pages
+/// a busy server frees and takes again within seconds do not fault and get
+/// zeroed each time.
+#[cfg(target_os = "linux")]
+const ALLOCATOR_DEFAULTS: [(&std::ffi::CStr, &std::ffi::CStr); 2] = [
+    (c"MIMALLOC_ALLOW_THP", c"0"),
+    (c"MIMALLOC_PURGE_DELAY", c"10000"),
+];
+
+/// Runs after Rust's argument setup (priority 99) and before mimalloc's own
+/// initialization (a constructor of default priority, 101 when built with
+/// clang), so before anything allocates. setenv copies with libc's malloc.
+#[cfg(target_os = "linux")]
+#[used]
+#[unsafe(link_section = ".init_array.00100")]
+static ALLOCATOR_SETTINGS: extern "C" fn() = allocator_settings;
+
+#[cfg(target_os = "linux")]
+extern "C" fn allocator_settings() {
+    for (name, value) in ALLOCATOR_DEFAULTS {
+        // SAFETY: the process has one thread before main, and both strings
+        // are NUL-terminated statics; overwrite 0 keeps the operator's value.
+        unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), 0) };
+    }
+}
+
 #[derive(Parser)]
 #[command(
     version,
@@ -273,4 +315,43 @@ async fn shutdown_signal() {
         }
     }
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    /// This test binary links the constructor and the allocator as the server
+    /// does, so mimalloc started with the settings it gave.
+    #[test]
+    fn the_allocator_starts_without_transparent_huge_pages() {
+        for (name, value) in super::ALLOCATOR_DEFAULTS {
+            let name = name.to_str().unwrap();
+            assert!(std::env::var_os(name).is_some(), "{name} is set");
+            if std::env::var(name).as_deref() != Ok(value.to_str().unwrap()) {
+                eprintln!("{name} comes from the environment; skipping");
+                return;
+            }
+        }
+        // Touched memory in mimalloc's first arena, reserved before main.
+        let blocks: Vec<Vec<u8>> = (0..16).map(|_| vec![1u8; 1 << 20]).collect();
+        // SAFETY: PR_GET_THP_DISABLE takes no pointers.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) },
+            1
+        );
+        let smaps = std::fs::read_to_string("/proc/self/smaps").unwrap();
+        let advised: Vec<&str> = smaps
+            .lines()
+            .filter(|line| {
+                line.starts_with("VmFlags:") && line.split_whitespace().any(|flag| flag == "hg")
+            })
+            .collect();
+        assert!(advised.is_empty(), "MADV_HUGEPAGE mappings: {advised:?}");
+        let huge: u64 = smaps
+            .lines()
+            .filter_map(|line| line.strip_prefix("AnonHugePages:"))
+            .map(|kib| kib.trim().trim_end_matches(" kB").parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(huge, 0, "{huge} KiB of anonymous huge pages");
+        drop(blocks);
+    }
 }
