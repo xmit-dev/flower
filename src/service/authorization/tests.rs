@@ -183,7 +183,10 @@ fn decision_bundle(claims: &str) -> String {
         if(!c || c.expires<=now || ctx.get(records,'revoked')) return {principal:null,readArgs:false};
         ctx.changesAt(c.expires);
         if(req.method==='guarded') return {principal:req.args.owner===c.subject?{subject:c.subject}:null,readArgs:['owner']};
-        if(req.method==='opaque') return {principal:{subject:c.subject},readArgs:true};
+        if(req.method==='opaque') return {principal:{subject:c.subject,claims:CLAIMS},readArgs:true};
+        if(req.method==='mixed') return req.args!==null&&typeof req.args==='object'
+          ? {principal:{subject:c.subject,claims:{owner:req.args.owner??null}},readArgs:['owner']}
+          : {principal:{subject:c.subject,claims:{args:req.args}},readArgs:true};
         if(req.method==='malformed') return {subject:c.subject};
         return {principal:{subject:c.subject,claims:CLAIMS},readArgs:false};
       }},
@@ -196,11 +199,12 @@ fn decision_bundle(claims: &str) -> String {
       read:{name:'read',kind:'queryMethod',compute:(ctx,args)=>({principal:ctx.principal(),args})},
       guarded:{name:'guarded',kind:'queryMethod',compute:ctx=>ctx.principal()},
       opaque:{name:'opaque',kind:'queryMethod',compute:ctx=>ctx.principal()},
+      mixed:{name:'mixed',kind:'queryMethod',compute:ctx=>ctx.principal()},
       malformed:{name:'malformed',kind:'queryMethod',compute:ctx=>ctx.principal()}
     },authorize:{name:'authorize',result:'decision'},http:{
       update:{name:'update',kind:'mutation'},read:{name:'read',kind:'query'},
       guarded:{name:'guarded',kind:'query'},opaque:{name:'opaque',kind:'query'},
-      malformed:{name:'malformed',kind:'query'}
+      mixed:{name:'mixed',kind:'query'},malformed:{name:'malformed',kind:'query'}
     }}};
     "#
     .replace("CLAIMS", claims)
@@ -297,22 +301,119 @@ async fn decisions_that_read_arguments_hold_only_for_arguments_that_agree_on_the
         );
     }
     assert_eq!(counts(&app), (6, 2));
-    // A decision that read more than fields by name is never reused.
-    for _ in 0..2 {
-        read_query(&app, call("opaque", json!({"x":1})))
+    app.consensus.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn decisions_that_read_all_arguments_hold_only_for_the_same_arguments() {
+    let (_directory, app) = super::super::tests::application(decision_bundle("{}")).await;
+    let expires = now(&app).await + 60_000;
+    let alice = json!({"subject":"alice","expires":expires});
+    let bob = json!({"subject":"bob","expires":expires});
+    let call = |method: &str, credentials: &Value, args: Option<Value>| {
+        let mut call = json!({"name":method,"credentials":credentials});
+        if let Some(args) = args {
+            call["args"] = args;
+        }
+        call
+    };
+    let subject = |value: &Value| value["subject"].as_str().unwrap().to_owned();
+    // No arguments at all, as most calls of methods without them are made.
+    for args in [None, Some(Value::Null), None] {
+        let read = read_query(&app, call("opaque", &alice, args))
+            .await
+            .unwrap();
+        assert_eq!(subject(&read.value), "alice");
+    }
+    assert_eq!(
+        counts(&app),
+        (1, 2),
+        "absent and null arguments are the same call"
+    );
+    for args in [
+        json!({}),
+        json!({"x":1}),
+        json!({"x":1}),
+        json!({"x":2}),
+        json!([1]),
+        json!({"x":1}),
+    ] {
+        read_query(&app, call("opaque", &alice, Some(args)))
             .await
             .unwrap();
     }
-    assert_eq!(counts(&app), (8, 2));
+    assert_eq!(
+        counts(&app),
+        (5, 4),
+        "equal arguments share a decision, others ({{}} against none) do not"
+    );
+    // Nor do other callers, with the same arguments.
+    for credentials in [&bob, &bob, &alice] {
+        let read = read_query(&app, call("opaque", credentials, None))
+            .await
+            .unwrap();
+        assert_eq!(read.value["subject"], credentials["subject"]);
+    }
+    assert_eq!(counts(&app), (6, 6));
+    // A method whose decisions read a field of object arguments and all of
+    // any others keeps both kinds.
+    let mixed = [
+        (Some(json!({"owner":"x","page":1})), json!({"owner":"x"})),
+        (None, json!({"args":null})),
+        (Some(json!({"owner":"x","page":2})), json!({"owner":"x"})),
+        (Some(json!("x")), json!({"args":"x"})),
+        (None, json!({"args":null})),
+        (Some(json!("x")), json!({"args":"x"})),
+        (Some(json!({"owner":"y"})), json!({"owner":"y"})),
+    ];
+    for (args, claims) in mixed {
+        let read = read_query(&app, call("mixed", &alice, args.clone()))
+            .await
+            .unwrap();
+        assert_eq!(read.value["claims"], claims, "{args:?}");
+    }
+    assert_eq!(counts(&app), (10, 9));
+    // Arguments too long to digest on every call keep no decision.
+    let long = json!({"x":"x".repeat(memo::WHOLE_ARGS_MAX_BYTES)});
+    for _ in 0..2 {
+        read_query(&app, call("opaque", &alice, Some(long.clone())))
+            .await
+            .unwrap();
+    }
+    assert_eq!(counts(&app), (12, 9));
     app.consensus.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn reused_decisions_end_with_what_they_read_their_time_and_their_code() {
-    let (_directory, app) = super::super::tests::application(decision_bundle("{role:'one'}")).await;
+    for opaque in [false, true] {
+        reused_decisions_end_with_what_they_read_and_their_code(opaque).await;
+        reused_decisions_expire_with_the_time_they_declared(opaque).await;
+    }
+}
+
+/// `opaque`: decisions that read all of no arguments, instead of nothing.
+async fn reused_decisions_end_with_what_they_read_and_their_code(opaque: bool) {
+    let bundle = |claims: &str| {
+        let bundle = decision_bundle(claims);
+        if opaque {
+            // The read method's decisions read all its arguments.
+            bundle.replace(
+                "req.method==='opaque'",
+                "(req.method==='opaque'||req.method==='read')",
+            )
+        } else {
+            bundle
+        }
+    };
+    let (_directory, app) = super::super::tests::application(bundle("{role:'one'}")).await;
     // A write to a record the hook read.
     let credentials = json!({"subject":"alice","expires":now(&app).await + 60_000});
-    let read = json!({"name":"read","args":{},"credentials":credentials});
+    let read = if opaque {
+        json!({"name":"read","credentials":credentials})
+    } else {
+        json!({"name":"read","args":{},"credentials":credentials})
+    };
     read_query(&app, read.clone()).await.unwrap();
     read_query(&app, read.clone()).await.unwrap();
     assert_eq!(counts(&app), (1, 1));
@@ -330,15 +431,15 @@ async fn reused_decisions_end_with_what_they_read_their_time_and_their_code() {
     writer::submit(
         &app,
         json!({"requestId":"redeploy","bundle":{
-            "hash":evaluator::hash(decision_bundle("{role:'two'}").as_bytes()),
-            "javascript":decision_bundle("{role:'two'}")}}),
+            "hash":evaluator::hash(bundle("{role:'two'}").as_bytes()),
+            "javascript":bundle("{role:'two'}")}}),
         true,
     )
     .await
     .unwrap();
     let redeployed = read_query(&app, read.clone()).await.unwrap();
     assert_eq!(redeployed.value["principal"]["claims"]["role"], "two");
-    assert_eq!(counts(&app).0, 3);
+    assert_eq!(counts(&app).0, 3, "the redeployed hook decided again");
     writer::submit(
         &app,
         json!({"name":"update","args":{"revoke":true},"requestId":"revoke","credentials":credentials}),
@@ -354,11 +455,14 @@ async fn reused_decisions_end_with_what_they_read_their_time_and_their_code() {
     app.consensus.shutdown().await.unwrap();
 }
 
-#[tokio::test]
-async fn reused_decisions_expire_with_the_time_they_declared() {
+async fn reused_decisions_expire_with_the_time_they_declared(opaque: bool) {
     let (_directory, app) = super::super::tests::application(decision_bundle("{}")).await;
     let credentials = json!({"subject":"alice","expires":now(&app).await + 400});
-    let read = json!({"name":"read","args":{},"credentials":credentials});
+    let read = if opaque {
+        json!({"name":"opaque","credentials":credentials})
+    } else {
+        json!({"name":"read","args":{},"credentials":credentials})
+    };
     read_query(&app, read.clone()).await.unwrap();
     read_query(&app, read.clone()).await.unwrap();
     assert_eq!(counts(&app), (1, 1));
@@ -372,12 +476,51 @@ async fn reused_decisions_expire_with_the_time_they_declared() {
 }
 
 #[tokio::test]
-async fn hooks_without_decisions_run_for_every_call_and_malformed_decisions_deny() {
+async fn hooks_without_decisions_hold_for_the_same_call_and_malformed_decisions_deny() {
+    // A hook that polls the clock runs for every call.
     let (_directory, app) = super::super::tests::application(bundle()).await;
     let read = json!({"name":"read","credentials":credentials("alice","one")});
     read_query(&app, read.clone()).await.unwrap();
     read_query(&app, read).await.unwrap();
     assert_eq!(counts(&app), (2, 0));
+    app.consensus.shutdown().await.unwrap();
+
+    // One that declares when time changes its answer holds for the same call
+    // (credentials, method, arguments) while what it read is unchanged.
+    let declared = bundle().replace(
+        "if(!c || c.expires<=ctx.now() || ctx.get(records,'revoked')) return null;",
+        "if(!c || c.expires<=ctx.clock() || ctx.get(records,'revoked')) return null; ctx.changesAt(c.expires);",
+    );
+    let (_directory, app) = super::super::tests::application(declared).await;
+    let alice = credentials("alice", "one");
+    let call = |args: Value, credentials: &Value| json!({"name":"read","args":args,"credentials":credentials});
+    for (args, credentials) in [
+        (json!({"x":1}), &alice),
+        (json!({"x":1}), &alice),
+        (json!({"x":2}), &alice),
+        (json!({"x":1}), &credentials("bob", "two")),
+        (json!({"x":1}), &alice),
+    ] {
+        let read = read_query(&app, call(args, credentials)).await.unwrap();
+        assert_eq!(read.value["subject"], credentials["subject"]);
+    }
+    assert_eq!(counts(&app), (3, 2));
+    writer::submit(
+        &app,
+        json!({"name":"update","args":{"revoke":true},"requestId":"revoke","credentials":alice}),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        read_query(&app, call(json!({"x":1}), &alice))
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "FORBIDDEN",
+        "the hook read the revocation record"
+    );
     app.consensus.shutdown().await.unwrap();
 
     let (_directory, app) = super::super::tests::application(decision_bundle("{}")).await;

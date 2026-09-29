@@ -1344,3 +1344,89 @@ async fn subscribers_of_one_hub_share_one_turn_and_one_evaluation_per_write() {
     drop(bodies);
     app.consensus.shutdown().await.unwrap();
 }
+
+/// A hook that reports decisions, as the SDK's does: admins may write, and a
+/// reader's access depends on its role record; a call without arguments
+/// reads all of them.
+fn decision_bundle() -> String {
+    bundle()
+        .replace("stable:{name:", "authorize:{name:'authorize',kind:'queryMethod',compute:(ctx,req)=>{const s=req.credentials.subject;const readArgs=req.args===null||typeof req.args!=='object';if(s==='admin')return {principal:{subject:s},readArgs};const role=ctx.get(records,'role:'+s);return {principal:role==='reader'?{subject:s,claims:{role}}:null,readArgs};}},stable:{name:")
+        .replace("write:{name:'write',kind:'mutationMethod'", "grant:{name:'grant',kind:'mutationMethod',compute:(ctx,a)=>{ctx.set(records,'role:'+a.subject,a.role);return a;}},write:{name:'write',kind:'mutationMethod'")
+        .replace("write:{name:'write',kind:'mutation'}", "write:{name:'write',kind:'mutation'},grant:{name:'grant',kind:'mutation'}")
+        .replace("},http:{", "},authorize:{name:'authorize',result:'decision'},http:{")
+}
+
+#[tokio::test]
+async fn a_watch_without_arguments_reuses_its_access_until_what_it_read_changes() {
+    let (_directory, app) = crate::service::tests::application(decision_bundle()).await;
+    let counts = || {
+        let metrics = app.authorizations.metrics();
+        (
+            metrics["evaluated"].as_u64().unwrap(),
+            metrics["reused"].as_u64().unwrap(),
+        )
+    };
+    let admin = |name: &str, args: Value, id: &str| {
+        super::super::commit_method(
+            app.clone(),
+            json!({"name":name,"args":args,"credentials":{"subject":"admin"},"requestId":id}),
+            false,
+        )
+    };
+    let _ = admin("grant", json!({"subject":"alice","role":"reader"}), "grant")
+        .await
+        .unwrap();
+    // The admin's own decision for writes, which read nothing of them.
+    let _ = admin("write", json!({"n":0}), "write-0").await.unwrap();
+    // No arguments: the decision read all of them, which are the same on
+    // every refresh.
+    let input = json!({"name":"read","credentials":{"subject":"alice"}});
+    let response = watch(State(app.clone()), Json(input.clone()))
+        .await
+        .unwrap();
+    let mut body = response.into_body().into_data_stream();
+    let _ = body.next().await.unwrap().unwrap();
+    let Refreshed { hub, .. } = refresh(&app, &input, None, None, None).await.unwrap();
+    let (evaluated, _) = counts();
+    // Writes the result read refresh it without deciding access again.
+    for n in 1..=3 {
+        let _ = admin("write", json!({"n":n}), &format!("write-{n}"))
+            .await
+            .unwrap();
+        let update = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let update = std::str::from_utf8(&update).unwrap();
+        assert!(update.contains("event: patch"), "{update}");
+        assert_eq!(payload(update)["patch"][0]["value"], n);
+    }
+    assert!(hub.evaluations().await >= 4);
+    assert_eq!(counts().0, evaluated, "every refresh reused its decision");
+    // A write to what the decision read (alice's role) decides again, and
+    // ends the watch.
+    let _ = admin("grant", json!({"subject":"alice","role":"none"}), "revoke")
+        .await
+        .unwrap();
+    let terminal = tokio::time::timeout(Duration::from_secs(2), body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        payload(std::str::from_utf8(&terminal).unwrap())["error"]["code"],
+        "FORBIDDEN"
+    );
+    assert!(counts().0 > evaluated);
+    // A new watch decides again too, and is refused.
+    assert_eq!(
+        refresh(&app, &input, None, None, None)
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "FORBIDDEN"
+    );
+    app.consensus.shutdown().await.unwrap();
+}

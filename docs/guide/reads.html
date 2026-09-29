@@ -26,7 +26,7 @@ console.log(visits.value.count, clicks.value.count);</code></pre></div>
 <ul>
 <li><code>FLOWER_QUERY_CACHE_BYTES</code>: cache size per logical database. Default 16 MiB; 0 disables it.</li>
 <li><code>FLOWER_QUERY_FLIGHT_BYTES</code>: memory for sharing identical concurrent reads. Default 512 KiB; 0 disables it.</li>
-<li><code>FLOWER_AUTHORIZATION_CACHE_BYTES</code>: access decisions kept per logical database, for calls with the same credentials and method whose arguments agree on what the decision read. Default 16 MiB; 0 disables it.</li>
+<li><code>FLOWER_AUTHORIZATION_CACHE_BYTES</code>: access decisions kept per logical database, for calls with the same credentials and method whose arguments agree on what the decision read (all of them, for a decision that read more than fields by name or a call without arguments). Default 16 MiB; 0 disables it.</li>
 <li><code>FLOWER_QUERY_WORKERS</code>: bounds fast cache lookups and access checks. Heavy query work shares <code>FLOWER_PREPARATION_WORKERS</code> with writes and watches.</li>
 </ul>
 </div></details>

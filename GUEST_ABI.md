@@ -164,7 +164,11 @@ may have read), or anything else (`true`). The host reuses a decision for
 later calls with the same credentials, method, partition and delegation whose
 `args` (an object, when fields are named) agree on those fields, present or
 absent, while every record it read is unchanged and its time (`changesAt`, as
-for queries) has not come; a decision that read all of `args`, polled `now`
+for queries) has not come. A decision that read all of `args` (`true`, as
+for arguments that are not an object, such as none), and a principal from a
+hook without `"result": "decision"`, holds the same way for calls whose
+`args` are the same as well (at most 16 KiB of JSON; absent `args` are
+`null`), as a query's result does; one that polled `now`
 or read untracked state is not reused. The host
 validates the manifest: HTTP aliases,
 maintenance and authorization must name definitions of the right kind, an

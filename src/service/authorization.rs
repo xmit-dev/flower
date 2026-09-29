@@ -116,12 +116,11 @@ async fn authorize_inner(
         .partition_binding()
         .map(|binding| binding.partition.as_str());
     // A hook that reports what it read of the arguments returns a decision,
-    // which holds for arguments that agree on that: reuse it while it holds.
+    // which holds for arguments that agree on that; any other holds for the
+    // same arguments. Reuse it while it holds.
     let reported = method.get("result").and_then(Value::as_str) == Some("decision");
-    let reuse = reported.then(|| memo::key(input, partition, &delegation));
-    if let Some(key) = &reuse
-        && let Some(access) = app.authorizations.get(key, input.get("args"), app, state)
-    {
+    let key = memo::key(input, partition, &delegation);
+    if let Some(access) = app.authorizations.get(&key, input.get("args"), app, state) {
         return Ok(access);
     }
     app.authorizations.evaluated();
@@ -155,8 +154,9 @@ async fn authorize_inner(
     let validity = Validity::of(&result);
     let observed = result.query_certificate.map(Arc::new);
     // What it read of the arguments: none (`false`), fields by name, or more
-    // (`true`, None), which no other call is known to share.
-    let (principal, read_fields) = if reported {
+    // (`true`), which only calls with the same arguments are known to share,
+    // as for a hook that does not say.
+    let (principal, read) = if reported {
         let decision = result.value;
         let fields = decision.get("readArgs").and_then(|read| match read {
             Value::Bool(all) => Some((!all).then(Vec::new)),
@@ -171,12 +171,20 @@ async fn authorize_inner(
             (Some(object), Some(fields))
                 if object.len() == 2 && object.contains_key("principal") =>
             {
-                (decision["principal"].clone(), fields)
+                let read = match fields {
+                    Some(mut fields) => {
+                        fields.sort_unstable();
+                        fields.dedup();
+                        memo::Read::Fields(fields)
+                    }
+                    None => memo::Read::Whole,
+                };
+                (decision["principal"].clone(), read)
             }
             _ => return Err(denied("Authorization returned an invalid decision")),
         }
     } else {
-        (result.value, None)
+        (result.value, memo::Read::Whole)
     };
     let Some(object) = principal.as_object() else {
         return Err(denied("Authorization denied"));
@@ -203,14 +211,8 @@ async fn authorize_inner(
         validity,
         observed,
     };
-    if let Some(key) = reuse
-        && let Some(mut fields) = read_fields
-    {
-        fields.sort_unstable();
-        fields.dedup();
-        app.authorizations
-            .insert(key, input.get("args"), fields, state.revision, &access);
-    }
+    app.authorizations
+        .insert(key, input.get("args"), read, state.revision, &access);
     Ok(access)
 }
 
