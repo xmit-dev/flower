@@ -5,7 +5,7 @@
 use super::{Entry, EntryPayload, RaftCommand, Serialize, TypeConfig};
 use opentelemetry::{
     KeyValue, global,
-    metrics::{Counter, Histogram},
+    metrics::{BoundCounter, BoundHistogram, Counter, Histogram, Meter},
 };
 use std::{sync::OnceLock, time::Instant};
 
@@ -93,8 +93,102 @@ fn duration_boundaries() -> Vec<f64> {
 
 fn metrics() -> &'static Metrics {
     static METRICS: OnceLock<Metrics> = OnceLock::new();
-    METRICS.get_or_init(|| {
-        let meter = global::meter("flower");
+    METRICS.get_or_init(|| Metrics::new(global::meter("flower")))
+}
+
+/// Every operation StorageTrace::new is given, and each outcome it reports.
+const OPERATIONS: [&str; 11] = [
+    "append",
+    "leader_append",
+    "apply",
+    "persist",
+    "leader_flush",
+    "vote",
+    "truncate",
+    "purge",
+    "install_snapshot",
+    "build_snapshot",
+    "snapshot_transfer",
+];
+const OUTCOMES: [&str; 4] = ["ok", "error", "panic", "incomplete"];
+const BATCH_KINDS: [&str; 4] = ["entries", "commands", "changed_keys", "receipts"];
+
+/// An operation's instruments, bound to its operation, durability and outcome.
+struct Bound {
+    operations: BoundCounter<u64>,
+    duration: BoundHistogram<f64>,
+    bytes: BoundHistogram<u64>,
+    /// By StoragePhase::ALL, then encode.
+    stages: [BoundHistogram<f64>; StoragePhase::ALL.len() + 1],
+    /// By BATCH_KINDS.
+    batch: [BoundHistogram<u64>; BATCH_KINDS.len()],
+}
+
+/// The bound instruments of an operation and outcome. Each set is bound once,
+/// as the evaluator's are, so a report builds no attribute sets and takes no
+/// series-map lock; an operation missing from OPERATIONS is bound per report.
+fn bound(operation: &str, outcome: &str) -> Option<&'static Bound> {
+    static BOUND: [OnceLock<Bound>; OPERATIONS.len() * OUTCOMES.len()] =
+        [const { OnceLock::new() }; OPERATIONS.len() * OUTCOMES.len()];
+    let operation = OPERATIONS.iter().position(|known| *known == operation)?;
+    let outcome = OUTCOMES.iter().position(|known| *known == outcome)?;
+    Some(BOUND[operation * OUTCOMES.len() + outcome].get_or_init(|| {
+        metrics().bind(
+            OPERATIONS[operation],
+            durability(OPERATIONS[operation]),
+            OUTCOMES[outcome],
+        )
+    }))
+}
+
+fn durability(operation: &str) -> &'static str {
+    if matches!(
+        operation,
+        "apply" | "persist" | "leader_append" | "snapshot_transfer"
+    ) {
+        "none"
+    } else {
+        "immediate"
+    }
+}
+
+impl Metrics {
+    fn bind(
+        &self,
+        operation: &'static str,
+        durability: &'static str,
+        outcome: &'static str,
+    ) -> Bound {
+        let attributes = [
+            KeyValue::new("operation", operation),
+            KeyValue::new("durability", durability),
+            KeyValue::new("outcome", outcome),
+        ];
+        let dimension = |key, value| {
+            [
+                attributes[0].clone(),
+                attributes[1].clone(),
+                attributes[2].clone(),
+                KeyValue::new(key, value),
+            ]
+        };
+        Bound {
+            operations: self.operations.bind(&attributes),
+            duration: self.duration.bind(&attributes),
+            bytes: self.bytes.bind(&attributes),
+            stages: std::array::from_fn(|index| {
+                let name = StoragePhase::ALL
+                    .get(index)
+                    .map_or("encode", |phase| phase.name());
+                self.stage.bind(&dimension("stage", name))
+            }),
+            batch: std::array::from_fn(|index| {
+                self.batch.bind(&dimension("kind", BATCH_KINDS[index]))
+            }),
+        }
+    }
+
+    fn new(meter: Meter) -> Self {
         Metrics {
             operations: meter.u64_counter("flower.storage.operations")
                 .with_description("Storage operations by completion outcome").build(),
@@ -111,9 +205,8 @@ fn metrics() -> &'static Metrics {
                 .with_unit("By")
                 .with_boundaries(vec![0.0, 256.0, 1_024.0, 4_096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0, 268_435_456.0, 1_073_741_824.0])
                 .with_description("Serialized bytes per storage operation").build(),
-
         }
-    })
+    }
 }
 
 impl StorageTrace {
@@ -129,14 +222,7 @@ impl StorageTrace {
     }
 
     fn enabled(node: u64, operation: &'static str, legacy: bool, telemetry: bool) -> Self {
-        let durability = if matches!(
-            operation,
-            "apply" | "persist" | "leader_append" | "snapshot_transfer"
-        ) {
-            "none"
-        } else {
-            "immediate"
-        };
+        let durability = durability(operation);
         let started = Instant::now();
         let span = if telemetry {
             tracing::info_span!(target: "flower::otel", "flower.storage.operation",
@@ -283,79 +369,64 @@ impl StorageTiming {
         let seconds = |phase: StoragePhase| self.phases_ns[phase as usize] as f64 / 1_000_000_000.0;
         let total = finished.duration_since(self.started).as_secs_f64();
         if self.telemetry {
-            let attributes = [
-                KeyValue::new("operation", self.operation),
-                KeyValue::new("durability", self.durability),
-                KeyValue::new("outcome", outcome),
-            ];
-            let metrics = metrics();
-            metrics.operations.add(1, &attributes);
-            metrics.duration.record(total, &attributes);
-            metrics.bytes.record(self.encoded_bytes as u64, &attributes);
-            for phase in StoragePhase::ALL {
-                let attrs = [
-                    attributes[0].clone(),
-                    attributes[1].clone(),
-                    attributes[2].clone(),
-                    KeyValue::new("stage", phase.name()),
-                ];
-                metrics.stage.record(seconds(phase), &attrs);
+            let unbound;
+            let bound = match bound(self.operation, outcome) {
+                Some(bound) => bound,
+                None => {
+                    unbound = metrics().bind(self.operation, self.durability, outcome);
+                    &unbound
+                }
+            };
+            bound.operations.add(1);
+            bound.duration.record(total);
+            bound.bytes.record(self.encoded_bytes as u64);
+            for (stage, phase) in bound.stages.iter().zip(StoragePhase::ALL) {
+                stage.record(seconds(phase));
             }
-            let attrs = [
-                attributes[0].clone(),
-                attributes[1].clone(),
-                attributes[2].clone(),
-                KeyValue::new("stage", "encode"),
-            ];
-            metrics
-                .stage
-                .record(self.encode_ns as f64 / 1_000_000_000.0, &attrs);
-            for (kind, value) in [
-                ("entries", self.entries),
-                ("commands", self.commands),
-                ("changed_keys", self.changed_keys),
-                ("receipts", self.receipts),
-            ] {
-                let attrs = [
-                    attributes[0].clone(),
-                    attributes[1].clone(),
-                    attributes[2].clone(),
-                    KeyValue::new("kind", kind),
-                ];
-                metrics.batch.record(value as u64, &attrs);
+            bound.stages[StoragePhase::ALL.len()].record(self.encode_ns as f64 / 1_000_000_000.0);
+            for (batch, value) in bound.batch.iter().zip([
+                self.entries,
+                self.commands,
+                self.changed_keys,
+                self.receipts,
+            ]) {
+                batch.record(value as u64);
             }
-            self.span.record("outcome", outcome);
-            if matches!(outcome, "error" | "panic") {
-                self.span.record("otel.status_code", "ERROR");
-            }
-            for (field, value) in [
-                ("state_lock_seconds", seconds(StoragePhase::StateLock)),
-                ("io_queue_seconds", seconds(StoragePhase::IoQueue)),
-                (
-                    "blocking_queue_seconds",
-                    seconds(StoragePhase::BlockingQueue),
-                ),
-                ("prepare_seconds", seconds(StoragePhase::Prepare)),
-                ("begin_seconds", seconds(StoragePhase::Begin)),
-                ("write_seconds", seconds(StoragePhase::Write)),
-                ("commit_seconds", seconds(StoragePhase::Flush)),
-                ("publish_seconds", seconds(StoragePhase::Publish)),
-                ("encode_seconds", self.encode_ns as f64 / 1_000_000_000.0),
-                ("total_seconds", total),
-            ] {
-                self.span.record(field, value);
-            }
-            for (field, value) in [
-                ("encoded_bytes", self.encoded_bytes),
-                ("entries", self.entries),
-                ("commands", self.commands),
-                ("changed_keys", self.changed_keys),
-                ("receipts", self.receipts),
-            ] {
-                // OpenTelemetry attributes use signed integers. Recording a
-                // u64 falls back to a string in the tracing OTEL visitor.
-                self.span
-                    .record(field, i64::try_from(value).unwrap_or(i64::MAX));
+            // An unsampled span records nothing: skip building its fields.
+            if crate::telemetry::records(&self.span) {
+                self.span.record("outcome", outcome);
+                if matches!(outcome, "error" | "panic") {
+                    self.span.record("otel.status_code", "ERROR");
+                }
+                for (field, value) in [
+                    ("state_lock_seconds", seconds(StoragePhase::StateLock)),
+                    ("io_queue_seconds", seconds(StoragePhase::IoQueue)),
+                    (
+                        "blocking_queue_seconds",
+                        seconds(StoragePhase::BlockingQueue),
+                    ),
+                    ("prepare_seconds", seconds(StoragePhase::Prepare)),
+                    ("begin_seconds", seconds(StoragePhase::Begin)),
+                    ("write_seconds", seconds(StoragePhase::Write)),
+                    ("commit_seconds", seconds(StoragePhase::Flush)),
+                    ("publish_seconds", seconds(StoragePhase::Publish)),
+                    ("encode_seconds", self.encode_ns as f64 / 1_000_000_000.0),
+                    ("total_seconds", total),
+                ] {
+                    self.span.record(field, value);
+                }
+                for (field, value) in [
+                    ("encoded_bytes", self.encoded_bytes),
+                    ("entries", self.entries),
+                    ("commands", self.commands),
+                    ("changed_keys", self.changed_keys),
+                    ("receipts", self.receipts),
+                ] {
+                    // OpenTelemetry attributes use signed integers. Recording a
+                    // u64 falls back to a string in the tracing OTEL visitor.
+                    self.span
+                        .record(field, i64::try_from(value).unwrap_or(i64::MAX));
+                }
             }
         }
         if self.legacy {
@@ -444,5 +515,69 @@ mod tests {
         let timing = profile.0.as_ref().unwrap();
         assert_eq!(timing.entries, 1);
         assert_eq!(timing.commands, 3);
+    }
+
+    #[test]
+    fn bound_reports_land_in_the_series_of_the_attribute_sets_reports_built() {
+        use opentelemetry::metrics::MeterProvider;
+        let (provider, exported) = crate::telemetry::exported_metrics::provider();
+        let metrics = Metrics::new(provider.meter("storage-test"));
+        let bound = metrics.bind("leader_append", durability("leader_append"), "ok");
+        bound.operations.add(1);
+        bound.duration.record(0.001);
+        bound.bytes.record(10);
+        for stage in &bound.stages {
+            stage.record(0.001);
+        }
+        for batch in &bound.batch {
+            batch.record(1);
+        }
+        // What a report recorded before its instruments were bound.
+        let attributes = [
+            KeyValue::new("operation", "leader_append"),
+            KeyValue::new("durability", "none"),
+            KeyValue::new("outcome", "ok"),
+        ];
+        let with = |key, value| {
+            let [a, b, c] = attributes.clone();
+            [a, b, c, KeyValue::new(key, value)]
+        };
+        metrics.operations.add(1, &attributes);
+        metrics.duration.record(0.001, &attributes);
+        metrics.bytes.record(10, &attributes);
+        for phase in StoragePhase::ALL {
+            metrics.stage.record(0.001, &with("stage", phase.name()));
+        }
+        metrics.stage.record(0.001, &with("stage", "encode"));
+        for kind in ["entries", "commands", "changed_keys", "receipts"] {
+            metrics.batch.record(1, &with("kind", kind));
+        }
+        provider.force_flush().unwrap();
+        let exported = exported.0.lock().unwrap();
+        for (name, series) in [
+            ("flower.storage.operations", 1),
+            ("flower.storage.operation.duration", 1),
+            ("flower.storage.encoded.bytes", 1),
+            ("flower.storage.stage.duration", 9),
+            ("flower.storage.batch.size", 4),
+        ] {
+            let points = &exported[name];
+            assert_eq!(points.len(), series, "{name}");
+            for (attributes, count) in points {
+                assert_eq!(*count, 2, "{name} {attributes:?}");
+                assert_eq!(attributes["operation"], "leader_append");
+                assert_eq!(attributes["durability"], "none");
+                assert_eq!(attributes["outcome"], "ok");
+            }
+        }
+        assert!(super::bound(&"leader_append".to_owned(), "ok").is_some());
+        assert!(
+            super::bound("unknown", "ok").is_none() && super::bound("apply", "unknown").is_none()
+        );
+        assert!(
+            OPERATIONS
+                .iter()
+                .all(|operation| !durability(operation).is_empty())
+        );
     }
 }

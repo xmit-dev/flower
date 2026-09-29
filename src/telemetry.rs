@@ -3,6 +3,7 @@
 //! ordinary diagnostic logs keep their separate RUST_LOG filter.
 
 use std::{
+    cell::RefCell,
     future::Future,
     sync::{
         OnceLock,
@@ -19,7 +20,9 @@ use axum::{
 };
 use opentelemetry::{
     KeyValue, global,
-    metrics::{Counter, Histogram, UpDownCounter},
+    metrics::{
+        BoundCounter, BoundHistogram, BoundUpDownCounter, Counter, Histogram, UpDownCounter,
+    },
     propagation::{Extractor, Injector},
     trace::TracerProvider,
 };
@@ -33,6 +36,9 @@ use opentelemetry_sdk::{
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{Layer, filter::FilterExt, layer::SubscriberExt, util::SubscriberInitExt};
+
+mod sampling;
+pub use sampling::{context_of, records};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -146,9 +152,12 @@ pub fn init(node_id: u64, listen: &str) -> anyhow::Result<Telemetry> {
             .with_http()
             .with_protocol(config.metric_protocol)
             .build()?;
+        // The SDK samples with the same sampler that sampling::SampleFirst
+        // decided each trace with, and for the same trace id.
         let traces = SdkTracerProvider::builder()
             .with_resource(resource.clone())
-            .with_sampler(config.sampler)
+            .with_sampler(config.sampler.clone())
+            .with_id_generator(sampling::PresampledIds::default())
             .with_batch_exporter(span_exporter)
             .build();
         let metrics = SdkMeterProvider::builder()
@@ -164,18 +173,23 @@ pub fn init(node_id: u64, listen: &str) -> anyhow::Result<Telemetry> {
     };
     let log_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "flower=info,openraft=warn".into());
-    subscriber(traces.as_ref(), log_filter).try_init()?;
+    subscriber(
+        traces.as_ref().map(|traces| (traces, config.sampler)),
+        log_filter,
+    )
+    .try_init()?;
     ENABLED.store(config.enabled, Ordering::Relaxed);
     Ok(Telemetry { traces, metrics })
 }
 
+/// `traces` holds the provider and the sampler it was built with.
 fn subscriber(
-    traces: Option<&SdkTracerProvider>,
+    traces: Option<(&SdkTracerProvider, Sampler)>,
     log_filter: tracing_subscriber::EnvFilter,
 ) -> Box<dyn tracing::Subscriber + Send + Sync> {
     // With no exporter, use global filtering so rejected spans never reach the
     // registry at all, including when another thread uses a local subscriber.
-    let Some(provider) = traces else {
+    let Some((provider, sampler)) = traces else {
         return Box::new(
             tracing_subscriber::registry()
                 .with(log_filter)
@@ -194,14 +208,13 @@ fn subscriber(
     // registry entries for spans rejected by logging, even with OTEL disabled.
     // Likewise combine log filters before registration instead of nesting two
     // independently registered filters whose interests can enable each other.
+    // SampleFirst shows the OpenTelemetry layer only the spans of sampled
+    // traces; the per-layer filter shows both only `flower::otel` spans.
+    let otel = tracing_opentelemetry::layer().with_tracer(provider.tracer("flower"));
     Box::new(
-        logs.with(
-            tracing_opentelemetry::layer()
-                .with_tracer(provider.tracer("flower"))
-                .with_filter(tracing_subscriber::filter::filter_fn(|meta| {
-                    meta.target() == "flower::otel"
-                })),
-        ),
+        logs.with(sampling::SampleFirst::new(otel, sampler).with_filter(
+            tracing_subscriber::filter::filter_fn(|meta| meta.target() == "flower::otel"),
+        )),
     )
 }
 
@@ -249,7 +262,7 @@ pub fn inject(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     }
     let mut headers = OutgoingHeaders(HeaderMap::new());
     global::get_text_map_propagator(|p| {
-        p.inject_context(&tracing::Span::current().context(), &mut headers)
+        p.inject_context(&context_of(&tracing::Span::current()), &mut headers)
     });
     request.headers(headers.0)
 }
@@ -327,36 +340,119 @@ fn http_method(value: &str) -> &'static str {
     }
 }
 
+/// A route and method's instruments, bound on each thread when first used
+/// there: recording then builds no attribute set and takes no series-map lock.
+struct HttpBound {
+    route: Box<str>,
+    method: &'static str,
+    active: BoundUpDownCounter<i64>,
+    /// By outcome and status code.
+    durations: Vec<(&'static str, Option<u16>, BoundHistogram<f64>)>,
+}
+
+thread_local! {
+    static HTTP: RefCell<Vec<HttpBound>> = const { RefCell::new(Vec::new()) };
+    /// Stage histograms by kind, dimension, value and outcome (all literals, found by address).
+    static STAGES: RefCell<Vec<(StageKind, &'static str, &'static str, &'static str, BoundHistogram<f64>)>> =
+        const { RefCell::new(Vec::new()) };
+    /// Query cache counters by outcome (a literal, found by address).
+    static CACHE: RefCell<Vec<(&'static str, BoundCounter<u64>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A request's attributes; the outcome and status code are its duration's.
+fn http_attributes(
+    route: &str,
+    method: &'static str,
+    outcome: Option<(&'static str, Option<u16>)>,
+) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new("http.route", route.to_owned()),
+        KeyValue::new("http.request.method", method),
+    ];
+    if let Some((outcome, status)) = outcome {
+        attributes.push(KeyValue::new("outcome", outcome));
+        if let Some(status) = status {
+            attributes.push(KeyValue::new(
+                "http.response.status_code",
+                i64::from(status),
+            ));
+        }
+    }
+    attributes
+}
+
+/// Runs `f` on this thread's instruments for `route` and `method`, or returns
+/// false when the thread is exiting and they are gone.
+fn with_http(route: &str, method: &'static str, f: impl FnOnce(&mut HttpBound)) -> bool {
+    HTTP.try_with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let index = match cache
+            .iter()
+            .position(|bound| std::ptr::eq(bound.method, method) && &*bound.route == route)
+        {
+            Some(index) => index,
+            None => {
+                cache.push(HttpBound {
+                    route: route.into(),
+                    method,
+                    active: instruments()
+                        .active
+                        .bind(&http_attributes(route, method, None)),
+                    durations: Vec::new(),
+                });
+                cache.len() - 1
+            }
+        };
+        f(&mut cache[index]);
+    })
+    .is_ok()
+}
+
 struct HttpObservation {
     started: Instant,
-    attrs: Vec<KeyValue>,
+    route: Option<MatchedPath>,
+    method: &'static str,
     status: Option<u16>,
     span: tracing::Span,
 }
 impl Drop for HttpObservation {
     fn drop(&mut self) {
-        let meter = instruments();
-        meter.active.add(-1, &self.attrs);
         let outcome = match self.status {
             None => "cancelled",
             Some(s) if s >= 500 => "server_error",
             Some(s) if s >= 400 => "client_error",
             _ => "ok",
         };
-        self.attrs.push(KeyValue::new("outcome", outcome));
-        if let Some(status) = self.status {
-            self.attrs.push(KeyValue::new(
-                "http.response.status_code",
-                i64::from(status),
-            ));
-        }
         self.span.record("outcome", outcome);
         if self.status.is_none_or(|s| s >= 500) {
             self.span.record("otel.status_code", "ERROR");
         }
-        meter
-            .http_duration
-            .record(self.started.elapsed().as_secs_f64(), &self.attrs);
+        let seconds = self.started.elapsed().as_secs_f64();
+        let route = self.route.as_ref().map_or("unmatched", MatchedPath::as_str);
+        let (method, status) = (self.method, self.status);
+        let bound = with_http(route, method, |bound| {
+            bound.active.add(-1);
+            let index = match bound.durations.iter().position(|(known, known_status, _)| {
+                std::ptr::eq(*known, outcome) && *known_status == status
+            }) {
+                Some(index) => index,
+                None => {
+                    let attributes = http_attributes(route, method, Some((outcome, status)));
+                    let duration = instruments().http_duration.bind(&attributes);
+                    bound.durations.push((outcome, status, duration));
+                    bound.durations.len() - 1
+                }
+            };
+            bound.durations[index].2.record(seconds);
+        });
+        if !bound {
+            let meter = instruments();
+            meter.active.add(-1, &http_attributes(route, method, None));
+            meter.http_duration.record(
+                seconds,
+                &http_attributes(route, method, Some((outcome, status))),
+            );
+        }
     }
 }
 
@@ -365,24 +461,32 @@ pub async fn http(request: Request, next: Next) -> Response {
         return next.run(request).await;
     }
     // Matched route templates, never arbitrary URL paths or query strings.
-    let route = request
-        .extensions()
-        .get::<MatchedPath>()
-        .map_or("unmatched", MatchedPath::as_str)
-        .to_owned();
+    let matched = request.extensions().get::<MatchedPath>().cloned();
+    let route = matched.as_ref().map_or("unmatched", MatchedPath::as_str);
     let method = http_method(request.method().as_str());
-    let span = tracing::info_span!(target: "flower::otel", "flower.http.request", otel.kind="server", http.route=%route, http.request.method=method,
-        http.response.status_code=tracing::field::Empty, outcome=tracing::field::Empty, otel.status_code=tracing::field::Empty);
-    let parent = global::get_text_map_propagator(|p| p.extract(&Headers(request.headers())));
-    let _ = span.set_parent(parent);
-    let attrs = vec![
-        KeyValue::new("http.route", route),
-        KeyValue::new("http.request.method", method),
-    ];
-    instruments().active.add(1, &attrs);
+    let create = || {
+        tracing::info_span!(target: "flower::otel", "flower.http.request", otel.kind="server", http.route=%route, http.request.method=method,
+            http.response.status_code=tracing::field::Empty, outcome=tracing::field::Empty, otel.status_code=tracing::field::Empty)
+    };
+    // A request's traceparent decides its span's trace, and set_parent then
+    // gives the OpenTelemetry layer that parent when the trace is sampled.
+    let span = if request.headers().contains_key("traceparent") {
+        let parent = global::get_text_map_propagator(|p| p.extract(&Headers(request.headers())));
+        let span = sampling::with_remote_parent(&parent, create);
+        let _ = span.set_parent(parent);
+        span
+    } else {
+        create()
+    };
+    if !with_http(route, method, |bound| bound.active.add(1)) {
+        instruments()
+            .active
+            .add(1, &http_attributes(route, method, None));
+    }
     let mut observation = HttpObservation {
         started: Instant::now(),
-        attrs,
+        route: matched,
+        method,
         status: None,
         span: span.clone(),
     };
@@ -397,21 +501,75 @@ pub async fn http(request: Request, next: Next) -> Response {
 
 pub fn query_cache(outcome: &'static str) {
     if enabled() {
-        instruments()
-            .cache
-            .add(1, &[KeyValue::new("outcome", outcome)]);
+        let counted = CACHE.try_with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let index = match cache
+                .iter()
+                .position(|(known, _)| std::ptr::eq(*known, outcome))
+            {
+                Some(index) => index,
+                None => {
+                    let counter = instruments()
+                        .cache
+                        .bind(&[KeyValue::new("outcome", outcome)]);
+                    cache.push((outcome, counter));
+                    cache.len() - 1
+                }
+            };
+            cache[index].1.add(1);
+        });
+        if counted.is_err() {
+            instruments()
+                .cache
+                .add(1, &[KeyValue::new("outcome", outcome)]);
+        }
     }
 }
 
 pub fn query_duration(stage: &'static str, seconds: f64, outcome: &'static str) {
     if enabled() {
-        instruments().query_duration.record(
-            seconds,
-            &[
-                KeyValue::new("stage", stage),
-                KeyValue::new("outcome", outcome),
-            ],
-        );
+        stage_duration(StageKind::Query, "stage", stage, outcome, seconds);
+    }
+}
+
+/// Records a stage's duration in its kind's histogram, under `dimension` = `value` and `outcome`.
+fn stage_duration(
+    kind: StageKind,
+    dimension: &'static str,
+    value: &'static str,
+    outcome: &'static str,
+    seconds: f64,
+) {
+    let histogram = |metrics: &'static Instruments| match kind {
+        StageKind::Http => &metrics.http_stage_duration,
+        StageKind::Query => &metrics.query_duration,
+        StageKind::Rpc => &metrics.rpc_duration,
+    };
+    let attributes = || {
+        [
+            KeyValue::new(dimension, value),
+            KeyValue::new("outcome", outcome),
+        ]
+    };
+    let bound = STAGES.try_with(|stages| {
+        let mut stages = stages.borrow_mut();
+        let index = match stages.iter().position(|(known, d, v, o, _)| {
+            *known == kind
+                && std::ptr::eq(*d, dimension)
+                && std::ptr::eq(*v, value)
+                && std::ptr::eq(*o, outcome)
+        }) {
+            Some(index) => index,
+            None => {
+                let bound = histogram(instruments()).bind(&attributes());
+                stages.push((kind, dimension, value, outcome, bound));
+                stages.len() - 1
+            }
+        };
+        stages[index].4.record(seconds);
+    });
+    if bound.is_err() {
+        histogram(instruments()).record(seconds, &attributes());
     }
 }
 
@@ -424,6 +582,7 @@ struct StageObservation {
     kind: StageKind,
 }
 
+#[derive(Clone, Copy, PartialEq)]
 enum StageKind {
     Http,
     Query,
@@ -437,18 +596,12 @@ impl Drop for StageObservation {
             self.span
                 .set_status(opentelemetry::trace::Status::error(self.outcome));
         }
-        let metrics = instruments();
-        let histogram = match self.kind {
-            StageKind::Http => &metrics.http_stage_duration,
-            StageKind::Query => &metrics.query_duration,
-            StageKind::Rpc => &metrics.rpc_duration,
-        };
-        histogram.record(
+        stage_duration(
+            self.kind,
+            self.dimension,
+            self.value,
+            self.outcome,
             self.started.elapsed().as_secs_f64(),
-            &[
-                KeyValue::new(self.dimension, self.value),
-                KeyValue::new("outcome", self.outcome),
-            ],
         );
     }
 }
@@ -545,6 +698,27 @@ pub async fn raft_rpc<T, E>(
     result
 }
 
+/// The server's traces for tests: the provider `builder` builds with the
+/// server's sampling and ids, and the subscriber that feeds it.
+#[cfg(test)]
+pub(crate) fn traced_for_test(
+    builder: opentelemetry_sdk::trace::TracerProviderBuilder,
+    sampler: Sampler,
+) -> (
+    SdkTracerProvider,
+    Box<dyn tracing::Subscriber + Send + Sync>,
+) {
+    let provider = builder
+        .with_sampler(sampler.clone())
+        .with_id_generator(sampling::PresampledIds::default())
+        .build();
+    let subscriber = subscriber(
+        Some((&provider, sampler)),
+        tracing_subscriber::EnvFilter::new("off"),
+    );
+    (provider, subscriber)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,7 +782,10 @@ mod tests {
     fn otel_and_logging_filters_remain_independent() {
         let traces = SdkTracerProvider::default();
         tracing::subscriber::with_default(
-            subscriber(Some(&traces), tracing_subscriber::EnvFilter::new("off")),
+            subscriber(
+                Some((&traces, Sampler::AlwaysOn)),
+                tracing_subscriber::EnvFilter::new("off"),
+            ),
             || {
                 assert!(!tracing::info_span!(target: "flower::otel", "included").is_disabled());
                 assert!(tracing::info_span!(target: "flower", "ordinary").is_disabled());
@@ -691,5 +868,270 @@ mod tests {
         propagator.inject_context(&context, &mut outgoing);
         assert_eq!(outgoing.0.get("traceparent"), headers.get("traceparent"));
         assert!(!outgoing.0.contains_key("baggage"));
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct Exported(std::sync::Arc<std::sync::Mutex<Vec<opentelemetry_sdk::trace::SpanData>>>);
+
+    impl opentelemetry_sdk::trace::SpanExporter for Exported {
+        async fn export(
+            &self,
+            spans: Vec<opentelemetry_sdk::trace::SpanData>,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            self.0.lock().unwrap().extend(spans);
+            Ok(())
+        }
+    }
+
+    /// The server's subscriber, exporting what `sampler` samples.
+    fn traced(
+        sampler: Sampler,
+    ) -> (
+        SdkTracerProvider,
+        Exported,
+        Box<dyn tracing::Subscriber + Send + Sync>,
+    ) {
+        let exported = Exported::default();
+        let (provider, subscriber) = traced_for_test(
+            SdkTracerProvider::builder().with_simple_exporter(exported.clone()),
+            sampler,
+        );
+        (provider, exported, subscriber)
+    }
+
+    fn span_context(span: &tracing::Span) -> opentelemetry::trace::SpanContext {
+        use opentelemetry::trace::TraceContextExt;
+        context_of(span).span().span_context().clone()
+    }
+
+    fn traceparent(span: &tracing::Span) -> String {
+        use opentelemetry::propagation::TextMapPropagator;
+        let mut outgoing = OutgoingHeaders(HeaderMap::new());
+        TraceContextPropagator::new().inject_context(&context_of(span), &mut outgoing);
+        outgoing.0["traceparent"].to_str().unwrap().to_owned()
+    }
+
+    fn samples(sampler: &Sampler, trace_id: opentelemetry::trace::TraceId) -> bool {
+        use opentelemetry::trace::SpanKind;
+        use opentelemetry_sdk::trace::{SamplingDecision, ShouldSample};
+        sampler
+            .should_sample(None, trace_id, "root", &SpanKind::Internal, &[], &[])
+            .decision
+            == SamplingDecision::RecordAndSample
+    }
+
+    #[test]
+    fn traces_are_decided_at_their_root_as_the_sdk_decides_them() {
+        let ratio = Sampler::TraceIdRatioBased(0.5);
+        let (provider, exported, subscriber) =
+            traced(Sampler::ParentBased(Box::new(ratio.clone())));
+        let mut sampled = std::collections::HashMap::new();
+        tracing::subscriber::with_default(subscriber, || {
+            for index in 0..400 {
+                let root = tracing::info_span!(target: "flower::otel", "root", index);
+                let root_context = span_context(&root);
+                assert!(root_context.is_valid());
+                // The SDK built the root with the trace id it was decided with.
+                assert_eq!(records(&root), root_context.is_sampled());
+                assert_eq!(
+                    samples(&ratio, root_context.trace_id()),
+                    root_context.is_sampled()
+                );
+                let child =
+                    root.in_scope(|| tracing::info_span!(target: "flower::otel", "child", index));
+                let grandchild =
+                    tracing::info_span!(target: "flower::otel", parent: &child, "grandchild");
+                // A root created in another trace's scope, as writer batches are.
+                let other = root.in_scope(
+                    || tracing::info_span!(target: "flower::otel", parent: None, "other"),
+                );
+                grandchild.in_scope(|| {});
+                for span in [&child, &grandchild] {
+                    let context = span_context(span);
+                    assert_eq!(context.trace_id(), root_context.trace_id());
+                    assert_eq!(context.is_sampled(), root_context.is_sampled());
+                    assert_ne!(context.span_id(), root_context.span_id());
+                    assert_eq!(records(span), root_context.is_sampled());
+                }
+                let other_context = span_context(&other);
+                assert_ne!(other_context.trace_id(), root_context.trace_id());
+                assert_eq!(
+                    samples(&ratio, other_context.trace_id()),
+                    other_context.is_sampled()
+                );
+                if root_context.is_sampled() {
+                    sampled.insert(root_context.trace_id(), root_context.span_id());
+                }
+                if other_context.is_sampled() {
+                    sampled.insert(other_context.trace_id(), other_context.span_id());
+                }
+            }
+        });
+        provider.force_flush().unwrap();
+        // 800 roots at 0.5: far outside 300–500 only if decisions ignore the ratio.
+        assert!((300..=500).contains(&sampled.len()), "{}", sampled.len());
+        let spans = exported.0.lock().unwrap();
+        let roots = spans
+            .iter()
+            .filter(|span| span.name == "root" || span.name == "other")
+            .count();
+        assert_eq!(roots, sampled.len());
+        for span in spans.iter() {
+            let root = sampled[&span.span_context.trace_id()];
+            match span.name.as_ref() {
+                "root" | "other" => assert_eq!(span.span_context.span_id(), root),
+                "child" => assert_eq!(span.parent_span_id, root),
+                _ => assert_ne!(span.parent_span_id, root),
+            }
+        }
+        let children = spans.iter().filter(|span| span.name == "child").count();
+        assert_eq!(spans.len(), roots + 2 * children);
+    }
+
+    #[test]
+    fn a_remote_traceparent_decides_the_trace_and_unsampled_spans_still_propagate() {
+        use opentelemetry::trace::TraceContextExt;
+        use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
+        let (provider, exported, subscriber) =
+            traced(Sampler::ParentBased(Box::new(Sampler::AlwaysOff)));
+        let remote = |trace: u128, flags| {
+            opentelemetry::Context::new().with_remote_span_context(SpanContext::new(
+                TraceId::from(trace),
+                SpanId::from(7u64),
+                flags,
+                true,
+                TraceState::default(),
+            ))
+        };
+        let request = |parent: &opentelemetry::Context| {
+            let span = sampling::with_remote_parent(
+                parent,
+                || tracing::info_span!(target: "flower::otel", "request"),
+            );
+            let _ = span.set_parent(parent.clone());
+            span
+        };
+        tracing::subscriber::with_default(subscriber, || {
+            let sampled = request(&remote(1, TraceFlags::SAMPLED));
+            let child = sampled.in_scope(|| tracing::info_span!(target: "flower::otel", "work"));
+            assert!(records(&sampled) && records(&child));
+            assert_eq!(span_context(&child).trace_id(), TraceId::from(1u128));
+            assert!(span_context(&child).is_sampled());
+
+            let unsampled = request(&remote(2, TraceFlags::default()));
+            let child = unsampled.in_scope(|| tracing::info_span!(target: "flower::otel", "work"));
+            assert!(!records(&unsampled) && !records(&child));
+            let (parent, context) = (span_context(&unsampled), span_context(&child));
+            assert_eq!(parent.trace_id(), TraceId::from(2u128));
+            assert_eq!(context.trace_id(), TraceId::from(2u128));
+            assert_ne!(context.span_id(), parent.span_id());
+            assert_ne!(context.span_id(), SpanId::from(7u64));
+            // What telemetry::inject sends from inside the unsampled request.
+            assert_eq!(
+                child.in_scope(|| traceparent(&tracing::Span::current())),
+                format!("00-{}-{}-00", context.trace_id(), context.span_id())
+            );
+
+            // A local root the sampler drops still has ids to propagate.
+            let local = tracing::info_span!(target: "flower::otel", "local");
+            let context = span_context(&local);
+            assert!(context.is_valid() && !context.is_sampled());
+            assert_eq!(
+                traceparent(&local),
+                format!("00-{}-{}-00", context.trace_id(), context.span_id())
+            );
+            drop((sampled, unsampled, local));
+        });
+        provider.force_flush().unwrap();
+        let spans = exported.0.lock().unwrap();
+        assert_eq!(spans.len(), 2, "only the sampled remote trace exports");
+        let request = spans.iter().find(|span| span.name == "request").unwrap();
+        assert_eq!(request.span_context.trace_id(), TraceId::from(1u128));
+        assert_eq!(request.parent_span_id, SpanId::from(7u64));
+        assert!(request.parent_span_is_remote);
+        let work = spans.iter().find(|span| span.name == "work").unwrap();
+        assert_eq!(work.parent_span_id, request.span_context.span_id());
+    }
+}
+
+/// Metric points as the SDK exports them, for tests: by instrument name, each
+/// point's attributes and its count (histograms) or value (sums).
+#[cfg(test)]
+pub(crate) mod exported_metrics {
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use opentelemetry_sdk::{
+        error::OTelSdkResult,
+        metrics::{
+            SdkMeterProvider, Temporality,
+            data::{AggregatedMetrics, MetricData, ResourceMetrics},
+            exporter::PushMetricExporter,
+        },
+    };
+
+    pub(crate) type Points = BTreeMap<String, Vec<(BTreeMap<String, String>, u64)>>;
+
+    #[derive(Clone, Debug, Default)]
+    pub(crate) struct Exported(pub(crate) Arc<Mutex<Points>>);
+
+    pub(crate) fn provider() -> (SdkMeterProvider, Exported) {
+        let exported = Exported::default();
+        let provider = SdkMeterProvider::builder()
+            .with_periodic_exporter(exported.clone())
+            .build();
+        (provider, exported)
+    }
+
+    fn attributes<'a>(
+        values: impl Iterator<Item = &'a opentelemetry::KeyValue>,
+    ) -> BTreeMap<String, String> {
+        values
+            .map(|value| (value.key.to_string(), value.value.as_str().into_owned()))
+            .collect()
+    }
+
+    impl PushMetricExporter for Exported {
+        async fn export(&self, metrics: &ResourceMetrics) -> OTelSdkResult {
+            let mut captured = self.0.lock().unwrap();
+            for metric in metrics.scope_metrics().flat_map(|scope| scope.metrics()) {
+                let points = match metric.data() {
+                    AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
+                        .data_points()
+                        .map(|point| (attributes(point.attributes()), point.count()))
+                        .collect(),
+                    AggregatedMetrics::U64(MetricData::Histogram(histogram)) => histogram
+                        .data_points()
+                        .map(|point| (attributes(point.attributes()), point.count()))
+                        .collect(),
+                    AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+                        .data_points()
+                        .map(|point| (attributes(point.attributes()), point.value()))
+                        .collect(),
+                    AggregatedMetrics::I64(MetricData::Sum(sum)) => sum
+                        .data_points()
+                        .map(|point| (attributes(point.attributes()), point.value() as u64))
+                        .collect(),
+                    _ => continue,
+                };
+                captured.insert(metric.name().into(), points);
+            }
+            Ok(())
+        }
+
+        fn force_flush(&self) -> OTelSdkResult {
+            Ok(())
+        }
+
+        fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+            Ok(())
+        }
+
+        fn temporality(&self) -> Temporality {
+            Temporality::Cumulative
+        }
     }
 }

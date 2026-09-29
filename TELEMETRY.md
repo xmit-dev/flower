@@ -28,6 +28,13 @@ variables are set. Ratio arguments must be finite numbers from zero to one.
 Metrics are independent of trace sampling. `always_off` gives metrics without
 exporting spans. Remote sampled trace parents are honored by parent-based
 sampling, so that percentage is the root sampling probability, not a hard cap.
+Flower decides a trace once, when its root span starts, with the configured
+sampler and the trace ID the SDK then builds that root with; a span follows its
+parent's decision. Only spans of sampled traces reach the OpenTelemetry layer,
+so an unsampled span costs no attributes, timings or SDK span: it keeps just
+its trace and span IDs, which outgoing `traceparent` headers and batch links
+carry as they would from an SDK span that was not recording. Metric instruments
+are bound to their bounded attribute sets once, so recording builds none.
 
 Each resource includes service name/version, a unique service instance
 (`listen/node/pid`), node ID, listen address, and process PID. Custom resource

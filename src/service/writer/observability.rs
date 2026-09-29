@@ -4,10 +4,10 @@
 use super::*;
 use opentelemetry::{
     KeyValue,
-    metrics::{Counter, Histogram},
+    metrics::{BoundCounter, BoundHistogram, Counter, Histogram},
     trace::TraceContextExt,
 };
-use std::sync::OnceLock;
+use std::{cell::RefCell, sync::OnceLock};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 struct Instruments {
@@ -98,42 +98,151 @@ pub(super) fn count(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+/// Maintenance turns and wakes, each bound once per value of their one
+/// bounded attribute; a value outside the set records unbound.
+fn bounded_add<const N: usize>(
+    counter: &Counter<u64>,
+    bound: &'static [OnceLock<BoundCounter<u64>>; N],
+    values: [&'static str; N],
+    key: &'static str,
+    value: &'static str,
+) {
+    match values.iter().position(|known| *known == value) {
+        Some(index) => bound[index]
+            .get_or_init(|| counter.bind(&[KeyValue::new(key, value)]))
+            .add(1),
+        None => counter.add(1, &[KeyValue::new(key, value)]),
+    }
+}
+
 pub(super) fn maintenance_run(outcome: &'static str) {
     if let Some(metrics) = instruments() {
-        metrics
-            .maintenance_runs
-            .add(1, &[KeyValue::new("outcome", outcome)]);
+        static BOUND: [OnceLock<BoundCounter<u64>>; 5] = [const { OnceLock::new() }; 5];
+        bounded_add(
+            &metrics.maintenance_runs,
+            &BOUND,
+            ["idle", "committed", "failed", "follower", "skipped"],
+            "outcome",
+            outcome,
+        );
     }
 }
 
 pub(super) fn maintenance_wake(reason: &'static str) {
     if let Some(metrics) = instruments() {
-        metrics
-            .maintenance_wakes
-            .add(1, &[KeyValue::new("reason", reason)]);
+        static BOUND: [OnceLock<BoundCounter<u64>>; 3] = [const { OnceLock::new() }; 3];
+        bounded_add(
+            &metrics.maintenance_wakes,
+            &BOUND,
+            ["write", "unrelated", "leadership"],
+            "reason",
+            reason,
+        );
     }
+}
+
+thread_local! {
+    /// Stage histograms bound per (stage, execution), both from the bounded
+    /// set of literals the writer passes, found by address: recording a stage
+    /// then builds no attribute set and takes no series-map lock. A literal
+    /// at two addresses only binds the same series twice.
+    static STAGES: RefCell<Vec<(&'static str, &'static str, BoundHistogram<f64>)>> =
+        const { RefCell::new(Vec::new()) };
+    /// Batch counters bound per (outcome, stop_reason, mode, successor, early_drain), likewise.
+    static BATCHES: RefCell<Vec<(BatchKey, BoundCounter<u64>)>> = const { RefCell::new(Vec::new()) };
 }
 
 pub(super) fn stage(stage: &'static str, duration: Duration, execution: &'static str) {
     if let Some(metrics) = instruments() {
-        metrics.stage.record(
-            duration.as_secs_f64(),
-            &[
+        let attributes = || {
+            [
                 KeyValue::new("stage", stage),
                 KeyValue::new("execution", execution),
-            ],
-        );
+            ]
+        };
+        let seconds = duration.as_secs_f64();
+        let bound = STAGES.try_with(|stages| {
+            let mut stages = stages.borrow_mut();
+            let index = match stages.iter().position(|(known, known_execution, _)| {
+                std::ptr::eq(*known, stage) && std::ptr::eq(*known_execution, execution)
+            }) {
+                Some(index) => index,
+                None => {
+                    stages.push((stage, execution, metrics.stage.bind(&attributes())));
+                    stages.len() - 1
+                }
+            };
+            stages[index].2.record(seconds);
+        });
+        if bound.is_err() {
+            // This thread's bound instruments are gone: it is exiting.
+            metrics.stage.record(seconds, &attributes());
+        }
+    }
+}
+
+const OUTCOMES: [&str; 4] = ["ok", "client_error", "server_error", "cancelled"];
+
+/// A batch counter's attributes.
+#[derive(Clone, Copy)]
+struct BatchKey {
+    outcome: &'static str,
+    stop_reason: &'static str,
+    mode: &'static str,
+    successor: bool,
+    early_drain: bool,
+}
+
+impl BatchKey {
+    fn same(&self, other: &Self) -> bool {
+        std::ptr::eq(self.outcome, other.outcome)
+            && std::ptr::eq(self.stop_reason, other.stop_reason)
+            && std::ptr::eq(self.mode, other.mode)
+            && self.successor == other.successor
+            && self.early_drain == other.early_drain
+    }
+
+    fn attributes(&self) -> [KeyValue; 5] {
+        [
+            KeyValue::new("outcome", self.outcome),
+            KeyValue::new("stop_reason", self.stop_reason),
+            KeyValue::new("mode", self.mode),
+            KeyValue::new("successor", self.successor),
+            KeyValue::new("early_drain", self.early_drain),
+        ]
     }
 }
 
 pub(super) fn request(duration: Duration, deployment: bool, outcome: &'static str) {
     if let Some(metrics) = instruments() {
-        let attributes = [
-            KeyValue::new("kind", kind(deployment)),
-            KeyValue::new("outcome", outcome),
-        ];
-        metrics.request.record(duration.as_secs_f64(), &attributes);
-        metrics.requests.add(1, &attributes);
+        // Each kind and outcome is bound once, when first recorded.
+        static BOUND: [OnceLock<(BoundHistogram<f64>, BoundCounter<u64>)>; 2 * OUTCOMES.len()] =
+            [const { OnceLock::new() }; 2 * OUTCOMES.len()];
+        let attributes = || {
+            [
+                KeyValue::new("kind", kind(deployment)),
+                KeyValue::new("outcome", outcome),
+            ]
+        };
+        match OUTCOMES.iter().position(|known| *known == outcome) {
+            Some(index) => {
+                let (request, requests) = BOUND[usize::from(deployment) * OUTCOMES.len() + index]
+                    .get_or_init(|| {
+                        let attributes = attributes();
+                        (
+                            metrics.request.bind(&attributes),
+                            metrics.requests.bind(&attributes),
+                        )
+                    });
+                request.record(duration.as_secs_f64());
+                requests.add(1);
+            }
+            None => {
+                let attributes = attributes();
+                metrics.request.record(duration.as_secs_f64(), &attributes);
+                metrics.requests.add(1, &attributes);
+            }
+        }
     }
 }
 
@@ -181,13 +290,14 @@ pub(super) fn speculation(outcome: &'static str, count: usize) {
 }
 
 pub(super) fn link(span: &tracing::Span, request: &tracing::Span) {
-    if crate::telemetry::enabled() {
+    if crate::telemetry::enabled() && crate::telemetry::records(span) {
         link_request_context(span, request);
     }
 }
 
 fn link_request_context(span: &tracing::Span, request: &tracing::Span) {
-    let context = request.context();
+    // An unsampled request keeps its trace's ids, which a sampled batch links to.
+    let context = crate::telemetry::context_of(request);
     let parent = context.span();
     let context = parent.span_context();
     if context.is_valid() {
@@ -211,8 +321,11 @@ fn linked_batch<'a>(requests: impl Iterator<Item = &'a tracing::Span>) -> tracin
         errors = tracing::field::Empty, stop_reason = tracing::field::Empty,
         status = tracing::field::Empty, speculative_candidates = tracing::field::Empty,
         speculative_reused = tracing::field::Empty);
-    for request in requests {
-        link_request_context(&span, request);
+    // Only a batch of a sampled trace exports its links.
+    if crate::telemetry::records(&span) {
+        for request in requests {
+            link_request_context(&span, request);
+        }
     }
     span
 }
@@ -239,54 +352,81 @@ pub(super) fn batch_completed(
         .filter(|result| result.is_err())
         .count();
     let status = outcome(committed);
-    group
-        .trace
-        .record("requests", self::count(group.results.len()));
-    group.trace.record("commands", self::count(count));
-    group.trace.record("bytes", self::count(group.bytes));
-    group.trace.record("duplicates", self::count(duplicates));
-    group.trace.record("errors", self::count(errors));
-    group.trace.record("stop_reason", group.stop_reason);
-    self::status(&group.trace, status);
-    group.trace.record(
-        "speculative_candidates",
-        self::count(group.speculative_candidates),
-    );
-    group
-        .trace
-        .record("speculative_reused", self::count(group.speculative_reused));
-    metrics.batches.add(
-        1,
-        &[
-            KeyValue::new("outcome", status),
-            KeyValue::new("stop_reason", group.stop_reason),
-            KeyValue::new("mode", group.decision.mode),
-            KeyValue::new("successor", group.successor),
-            KeyValue::new("early_drain", group.early_drain),
-        ],
-    );
-    for (component, count) in [
-        ("requests", group.results.len()),
-        ("commands", count),
-        ("duplicates", duplicates),
-        ("errors", errors),
-        ("deferred", group.deferred),
-        ("target", group.decision.count),
-    ] {
-        metrics
-            .batch_size
-            .record(count as u64, &[KeyValue::new("component", component)]);
+    // An unsampled batch's span records nothing: skip building its fields.
+    if crate::telemetry::records(&group.trace) {
+        group
+            .trace
+            .record("requests", self::count(group.results.len()));
+        group.trace.record("commands", self::count(count));
+        group.trace.record("bytes", self::count(group.bytes));
+        group.trace.record("duplicates", self::count(duplicates));
+        group.trace.record("errors", self::count(errors));
+        group.trace.record("stop_reason", group.stop_reason);
+        self::status(&group.trace, status);
+        group.trace.record(
+            "speculative_candidates",
+            self::count(group.speculative_candidates),
+        );
+        group
+            .trace
+            .record("speculative_reused", self::count(group.speculative_reused));
+    }
+    let key = BatchKey {
+        outcome: status,
+        stop_reason: group.stop_reason,
+        mode: group.decision.mode,
+        successor: group.successor,
+        early_drain: group.early_drain,
+    };
+    let counted = BATCHES.try_with(|batches| {
+        let mut batches = batches.borrow_mut();
+        let index = match batches.iter().position(|(known, _)| known.same(&key)) {
+            Some(index) => index,
+            None => {
+                batches.push((key, metrics.batches.bind(&key.attributes())));
+                batches.len() - 1
+            }
+        };
+        batches[index].1.add(1);
+    });
+    if counted.is_err() {
+        metrics.batches.add(1, &key.attributes());
+    }
+    // Every batch records every component and lag kind, so they are bound together, at the first batch.
+    static BOUND: OnceLock<([BoundHistogram<u64>; 6], [BoundHistogram<u64>; 2])> = OnceLock::new();
+    let (sizes, lags) = BOUND.get_or_init(|| {
+        let components = [
+            "requests",
+            "commands",
+            "duplicates",
+            "errors",
+            "deferred",
+            "target",
+        ];
+        (
+            components.map(|component| {
+                metrics
+                    .batch_size
+                    .bind(&[KeyValue::new("component", component)])
+            }),
+            ["local_unapplied", "quorum_unmatched"]
+                .map(|kind| metrics.lag.bind(&[KeyValue::new("kind", kind)])),
+        )
+    });
+    for (size, count) in sizes.iter().zip([
+        group.results.len(),
+        count,
+        duplicates,
+        errors,
+        group.deferred,
+        group.decision.count,
+    ]) {
+        size.record(count as u64);
     }
     metrics.batch_bytes.record(group.bytes as u64, &[]);
     metrics.queued.record(group.decision.queued as u64, &[]);
-    metrics.lag.record(
-        group.decision.lag.local_unapplied,
-        &[KeyValue::new("kind", "local_unapplied")],
-    );
-    metrics.lag.record(
-        group.decision.lag.quorum_unmatched,
-        &[KeyValue::new("kind", "quorum_unmatched")],
-    );
+    lags[0].record(group.decision.lag.local_unapplied);
+    lags[1].record(group.decision.lag.quorum_unmatched);
     for (name, micros) in [
         ("snapshot_read", group.read_us),
         ("batch_prepare", group.prepare_us),
@@ -306,12 +446,11 @@ pub(super) fn batch_completed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opentelemetry::trace::{SpanId, TracerProvider};
+    use opentelemetry::trace::SpanId;
     use opentelemetry_sdk::{
         error::OTelSdkResult,
         trace::{Sampler, SdkTracerProvider, SpanData, SpanExporter},
     };
-    use tracing_subscriber::layer::SubscriberExt;
 
     #[derive(Clone, Debug, Default)]
     struct Exported(Arc<std::sync::Mutex<Vec<SpanData>>>);
@@ -326,19 +465,21 @@ mod tests {
     #[test]
     fn batches_link_all_requests_without_inheriting_the_active_request_parent() {
         let exported = Exported::default();
-        let provider = SdkTracerProvider::builder()
-            .with_sampler(Sampler::AlwaysOn)
-            .with_simple_exporter(exported.clone())
-            .build();
-        let subscriber = tracing_subscriber::registry()
-            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("writer-test")));
+        let (provider, subscriber) = crate::telemetry::traced_for_test(
+            SdkTracerProvider::builder().with_simple_exporter(exported.clone()),
+            Sampler::AlwaysOn,
+        );
         let contexts = tracing::subscriber::with_default(subscriber, || {
-            let first = tracing::info_span!(parent: None, "request.first");
-            let second = tracing::info_span!(parent: None, "request.second");
-            let contexts = [
-                first.context().span().span_context().clone(),
-                second.context().span().span_context().clone(),
-            ];
+            let first = tracing::info_span!(target: "flower::otel", parent: None, "request.first");
+            let second =
+                tracing::info_span!(target: "flower::otel", parent: None, "request.second");
+            let context = |span: &tracing::Span| {
+                crate::telemetry::context_of(span)
+                    .span()
+                    .span_context()
+                    .clone()
+            };
+            let contexts = [context(&first), context(&second)];
             // A group may be assembled while some caller's span is active. It
             // still represents both requests and must start a separate trace.
             first.in_scope(|| {
@@ -367,5 +508,77 @@ mod tests {
                 .any(|attribute| attribute.key.as_str() == "requests"
                     && attribute.value == opentelemetry::Value::I64(2))
         );
+    }
+
+    #[test]
+    fn a_sampled_batch_links_the_requests_of_unsampled_traces() {
+        use crate::telemetry::context_of;
+        let span_context = |span: &tracing::Span| context_of(span).span().span_context().clone();
+        let exported = Exported::default();
+        let (provider, subscriber) = crate::telemetry::traced_for_test(
+            SdkTracerProvider::builder().with_simple_exporter(exported.clone()),
+            Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(0.5))),
+        );
+        let links = tracing::subscriber::with_default(subscriber, || {
+            let requests: Vec<_> =
+                std::iter::repeat_with(|| tracing::info_span!(target: "flower::otel", "request"))
+                    .filter(|request| !span_context(request).is_sampled())
+                    .take(2)
+                    .collect();
+            let batch = std::iter::repeat_with(|| linked_batch(requests.iter()))
+                .find(|batch| span_context(batch).is_sampled())
+                .unwrap();
+            drop(batch);
+            requests.iter().map(span_context).collect::<Vec<_>>()
+        });
+        provider.force_flush().unwrap();
+        let spans = exported.0.lock().unwrap();
+        // The sampled requests the filter passed over export too; one batch does.
+        let batches: Vec<_> = spans
+            .iter()
+            .filter(|span| span.name == "flower.writer.batch")
+            .collect();
+        assert_eq!(batches.len(), 1);
+        let linked: Vec<_> = batches[0]
+            .links
+            .links
+            .iter()
+            .map(|link| link.span_context.clone())
+            .collect();
+        assert_eq!(linked.len(), 2);
+        assert_eq!(linked, links);
+        assert!(
+            linked
+                .iter()
+                .all(|link| link.is_valid() && !link.is_sampled())
+        );
+    }
+    #[test]
+    fn bound_maintenance_counts_land_in_the_series_unbound_counts_did() {
+        use opentelemetry::metrics::MeterProvider;
+        let (provider, exported) = crate::telemetry::exported_metrics::provider();
+        let meter = provider.meter("maintenance-test");
+        let bound_runs = meter.u64_counter("runs.bound").build();
+        let unbound_runs = meter.u64_counter("runs.unbound").build();
+        static BOUND: [OnceLock<BoundCounter<u64>>; 2] = [const { OnceLock::new() }; 2];
+        for outcome in ["idle", "idle", "committed", "unknown"] {
+            bounded_add(
+                &bound_runs,
+                &BOUND,
+                ["idle", "committed"],
+                "outcome",
+                outcome,
+            );
+            unbound_runs.add(1, &[KeyValue::new("outcome", outcome)]);
+        }
+        provider.force_flush().unwrap();
+        let exported = exported.0.lock().unwrap();
+        let series = |name: &str| {
+            let mut points = exported[name].clone();
+            points.sort();
+            points
+        };
+        assert_eq!(series("runs.bound").len(), 3);
+        assert_eq!(series("runs.bound"), series("runs.unbound"));
     }
 }

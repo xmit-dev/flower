@@ -410,10 +410,14 @@ impl Drop for Invocation {
             let metrics = bound_metrics(&self.mode, outcome_index);
             metrics.invocations.add(1);
             metrics.duration.record(total);
-            self.span.record("total_seconds", total);
-            self.span.record("outcome", outcome);
-            if outcome != "ok" {
-                self.span.record("otel.status_code", "ERROR");
+            // An unsampled span records nothing: skip building its fields.
+            let recording = crate::telemetry::records(&self.span);
+            if recording {
+                self.span.record("total_seconds", total);
+                self.span.record("outcome", outcome);
+                if outcome != "ok" {
+                    self.span.record("otel.status_code", "ERROR");
+                }
             }
             let seconds = |stage: Stage| {
                 self.stages[stage as usize].load(Ordering::Relaxed) as f64 / 1_000_000_000.0
@@ -451,7 +455,9 @@ impl Drop for Invocation {
                     seconds(Stage::ResultValidation),
                 ),
             ] {
-                self.span.record(field, value);
+                if recording {
+                    self.span.record(field, value);
+                }
             }
             for ((kind, value), metric) in [
                 ("cells", self.cells.load(Ordering::Relaxed)),
@@ -472,8 +478,10 @@ impl Drop for Invocation {
                 metric.record(value);
                 // OTEL attributes are signed; u64 falls back to a string in
                 // the tracing OTEL visitor. Keep histogram counters unsigned.
-                self.span
-                    .record(kind, i64::try_from(value).unwrap_or(i64::MAX));
+                if recording {
+                    self.span
+                        .record(kind, i64::try_from(value).unwrap_or(i64::MAX));
+                }
             }
             for ((field, value), metric) in [
                 (
@@ -489,8 +497,10 @@ impl Drop for Invocation {
             .zip(&metrics.memory)
             {
                 metric.record(value);
-                self.span
-                    .record(field, i64::try_from(value).unwrap_or(i64::MAX));
+                if recording {
+                    self.span
+                        .record(field, i64::try_from(value).unwrap_or(i64::MAX));
+                }
             }
         }
         if !self.legacy {
