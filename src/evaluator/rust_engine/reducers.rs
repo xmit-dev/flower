@@ -31,7 +31,15 @@ impl Engine<'_> {
             &json!({"kind":"query","collection":index.collection,"fields":index.fields,"value":args}),
         )?;
         let bucket = indexes::bucket_id(&query.collection, &query.fields, &query.expected);
-        self.observe(observed, bucket.clone())?;
+        // The cell depends on its bucket, whose changes graph maintenance feeds it. An optimistic
+        // write's certificate stamps the bucket's entries only when the group is built from its rows
+        // (below). Going on from a kept accumulator, the result is the reducer's over that
+        // accumulator and this write's own row changes, which the certificate holds already: ensure
+        // stamped the cell, whose version changes with every write that changes the accumulator,
+        // and each row and index entry this write writes is stamped as it is written. Stamping the
+        // bucket as well would walk every entry of the group (a month of an organization's usage
+        // on Ultimator) only to add conflicts with writes that left the accumulator as it was.
+        self.depend(observed, bucket.clone())?;
         // A new bundle rebuilds a group from its rows, unless the aggregate kept the version (and
         // index) its accumulator was built with: then it goes on from the accumulator.
         let kept = !self.preview.rebuild_aggregates
@@ -53,6 +61,8 @@ impl Engine<'_> {
                 .cloned()
                 .unwrap_or_default()
         } else {
+            // Which rows the group holds, as a query over the bucket would.
+            self.speculative_read(&bucket);
             let rows = self.indexed_rows(&query)?;
             // The cell depends on its bucket, which graph maintenance feeds
             // every row change within, but a certificate checks the bucket by

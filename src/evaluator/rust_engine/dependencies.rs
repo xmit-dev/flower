@@ -270,26 +270,28 @@ impl Engine<'_> {
         if certificate.checks.contains_key(&id) {
             return;
         }
-        let mut cost = 192usize
+        let cost = 192usize
             .saturating_add(id.len())
             .saturating_add(marker.len());
-        let mut entries = Vec::new();
-        let mut overflow = false;
-        for version in self.base.range_versions::<(Bound<&str>, Bound<&str>)>((
-            Bound::Included(lower),
-            Bound::Excluded(upper),
-        )) {
-            cost = cost.saturating_add(8);
-            if self.total_retained_bytes().saturating_add(cost) > self.retained_limit {
-                overflow = true;
-                break;
-            }
-            entries.push(version);
-        }
-        if overflow {
+        // Each entry costs 8 bytes more: walk no further than the budget
+        // leaves room for, and one more to know whether it overflows.
+        let room = self
+            .retained_limit
+            .saturating_sub(self.total_retained_bytes().saturating_add(cost))
+            / 8;
+        let entries: Vec<u64> = self
+            .base
+            .range_versions::<(Bound<&str>, Bound<&str>)>((
+                Bound::Included(lower),
+                Bound::Excluded(upper),
+            ))
+            .take(room.saturating_add(1))
+            .collect();
+        if entries.len() > room {
             self.marker_read(marker);
             return;
         }
+        let cost = cost.saturating_add(entries.len().saturating_mul(8));
         let stamp = Stamp::Window {
             marker: Mutex::new(self.base.generation(&marker)),
             index: marker,

@@ -362,6 +362,17 @@ impl Engine<'_> {
         dependency: String,
     ) -> EngineResult<()> {
         self.speculative_read(&dependency);
+        self.depend(observed, dependency)
+    }
+
+    /// Make the cell being evaluated depend on `dependency`, as `observe`
+    /// does, without stamping it into an optimistic write's certificate: for
+    /// what the cell's own stamp already covers (reducers.rs).
+    pub(super) fn depend(
+        &mut self,
+        observed: &mut BTreeSet<Key>,
+        dependency: String,
+    ) -> EngineResult<()> {
         let dependency = Key(dependency);
         if observed.contains(&dependency) {
             return Ok(());

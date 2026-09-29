@@ -290,4 +290,98 @@ mod tests {
         assert!(!Interest::never().touched_by(&global(None, 11)));
         assert!(!Interest::never().touched_by(&global(Some(vec!["bundle".into()]), 11)));
     }
+
+    const KEPT: &str = r#"var __flowerBundle={default:{collections:[{name:'orders',indexes:{shop:['shop']}}],definitions:{
+      total:{kind:'derived',name:'total',aggregate:{collection:'orders',fields:['shop']},compute:(_,delta)=>{
+        let sum=delta.initialize?0:delta.previous;
+        for(const change of delta.changes){if('old' in change)sum-=change.old.cents;if('new' in change)sum+=change.new.cents;}
+        return sum;
+      }},
+      save:{kind:'mutationMethod',name:'save',compute:(ctx,args)=>{
+        for(const [id,value] of Object.entries(args)){
+          if(value===null) ctx.delete({kind:'collection',name:'orders'},id);
+          else ctx.set({kind:'collection',name:'orders'},id,value);
+        }
+        ctx.materialize({kind:'derived',name:'total'},'a');
+        ctx.materialize({kind:'derived',name:'total'},'b');
+        return null;
+      }},
+      run:{kind:'mutationMethod',name:'run',compute:(ctx)=>{
+        ctx.set({kind:'collection',name:'orders'},'tick',{shop:'a',cents:1});
+        return {$flower:{next:ctx.get({kind:'derived',name:'total'},'a')}};
+      }}
+    },http:{},maintenance:{name:'run',kind:'mutation'}}};"#;
+
+    #[test]
+    fn maintenance_writing_into_a_kept_aggregate_waits_for_changes_of_its_accumulator() {
+        let deployed = evaluate(
+            BTreeMap::new(),
+            json!({"requestId":"deploy","bundle":{"hash":hash(KEPT.as_bytes()),"javascript":KEPT}}),
+        )
+        .unwrap();
+        let mut data: Records = deployed.puts.into();
+        let mut rows = serde_json::Map::new();
+        for id in 0..50 {
+            rows.insert(format!("a{id}"), json!({"shop":"a","cents":10}));
+        }
+        rows.insert("b0".into(), json!({"shop":"b","cents":3}));
+        let saved = invoke_at(
+            data.clone(),
+            json!({"name":"save","args":rows,"requestId":"rows"}),
+            "mutation",
+            1,
+        )
+        .unwrap();
+        apply(&mut data, &saved);
+        let run = invoke_maintenance_at(
+            data.clone(),
+            json!({"name":"run","args":null,"requestId":"__flower.maintenance"}),
+            2,
+        )
+        .unwrap();
+        // It goes on from shop a's accumulator with its own row.
+        assert_eq!(run.value, json!({"$flower":{"next":501}}));
+        let certificate = run.mutation_certificate.as_ref().unwrap();
+        assert!(
+            !certificate
+                .observed()
+                .iter()
+                .any(|id| id.starts_with("window:")),
+            "{:?}",
+            certificate.observed()
+        );
+        let interest = Interest::reads(10, certificate);
+        let expect = |args: Value, touched: bool, why: &str| {
+            let changes = write(&data, "save", args);
+            assert_eq!(
+                interest.touched_by(&changes),
+                touched,
+                "{why}: {:?}",
+                changes.keys
+            );
+        };
+        // Its accumulator moves with a row joining, leaving or changing within
+        // shop a, and a write to the row it writes concerns it.
+        expect(json!({"a90":{"shop":"a","cents":5}}), true, "a row joins");
+        expect(json!({"a3":null}), true, "a row leaves");
+        expect(json!({"a4":{"shop":"a","cents":11}}), true, "a row changes");
+        expect(
+            json!({"a5":{"shop":"b","cents":10}}),
+            true,
+            "a row moves out",
+        );
+        expect(
+            json!({"tick":{"shop":"b","cents":1}}),
+            true,
+            "the row it writes",
+        );
+        // Another shop, or rows of shop a that leave its total as it was,
+        // change nothing it computed.
+        expect(json!({"b1":{"shop":"b","cents":4}}), false, "another shop");
+        expect(
+            json!({"a6":null,"a91":{"shop":"a","cents":10}}),
+            false,
+            "the same total",
+        );
+    }
 }

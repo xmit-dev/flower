@@ -717,3 +717,311 @@ fn index_schema_metadata_reserves_memory_before_execution() {
     .unwrap_err();
     assert_eq!(error.code, "EVALUATION_BUDGET");
 }
+
+fn speculate(data: &Records, args: Value, fixture: &Reducer) -> Evaluation {
+    run(
+        data.clone(),
+        json!({"name":"change","args":args,"$speculate":true}),
+        "mutation",
+        None,
+        fixture,
+    )
+    .unwrap()
+}
+fn serially(data: &Records, args: Value, fixture: &Reducer) -> Evaluation {
+    run(
+        data.clone(),
+        json!({"name":"change","args":args}),
+        "mutation",
+        None,
+        fixture,
+    )
+    .unwrap()
+}
+fn windows(certificate: &MutationCertificate) -> Vec<String> {
+    certificate
+        .observed()
+        .into_iter()
+        .filter(|id| id.starts_with("window:"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn an_optimistic_write_to_a_kept_aggregate_stamps_its_cell_not_every_entry_of_its_bucket() {
+    let fixture = Reducer::default();
+    let mut data = Records::default();
+    let mut writes: Vec<_> = (0..200).map(|key| json!({"collection":"orders","key":format!("a{key:03}"),"value":{"shop":"a","cents":10}})).collect();
+    writes.extend((0..3).map(
+        |key| json!({"collection":"orders","key":format!("b{key}"),"value":{"shop":"b","cents":1}}),
+    ));
+    deploy_schema(
+        &mut data,
+        json!({"writes":writes,"materialize":[{"name":"total","args":"a"},{"name":"total","args":"b"}]}),
+        schema(true),
+        &fixture,
+    );
+    assert_eq!(total(&data, "a"), 2000);
+    // A new row of shop a, read back through the kept total.
+    let args = json!([{"key":"new","value":{"shop":"a","cents":5},"preview":true}]);
+    let candidate = speculate(&data, args.clone(), &fixture);
+    assert_eq!(candidate.value, json!([2005]));
+    let certificate = candidate.mutation_certificate.clone().unwrap();
+    assert!(
+        certificate
+            .observed()
+            .contains(&cell_id("total", &json!("a")).as_str()),
+        "the kept accumulator is stamped"
+    );
+    assert_eq!(
+        windows(&certificate),
+        Vec::<String>::new(),
+        "going on from the accumulator walks no bucket"
+    );
+    let reuse = |data: &Records| {
+        let valid = certificate.valid(data);
+        if valid {
+            // Reusing it must be what running it now would do.
+            let expected = serially(data, args.clone(), &fixture);
+            assert_eq!(candidate.value, expected.value);
+            assert_eq!(candidate.puts, expected.puts);
+            assert_eq!(candidate.deletes, expected.deletes);
+        }
+        valid
+    };
+    // Another shop's write leaves shop a's total alone.
+    let mut other = data.clone();
+    apply(
+        &mut other,
+        serially(
+            &data,
+            json!([{"key":"b9","value":{"shop":"b","cents":4}}]),
+            &fixture,
+        ),
+    );
+    assert!(reuse(&other));
+    // A write that changes shop a's total conflicts.
+    let mut inside = data.clone();
+    apply(
+        &mut inside,
+        serially(
+            &data,
+            json!([{"key":"a500","value":{"shop":"a","cents":7}}]),
+            &fixture,
+        ),
+    );
+    assert_eq!(total(&inside, "a"), 2007);
+    assert!(!reuse(&inside));
+    let mut removed = data.clone();
+    apply(
+        &mut removed,
+        serially(&data, json!([{"key":"a001"}]), &fixture),
+    );
+    assert!(!reuse(&removed));
+    // A write within shop a that leaves its total as it was, a row leaving as another of the same
+    // amount comes in, does not: the result is the same either way.
+    let mut same = data.clone();
+    apply(
+        &mut same,
+        serially(
+            &data,
+            json!([{"key":"a002"},{"key":"a900","value":{"shop":"a","cents":10}}]),
+            &fixture,
+        ),
+    );
+    assert_eq!(total(&same, "a"), 2000);
+    assert!(reuse(&same));
+    // The rows it writes are still stamped.
+    let mut written = data.clone();
+    apply(
+        &mut written,
+        serially(
+            &data,
+            json!([{"key":"new","value":{"shop":"b","cents":1}}]),
+            &fixture,
+        ),
+    );
+    assert!(!reuse(&written));
+}
+
+#[test]
+fn an_optimistic_write_building_an_aggregate_from_its_rows_stamps_its_bucket() {
+    let fixture = Reducer::default();
+    let mut data = Records::default();
+    let mut writes: Vec<_> = (0..20).map(|key| json!({"collection":"orders","key":format!("a{key:02}"),"value":{"shop":"a","cents":10}})).collect();
+    writes.push(json!({"collection":"orders","key":"b0","value":{"shop":"b","cents":1}}));
+    // Declared, not kept: reading it builds shop a's group from its rows.
+    deploy_schema(&mut data, json!({"writes":writes}), schema(true), &fixture);
+    let args = json!([{"key":"new","value":{"shop":"a","cents":5},"preview":true}]);
+    let candidate = speculate(&data, args.clone(), &fixture);
+    assert_eq!(candidate.value, json!([205]));
+    let certificate = candidate.mutation_certificate.clone().unwrap();
+    assert_eq!(
+        windows(&certificate).len(),
+        1,
+        "{:?}",
+        certificate.observed()
+    );
+    // A row joining shop a without the aggregate kept changes no cell: only the bucket's entries
+    // show it.
+    let mut inside = data.clone();
+    apply(
+        &mut inside,
+        serially(
+            &data,
+            json!([{"key":"a99","value":{"shop":"a","cents":1}}]),
+            &fixture,
+        ),
+    );
+    assert!(!certificate.valid(&inside));
+    let mut other = data.clone();
+    apply(
+        &mut other,
+        serially(
+            &data,
+            json!([{"key":"b1","value":{"shop":"b","cents":1}}]),
+            &fixture,
+        ),
+    );
+    assert!(
+        certificate.valid(&other),
+        "the window fits: another shop's row is outside it"
+    );
+    let expected = serially(&other, args, &fixture);
+    assert_eq!(candidate.value, expected.value);
+    assert_eq!(candidate.puts, expected.puts);
+}
+
+#[test]
+fn optimistic_writes_to_kept_aggregates_match_serial() {
+    const SHOPS: [&str; 3] = ["a", "b", "c"];
+    let fixture = Reducer::default();
+    let mut initial = Records::default();
+    let writes: Vec<_> = (0..40).map(|key| json!({"collection":"orders","key":format!("k{key}"),"value":{"shop":(SHOPS[key % 3]),"cents":key % 4}})).collect();
+    deploy_schema(
+        &mut initial,
+        json!({"writes":writes,"materialize":[{"name":"total","args":"a"},{"name":"total","args":"b"}]}),
+        schema(true),
+        &fixture,
+    );
+    let mut actual = initial.clone();
+    let mut serial = initial;
+    let (mut accepted, mut conflicts) = (0, 0);
+    let mut random = 0x9e3779b97f4a7c15u64;
+    let mut next = |bound: u64| {
+        random = random
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (random >> 33) % bound
+    };
+    for _ in 0..40 {
+        let mut wave = Vec::new();
+        for _ in 0..6 {
+            let rows: Vec<_> = (0..1 + next(2))
+                .map(|_| {
+                    let key = format!("k{}", next(48));
+                    match next(5) {
+                        0 => json!({"key":key}),
+                        // Amounts repeat, so some writes leave a total as it was.
+                        _ => json!({"key":key,"value":{"shop":(SHOPS[next(3) as usize]),"cents":next(3)},"preview":next(2) == 0}),
+                    }
+                })
+                .collect();
+            let args = Value::Array(rows);
+            wave.push((args.clone(), speculate(&actual, args, &fixture)));
+        }
+        for (args, candidate) in wave {
+            let expected = serially(&serial, args.clone(), &fixture);
+            let selected = if candidate
+                .mutation_certificate
+                .as_ref()
+                .unwrap()
+                .valid(&actual)
+            {
+                accepted += 1;
+                candidate
+            } else {
+                conflicts += 1;
+                speculate(&actual, args, &fixture)
+            };
+            assert_eq!(selected.value, expected.value);
+            assert_eq!(selected.puts, expected.puts);
+            assert_eq!(selected.deletes, expected.deletes);
+            apply(&mut actual, selected);
+            apply(&mut serial, expected);
+            assert_eq!(actual, serial);
+        }
+    }
+    assert!(
+        accepted > 40 && conflicts > 40,
+        "must exercise both reuse and conflicts: {accepted} accepted, {conflicts} conflicts"
+    );
+}
+
+/// What an optimistic write into a kept aggregate over a big group costs: an evaluation's thread
+/// CPU and its certificate's window stamps, with the records served from a stored backing as on a
+/// server (FLOWER_TEST_BACKED). Not run by default:
+///
+/// ```sh
+/// FLOWER_AGGREGATE_BENCH_ROWS=66000 cargo test --release --lib kept_aggregate_speculation_costs -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn kept_aggregate_speculation_costs() {
+    fn thread_cpu() -> f64 {
+        let mut time = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: clock_gettime writes the timespec it is given.
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+        time.tv_sec as f64 + time.tv_nsec as f64 * 1e-9
+    }
+    let setting = |name: &str, default: usize| {
+        std::env::var(name).map_or(default, |value| value.parse().unwrap())
+    };
+    let rows = setting("FLOWER_AGGREGATE_BENCH_ROWS", 66_000);
+    let calls = setting("FLOWER_AGGREGATE_BENCH_CALLS", 200);
+    let fixture = Reducer::default();
+    let mut data = Records::default();
+    for key in 0..rows {
+        data.insert(
+            source_id("orders", &format!("{key:07}")),
+            json!({"shop":"a","cents":1}),
+        );
+    }
+    deploy_schema(
+        &mut data,
+        json!({"materialize":[{"name":"total","args":"a"}]}),
+        schema(true),
+        &fixture,
+    );
+    assert_eq!(total(&data, "a"), rows as i64);
+    let data = data.backed_copy();
+    let write =
+        |index: usize| json!([{"key":format!("new{index}"),"value":{"shop":"a","cents":1}}]);
+    let windows = speculate(&data, write(0), &fixture)
+        .mutation_certificate
+        .map_or(0, |certificate| windows(&certificate).len());
+    for (label, speculative) in [("optimistic", true), ("serial", false)] {
+        let evaluate = |index: usize| {
+            if speculative {
+                speculate(&data, write(index), &fixture)
+            } else {
+                serially(&data, write(index), &fixture)
+            }
+        };
+        for index in 0..calls / 10 {
+            evaluate(index);
+        }
+        let (cpu, wall) = (thread_cpu(), std::time::Instant::now());
+        for index in 0..calls {
+            evaluate(index);
+        }
+        let cpu = (thread_cpu() - cpu) * 1e3 / calls as f64;
+        let wall = wall.elapsed().as_secs_f64() * 1e3 / calls as f64;
+        println!(
+            "{label} write into a kept group of {rows} rows: {cpu:.3} ms CPU, {wall:.3} ms wall per evaluation over {calls} ({windows} window stamps)"
+        );
+    }
+}

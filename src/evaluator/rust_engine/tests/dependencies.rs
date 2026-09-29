@@ -710,3 +710,96 @@ fn history_readers_survive_retention_accounting_but_not_a_new_incarnation() {
     );
     assert!(!certificate.valid(&data), "a new incarnation changes it");
 }
+
+#[test]
+fn a_window_stamp_holds_what_the_budget_leaves_room_for_then_falls_back_to_its_marker() {
+    // A scan far into its bucket depends on every entry before it (offset), one row.
+    let fixture = Fixture::new([(
+        "deep",
+        (|_, host| {
+            host(
+                "scan",
+                json!([{"kind":"collection","name":"items","indexes":{"byGroup":["group"]}},{"index":"byGroup","prefix":["a"],"offset":300,"limit":1}]),
+            )
+        }) as Callback,
+    )]);
+    let mut data = Records::new();
+    let schema = Schema {
+        indexes: vec![indexes::IndexSpec {
+            collection: "items".into(),
+            fields: vec!["group".into()],
+        }],
+        ..Schema::default()
+    };
+    let rows: Vec<_> = (0..400)
+        .map(|key| json!({"collection":"items","key":format!("{key:03}"),"value":{"group":"a"}}))
+        .collect();
+    let result = run_with_schema(
+        data.clone(),
+        json!({"requestId":"schema","writes":rows}),
+        "deployment",
+        None,
+        &fixture,
+        Some(schema),
+    )
+    .unwrap();
+    apply(&mut data, result);
+    let certify = |limit: usize| {
+        let result = run_with_limit(
+            data.clone(),
+            json!({"name":"deep"}),
+            "query",
+            None,
+            &fixture,
+            limit,
+        )
+        .ok()?;
+        result
+            .query_cacheable
+            .then(|| result.query_certificate.unwrap())
+    };
+    let windowed = |certificate: &DependencyCertificate| {
+        certificate
+            .observations()
+            .any(|observation| matches!(observation, Observation::Range { .. }))
+    };
+    // The smallest budget whose certificate stamps the window.
+    let (mut low, mut high) = (0, 1 << 20);
+    assert!(certify(high).as_ref().is_some_and(windowed));
+    while low + 1 < high {
+        let middle = (low + high) / 2;
+        if certify(middle).as_ref().is_some_and(windowed) {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    let window = certify(high).unwrap();
+    // One byte less, and the window's 301 entries (the 300 skipped and the row) no longer fit:
+    // the certificate keeps the index's marker instead, and still certifies the scan.
+    let marker = certify(high - 1).expect("the marker still fits");
+    assert!(!windowed(&marker));
+    let index = super::super::ranges::dependency("items", &["group".into()]);
+    assert!(
+        marker
+            .observations()
+            .any(|observation| observation == Observation::Key(&index))
+    );
+    assert!(window.allocation_cost() > marker.allocation_cost() + 300 * 8);
+    // The window ignores another bucket of the index; the marker does not.
+    deploy(
+        &mut data,
+        json!({"writes":[{"collection":"items","key":"b","value":{"group":"b"}}]}),
+        &fixture,
+    );
+    assert!(window.valid(&data));
+    assert!(!marker.valid(&data));
+    // Both see an entry leaving the window.
+    let mut inside = data.clone();
+    deploy(
+        &mut inside,
+        json!({"writes":[{"collection":"items","key":"010","delete":true}]}),
+        &fixture,
+    );
+    assert!(!window.valid(&inside));
+}
