@@ -429,7 +429,16 @@ impl Shipper {
                 .get(&key)
                 .await?
                 .with_context(|| format!("backup segment {key} vanished"))?;
-            let (header, _) = format::decode_segment(&bytes)?;
+            let (header, _) = match format::decode_segment(&bytes) {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    // Damaged, or written in another format: the history
+                    // goes on in a generation of its own.
+                    tracing::warn!(target: "flower::backup", generation = %generation, segment = %key,
+                        error = %format!("{error:#}"), "the newest backup segment is unreadable");
+                    return Ok(None);
+                }
+            };
             return Ok(Some(Found {
                 index: header.last,
                 at: header.last_at,
@@ -554,11 +563,13 @@ impl Shipper {
         let mut records = Vec::with_capacity(entries.len());
         for (index, stored) in entries {
             at = at.max(self.store.applied_at(index).unwrap_or(now));
-            records.push(Record {
-                index,
-                at,
-                bytes: stored,
-            });
+            // As JSON: the log packs entries one by one, and a segment
+            // compresses far better across them.
+            let bytes = match super::super::packed::unpack(&stored)? {
+                std::borrow::Cow::Borrowed(_) => stored,
+                std::borrow::Cow::Owned(json) => json,
+            };
+            records.push(Record { index, at, bytes });
         }
         let (first, last) = match (records.first(), records.last()) {
             (Some(first), Some(last)) => (first, last),
@@ -828,9 +839,10 @@ impl Shipper {
         let target = self.target.clone();
         let generation = current.generation.clone();
         let retention = self.config.retention;
+        let spacing = self.config.base_interval.as_millis() as u64;
         self.retention = Some(tokio::spawn(async move {
             let horizon = now_ms().saturating_sub(retention.as_millis() as u64);
-            match retain(&target, &generation, horizon).await {
+            match retain(&target, &generation, horizon, spacing).await {
                 Ok(deleted) => RetentionOutcome {
                     horizon,
                     deleted,
@@ -878,7 +890,7 @@ async fn upload_base(
             let raw = encoder.raw();
             writer
                 .sender
-                .blocking_send(encoder.finish())
+                .blocking_send(encoder.finish().context("compress the backup base")?)
                 .map_err(|_| anyhow::anyhow!("the base upload stopped"))?;
             Ok(raw)
         },
@@ -965,8 +977,15 @@ impl std::io::Write for PartWriter {
 
 /// Apply retention at `horizon`: in each generation, keep the newest base
 /// at or before it and everything after, and delete whole generations that
-/// ended before it, and old generations that never got a base.
-pub(super) async fn retain(target: &Target, current: &str, horizon: u64) -> anyhow::Result<u64> {
+/// ended before it, and old generations that never got a base. Of the bases
+/// kept, those older than `spacing` thin out to one per `spacing` (and the
+/// newest): every point stays restorable, from an earlier base.
+pub(super) async fn retain(
+    target: &Target,
+    current: &str,
+    horizon: u64,
+    spacing: u64,
+) -> anyhow::Result<u64> {
     let now = now_ms();
     let mut deleted = 0;
     for prefix in target.children("generations/").await? {
@@ -1006,12 +1025,20 @@ pub(super) async fn retain(target: &Target, current: &str, horizon: u64) -> anyh
         let Some(keep) = bases.iter().rfind(|base| base.1 <= horizon) else {
             continue;
         };
-        let keep = keep.0;
-        let mut old: Vec<String> = bases
-            .iter()
-            .filter(|base| base.0 < keep)
-            .map(|base| base.2.clone())
-            .collect();
+        let (keep, mut kept_at) = (keep.0, keep.1);
+        let newest = bases.last().map(|base| base.0);
+        let mut old = Vec::new();
+        for (index, at, key) in &bases {
+            if *index < keep {
+                old.push(key.clone());
+            } else if *index > keep && Some(*index) != newest {
+                if *at >= now.saturating_sub(spacing) || *at >= kept_at.saturating_add(spacing) {
+                    kept_at = *at;
+                } else {
+                    old.push(key.clone());
+                }
+            }
+        }
         target
             .list(&format::segments_prefix(generation), None, |key, _| {
                 match format::parse_segment_key(key) {
@@ -1169,7 +1196,7 @@ mod tests {
         put(&target, &format::base_key(&current, 180, horizon - HOUR)).await;
         put(&target, &format::segment_key(&current, 181, 190, now)).await;
 
-        let deleted = retain(&target, &current, horizon).await.unwrap();
+        let deleted = retain(&target, &current, horizon, 24 * HOUR).await.unwrap();
         let mut expected = vec![
             format::generation_key(&previous),
             format::base_key(&previous, 150, horizon - 4 * HOUR),
@@ -1188,6 +1215,70 @@ mod tests {
         assert_eq!(deleted, 4 + 2 + 2);
         assert!(!directory.path().join("generations").join(&ended).exists());
         // Nothing more goes a second time.
-        assert_eq!(retain(&target, &current, horizon).await.unwrap(), 0);
+        assert_eq!(
+            retain(&target, &current, horizon, 24 * HOUR).await.unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn retention_thins_older_bases_to_one_per_interval() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = Target::Directory(directory.path().to_owned());
+        let now = now_ms();
+        let horizon = now - 30 * 24 * HOUR;
+        let current = format!("{:013}-{:016x}", horizon - 2 * HOUR, 1);
+        put(&target, &format::generation_key(&current)).await;
+        // A base every six hours from before the horizon to now.
+        let mut bases = Vec::new();
+        for step in 0..=(31 * 4) {
+            let at = horizon - HOUR + step * 6 * HOUR;
+            if at > now {
+                break;
+            }
+            let key = format::base_key(&current, 1_000 + step, at);
+            put(&target, &key).await;
+            put(
+                &target,
+                &format::segment_key(&current, 1_000 + step + 1, 1_000 + step + 1, at + HOUR),
+            )
+            .await;
+            bases.push((at, key));
+        }
+        retain(&target, &current, horizon, 24 * HOUR).await.unwrap();
+        let left: Vec<u64> = bases
+            .iter()
+            .filter(|(_, key)| directory.path().join(key).exists())
+            .map(|(at, _)| *at)
+            .collect();
+        // The one before the horizon, then one a day, then all of the last day.
+        assert_eq!(left[0], horizon - HOUR);
+        for pair in left.windows(2) {
+            assert!(
+                pair[1] - pair[0] >= 24 * HOUR || pair[1] >= now - 24 * HOUR,
+                "{pair:?}"
+            );
+        }
+        let recent = left.iter().filter(|at| **at >= now - 24 * HOUR).count();
+        assert!((4..=5).contains(&recent), "{recent}");
+        // 121 bases: the anchor, 29 daily ones and the last day's 4.
+        assert_eq!(bases.len(), 121);
+        assert_eq!(left.len(), 1 + 29 + recent, "{left:?}");
+        assert_eq!(left.last(), bases.last().map(|(at, _)| at));
+        // Every segment stays: each point is restorable from an earlier base.
+        let mut segments = 0;
+        target
+            .list(&format::segments_prefix(&current), None, |_, _| {
+                segments += 1;
+                true
+            })
+            .await
+            .unwrap();
+        assert_eq!(segments, bases.len());
+        // A second run changes nothing.
+        assert_eq!(
+            retain(&target, &current, horizon, 24 * HOUR).await.unwrap(),
+            0
+        );
     }
 }

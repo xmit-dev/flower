@@ -27,6 +27,8 @@ futures-executor = { version = "0.3", default-features = false, features = ["std
 hyper-util = { version = "0.1", features = ["server-auto", "server-graceful", "service", "tokio"] }
 im = "15.1"
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+# Backup objects (src/consensus/backup/format.rs).
+zstd = { version = "0.14", default-features = false }
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 opentelemetry = { version = "0.33", default-features = false, features = ["trace", "metrics", "experimental_metrics_bound_instruments"] }
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "http-json", "reqwest-blocking-client", "reqwest-rustls", "trace", "metrics", "internal-logs"] }

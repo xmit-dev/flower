@@ -1,17 +1,17 @@
 //! Backup objects and their names. Every object ends with the SHA-256 of
 //! the bytes before it, so a torn or altered object is refused.
 //!
-//! A segment holds consecutive log entries as the log stores them (their
-//! JSON): `FLOWERSEG1\n`, a JSON header's length (u32 LE) and the header,
-//! then the entries in LZ4 blocks as a base has them (below). Unpacked, each
-//! entry is its index (u64 LE), the time it was applied (Unix ms, u64 LE),
-//! its length (u32 LE) and its bytes.
+//! A segment holds consecutive log entries, each as the JSON the log stores
+//! (unpacked, so that compression spans entries): `FLOWERSEG1\n`, a JSON
+//! header's length (u32 LE) and the header, then the entries in blocks as a
+//! base has them (below). Uncompressed, each entry is its index (u64 LE), the
+//! time it was applied (Unix ms, u64 LE), its length (u32 LE) and its JSON.
 //!
 //! A base is a whole state as a snapshot transfer encodes it (the JSON of
-//! the stored state), in LZ4 blocks: `FLOWERBASE1\n`, the header as above,
-//! then per block its raw and compressed lengths (u32 LE each) and the
-//! compressed bytes, a block of lengths 0 and 0, and the raw length in all
-//! (u64 LE).
+//! the stored state), in zstd blocks of up to 4 MiB: `FLOWERBASE1\n`, the
+//! header as above, then per block its raw and compressed lengths (u32 LE
+//! each) and the compressed bytes (one zstd frame), a block of lengths 0 and
+//! 0, and the raw length in all (u64 LE).
 use std::io::Write;
 
 use anyhow::{Context, bail, ensure};
@@ -22,8 +22,12 @@ use serde::{Deserialize, Serialize};
 const SEGMENT_MAGIC: &[u8] = b"FLOWERSEG1\n";
 const BASE_MAGIC: &[u8] = b"FLOWERBASE1\n";
 const HASH_BYTES: usize = 32;
-// Raw bytes per base block.
-const BLOCK_BYTES: usize = 1 << 20;
+// Raw bytes per block, and what compressing them may take at most (zstd's
+// bound is below an extra 1/128).
+const BLOCK_BYTES: usize = 4 << 20;
+const MAX_COMPRESSED_BYTES: usize = BLOCK_BYTES + (BLOCK_BYTES >> 7) + 4096;
+// zstd's default level: about LZ4's speed on JSON, at half the size or less.
+const LEVEL: i32 = 3;
 const MAX_HEADER_BYTES: usize = 1 << 20;
 
 /// The compatibility contract of whoever wrote an object: what reading it
@@ -171,7 +175,7 @@ pub(super) fn encode_segment(
     bytes.extend_from_slice(&u32::try_from(header_json.len())?.to_le_bytes());
     bytes.extend_from_slice(&header_json);
     for block in raw.chunks(BLOCK_BYTES) {
-        let compressed = lz4_flex::block::compress(block);
+        let compressed = zstd::bulk::compress(block, LEVEL).context("compress a backup segment")?;
         bytes.extend_from_slice(&(block.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&compressed);
@@ -193,10 +197,13 @@ pub(super) fn decode_segment(bytes: &[u8]) -> anyhow::Result<(SegmentHeader, Vec
             break;
         }
         ensure!(
-            length > 0 && length <= BLOCK_BYTES && compressed > 0,
+            length > 0
+                && length <= BLOCK_BYTES
+                && compressed > 0
+                && compressed <= MAX_COMPRESSED_BYTES,
             "backup segment block has invalid lengths"
         );
-        let block = lz4_flex::block::decompress(reader.take(compressed)?, length)
+        let block = zstd::bulk::decompress(reader.take(compressed)?, length)
             .context("backup segment block does not decompress")?;
         ensure!(
             block.len() == length,
@@ -304,16 +311,17 @@ impl BaseEncoder {
         self.output.extend_from_slice(bytes);
     }
 
-    fn seal_block(&mut self) {
+    fn seal_block(&mut self) -> std::io::Result<()> {
         if self.block.is_empty() {
-            return;
+            return Ok(());
         }
-        let compressed = lz4_flex::block::compress(&self.block);
+        let compressed = zstd::bulk::compress(&self.block, LEVEL)?;
         self.emit(&(self.block.len() as u32).to_le_bytes());
         self.emit(&(compressed.len() as u32).to_le_bytes());
         self.emit(&compressed);
         self.raw += self.block.len() as u64;
         self.block.clear();
+        Ok(())
     }
 
     /// Encoded bytes not yet taken.
@@ -330,15 +338,15 @@ impl BaseEncoder {
         self.raw + self.block.len() as u64
     }
 
-    pub fn finish(mut self) -> Vec<u8> {
-        self.seal_block();
+    pub fn finish(mut self) -> std::io::Result<Vec<u8>> {
+        self.seal_block()?;
         self.emit(&0u32.to_le_bytes());
         self.emit(&0u32.to_le_bytes());
         let raw = self.raw;
         self.emit(&raw.to_le_bytes());
         let hash = self.hash.clone().finish();
         self.output.extend_from_slice(hash.as_ref());
-        self.output
+        Ok(self.output)
     }
 }
 
@@ -350,7 +358,7 @@ impl Write for BaseEncoder {
             let (now, later) = data.split_at(room.min(data.len()));
             self.block.extend_from_slice(now);
             if self.block.len() == BLOCK_BYTES {
-                self.seal_block();
+                self.seal_block()?;
             }
             data = later;
         }
@@ -456,7 +464,10 @@ impl BaseDecoder {
                         (0, 0) => Stage::Total,
                         _ => {
                             ensure!(
-                                raw > 0 && raw <= BLOCK_BYTES && compressed > 0,
+                                raw > 0
+                                    && raw <= BLOCK_BYTES
+                                    && compressed > 0
+                                    && compressed <= MAX_COMPRESSED_BYTES,
                                 "backup base block has invalid lengths"
                             );
                             Stage::Block { raw, compressed }
@@ -464,7 +475,7 @@ impl BaseDecoder {
                     }
                 }
                 Stage::Block { raw, .. } => {
-                    let block = lz4_flex::block::decompress(&piece, raw)
+                    let block = zstd::bulk::decompress(&piece, raw)
                         .context("backup base block does not decompress")?;
                     ensure!(block.len() == raw, "backup base block length mismatch");
                     out.write_all(&block)?;
@@ -620,7 +631,7 @@ mod tests {
         assert!(decode_segment(&encode_segment(&wrong, &records).unwrap().0).is_err());
 
         // Entries span blocks, and JSON packs small.
-        let records: Vec<Record> = (1..=3_000)
+        let records: Vec<Record> = (1..=12_000)
             .map(|index| Record {
                 index,
                 at: 1_000 + index,
@@ -633,7 +644,7 @@ mod tests {
             .collect();
         let header = SegmentHeader {
             first: 1,
-            last: 3_000,
+            last: 12_000,
             ..header
         };
         let (bytes, raw) = encode_segment(&header, &records).unwrap();
@@ -667,7 +678,7 @@ mod tests {
             }
         }
         assert_eq!(encoder.raw(), raw.len() as u64);
-        object.extend(encoder.finish());
+        object.extend(encoder.finish().unwrap());
         assert!(object.len() < raw.len() / 10, "{} bytes", object.len());
         for piece in [1, 7, 4096, 1 << 20, object.len()] {
             let mut decoder = BaseDecoder::default();

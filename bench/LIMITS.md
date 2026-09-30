@@ -446,9 +446,12 @@ accounting rather than an RSS bound or streaming migration serialization.
 | `FLOWER_BACKUP_PART_BYTES` | 16 MiB | Multipart part size for bases; at least 5 MiB. |
 
 Only the leader ships. Memory: one segment being encoded (up to the segment
-maximum plus one entry), and one base part buffered per upload; a base streams
-the state captured at one applied index through LZ4 into multipart parts,
-without a local copy. Uploads retry six times with backoff on 5xx, 429, S3
+maximum plus one entry, unpacked from the log's own per-entry compression), and
+one base part buffered per upload; a base streams the state captured at one
+applied index through zstd (level 3, 4 MiB blocks) into multipart parts,
+without a local copy. Retention keeps every base of the last
+`FLOWER_BACKUP_BASE_INTERVAL_MS` and thins older ones to one per interval, so
+a restore to an older point may replay up to that much log. Uploads retry six times with backoff on 5xx, 429, S3
 throttling and transport errors, then the next interval tries again. A failed
 base is retried after a minute. The hold is counted in the log's stored
 encoding; past it the oldest held entries are purged anyway, with a warning, and

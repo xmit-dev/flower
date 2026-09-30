@@ -2,7 +2,7 @@
 <section id="how-it-works" data-toc="How it works">
 <h2>How backups work</h2>
 <ul>
-<li><strong>The leader ships the log.</strong> About once a second it uploads the entries it applied since the last time, as the log stores them and compressed, each stamped with when it was applied. Followers ship nothing; a new leader picks up where the old one stopped.</li>
+<li><strong>The leader ships the log.</strong> About once a second it uploads the entries it applied since the last time, as one zstd-compressed object, each entry stamped with when it was applied. Followers ship nothing; a new leader picks up where the old one stopped.</li>
 <li><strong>Now and then it writes a base</strong>: the whole state, compressed, as a snapshot transfer encodes it. A base is written once a day, and sooner once the log shipped since the last one is as large as it (and at least 64 MiB). Writing one streams the state to the store in parts; nothing goes to local disk.</li>
 <li><strong>A restore</strong> starts from the newest base at or before the point you ask for and replays the log after it, up to that point, without running your code.</li>
 <li><strong>A generation</strong> is one unbroken history: a base and the log that follows it, with later bases. A new leader continues the generation if its log holds the generation's last shipped entry. Otherwise, for example after a restore, or after the store was unreachable for so long that the log it needed is gone, it starts a new generation with a base of its own.</li>
@@ -65,5 +65,6 @@ export FLOWER_BACKUP_S3_ACCESS_KEY_ID='GK…' FLOWER_BACKUP_S3_SECRET_ACCESS_KEY
 generations/{created}-{random}/tip.json          the newest shipped entry, every 10 s
 generations/{created}-{random}/bases/{index}-{time}.base
 generations/{created}-{random}/log/{first}-{last}-{time}.seg</code></pre></div>
-<p>Retention runs hourly and after each base. In each generation it keeps the newest base at or before the horizon and everything after it, so every point since the horizon stays restorable, and it deletes generations that ended before the horizon. A busy cluster uploads about one log object a second; an idle one none.</p>
+<p>Retention runs hourly and after each base. In each generation it keeps the newest base at or before the horizon and everything after it, so every point since the horizon stays restorable, and it deletes generations that ended before the horizon. Bases older than a day (<code>FLOWER_BACKUP_BASE_INTERVAL_MS</code>) thin out to one a day: restoring to an older point replays up to a day of log from the base before it. A busy cluster uploads about one log object a second; an idle one none.</p>
+<p>What the store holds is mostly the log: every write of the retention window, compressed, plus about one base a day. To size it, watch how fast <code>segmentBytesShipped</code> in <code>GET /admin/backup</code> grows. When the store shares a disk with the cluster, as a local Garage or MinIO does, a longer <code>FLOWER_BACKUP_INTERVAL_MS</code> (say 30 s) costs nothing that store could save and packs the log better: an object compresses as a whole, and more entries in one compress smaller.</p>
 </section>
