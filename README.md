@@ -50,11 +50,9 @@ The same module supports passkeys: `webauthn` builds WebAuthn ceremony options w
 
 ## Install
 
-Download the server archive for your platform from [GitHub Releases](https://github.com/xmit-dev/flower/releases). Each archive contains the standalone `flower` server, its MIT license and third-party notices, with a SHA-256 checksum alongside. The server embeds QuickJS/Wasm and needs no Node installation.
+Download the server archive for your platform from [GitHub Releases](https://github.com/xmit-dev/flower/releases): Linux (x86-64 or Arm64, glibc 2.35+) or macOS 15+ (Intel or Apple silicon). Each archive contains the standalone `flower` server, its MIT license and third-party notices, with a SHA-256 checksum alongside. The server embeds QuickJS/Wasm and needs no Node installation. The handbook's [Get started](https://flower.xmit.dev/guide/) downloads it, deploys an app and calls it in five minutes.
 
 For TypeScript applications and clients:
-
-Npm publication is pending. The commands below apply once it is enabled; use a source checkout or the tested Actions tarball in the meantime.
 
 ```sh
 npm install @flower-js/sdk

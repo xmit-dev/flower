@@ -5,6 +5,7 @@
 .hero h1 { margin: 0 0 15px; font-size: clamp(44px, 5.6vw, 66px); line-height: 1.02; }
 .hero-copy > p:not(.eyebrow) { max-width: 430px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
 .hero-actions { display: flex; align-items: center; gap: 18px; margin-top: 20px; }
+.hero-install { font: 11px var(--mono); white-space: nowrap; }
 .hero-art { position: relative; margin: 0; min-width: 0; border: 1px solid var(--line); border-radius: 60px 12px 60px 12px; background: var(--leaf); }
 .hero-art img { display: block; width: 100%; margin: 0; }
 .art-label { position: absolute; padding: 3px 10px; border: 1px solid #aebc9e; border-radius: 20px; background: var(--paper); color: var(--green); font: 10px/1.5 var(--mono); }

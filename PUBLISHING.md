@@ -28,4 +28,6 @@ bin/web-deploy
 
 The script changes to the repository root, builds and validates the site, then runs `xmit flower.xmit.dev _site/`. The development shell (`nix develop`) supplies Node.js and xmit. Canonical URLs and `docs/CNAME` use `flower.xmit.dev`; CSS and JavaScript use plain relative URLs.
 
-The `Publish handbook` GitHub Actions workflow also builds the site before uploading `_site/` to GitHub Pages.
+The `Publish handbook` GitHub Actions workflow also builds the site on every push to `main` that touches it, and uploads `_site/` to GitHub Pages, served at [flower.js.org](https://flower.js.org/) with the same canonical links.
+
+Download commands in the handbook write `@FLOWER_VERSION@` for the release version: `scripts/docs/render.mjs` replaces it with `package.json`'s version, so they name the release the checkout builds. Deploy the handbook after a release is published, not before, so its download links work.

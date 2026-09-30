@@ -42,6 +42,8 @@ for identity in sorted(selected - {root}):
         notices = [wasmtime_license]
     if not notices and package["name"] in ("openraft", "openraft-macros"):
         notices = list(Path("release/licenses").glob("openraft-*"))
+    if not notices and (package.get("repository") or "").startswith("https://github.com/open-telemetry/opentelemetry-rust"):
+        notices = [Path("release/licenses/opentelemetry-rust-LICENSE")]
     if not notices:
         raise SystemExit(f"Missing license text for {package['name']} {package['version']}")
     dest = output / f"{package['name']}-{package['version']}"

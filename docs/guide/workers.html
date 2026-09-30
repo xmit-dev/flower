@@ -27,13 +27,14 @@
 <section id="try-reconciler">
 <h2>Try it: keep a digest current</h2>
 <p class="section-intro">Run the document reconciler against a fresh local app. It needs Node.js and no API keys.</p>
-<p><a href="./">Start a local node</a>, then run from the checkout:</p>
-<div class="code-block"><div class="code-head"><span>Terminal 1 · deploy and write a document</span><button class="copy-button" type="button" aria-label="Copy Terminal 1 · deploy and write a document">Copy</button></div><pre tabindex="0"><code class="language-sh">npm run build
-node sdk/cli.ts deploy docs/reactive-worker.ts
-node sdk/cli.ts call document.put '{"id":"notes","text":"Hello, garden."}' --request-id notes-v1
-node sdk/cli.ts watch document.get '"notes"'</code></pre></div><div class="code-block"><div class="code-head"><span>Terminal 2 · start a worker</span><button class="copy-button" type="button" aria-label="Copy Terminal 2 · start a worker">Copy</button></div><pre tabindex="0"><code class="language-sh">node docs/reactive-worker-client.ts
+<p><a href="./">Start a local node</a>, then run these in your project:</p>
+<div class="code-block"><div class="code-head"><span>Terminal 1 · deploy and write a document</span><button class="copy-button" type="button" aria-label="Copy Terminal 1 · deploy and write a document">Copy</button></div><pre tabindex="0"><code class="language-sh">curl -fsSLO https://flower.xmit.dev/reactive-worker.ts
+curl -fsSLO https://flower.xmit.dev/reactive-worker-client.ts
+npx flower deploy reactive-worker.ts
+npx flower call document.put '{"id":"notes","text":"Hello, garden."}' --request-id notes-v1
+npx flower watch document.get '"notes"'</code></pre></div><div class="code-block"><div class="code-head"><span>Terminal 2 · start a worker</span><button class="copy-button" type="button" aria-label="Copy Terminal 2 · start a worker">Copy</button></div><pre tabindex="0"><code class="language-sh">node reactive-worker-client.ts
 # FLOWER_URL defaults to http://127.0.0.1:7101. Pass a document ID to follow just one.
-# Start the same command in another terminal: the two lease documents between them.</code></pre></div><div class="code-block"><div class="code-head"><span>Terminal 3 · change the input</span><button class="copy-button" type="button" aria-label="Copy Terminal 3 · change the input">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts call document.put '{"id":"notes","text":"The garden has changed."}' --request-id notes-v2</code></pre></div>
+# Start the same command in another terminal: the two lease documents between them.</code></pre></div><div class="code-block"><div class="code-head"><span>Terminal 3 · change the input</span><button class="copy-button" type="button" aria-label="Copy Terminal 3 · change the input">Copy</button></div><pre tabindex="0"><code class="language-sh">npx flower call document.put '{"id":"notes","text":"The garden has changed."}' --request-id notes-v2</code></pre></div>
 <p>The view shows a digest only for the current text. Stop all workers, edit, and restart one: it catches up on its own. Download the <a href="../reactive-worker.ts" download>application</a> and <a href="../reactive-worker-client.ts" download>client</a>.</p>
 <p>To run a pool of queue workers instead, see <a href="worker-pools.html#try">Worker pools</a>.</p>
 </section>
