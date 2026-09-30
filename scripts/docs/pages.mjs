@@ -137,7 +137,7 @@ export const pages = [
     path: "reference/index.html", group: "reference", label: "Packages",
     catalogue: "All reference pages",
     title: "SDK reference.",
-    lead: "Every public API, with its defaults and failure behavior. Flower is unreleased: APIs and storage formats may still change.",
+    lead: "Every public API, with its defaults and failure behavior. Until 1.0, APIs and storage formats may still change between releases.",
     description: "Flower SDK reference: packages and entry points, with an index of every reference page.",
   },
   {

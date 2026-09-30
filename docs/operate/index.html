@@ -30,7 +30,7 @@ npx flower deploy terrarium.ts
 <li><strong>Restart a stopped node with the same ID and data directory.</strong> It catches up on its own. Never run <code>init</code> on it again or reuse its directory under another ID. While it catches up, even its replica-local reads can be unavailable.</li>
 <li><strong>Live data is served from redb.</strong> Memory holds writes still queued for disk and two caches, sized by <code>FLOWER_VALUE_CACHE_BYTES</code> and <code>FLOWER_REDB_CACHE_BYTES</code> (see <a href="capacity.html#storage">capacity</a>). Raft checkpoints write metadata only; full images are encoded, and streamed, when a replica needs a snapshot transfer. Snapshot status is in <code>GET /admin/resources</code>; see the <a href="https://github.com/xmit-dev/flower/blob/main/bench/LIMITS.md">snapshot settings</a> to tune when they run.</li>
 </ul>
-<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p><strong>Flower is unreleased.</strong> APIs and storage and wire formats can change with no migration path. You can't downgrade a data directory, and some upgrades can't be rolled one node at a time: old and new builds refuse to talk, so upgrade all nodes together.</p></div>
+<div class="note"><span class="note-mark" aria-hidden="true">↳</span><p><strong>Flower is young.</strong> Until 1.0, APIs and storage and wire formats can change between releases with no migration path. You can't downgrade a data directory, and some upgrades can't be rolled one node at a time: old and new builds refuse to talk, so upgrade all nodes together. Each <a href="https://github.com/xmit-dev/flower/releases">release's notes</a> say which.</p></div>
 </section>
 <section id="a-practical-operator-loop">
 <h2>Day-to-day operations</h2>

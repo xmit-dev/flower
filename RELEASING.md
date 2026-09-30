@@ -37,6 +37,8 @@ with a new version rather than reusing its tag.
 
 ## First npm publication and OIDC setup
 
+Done for 0.1.0 on 2026-09-30: `@flower-js/sdk` exists and trusts `release.yml` in the `npm` environment, so later tags publish from CI. The steps below are what it took, for a new package or a trust configuration to recreate.
+
 Publish the first package manually from your npm account. The tested SDK tarball
 is attached to each GitHub release and available in its Actions artifacts:
 
