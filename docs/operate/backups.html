@@ -56,12 +56,12 @@ export FLOWER_BACKUP_S3_ACCESS_KEY_ID='GK…' FLOWER_BACKUP_S3_SECRET_ACCESS_KEY
 <li><strong>The restored node backs up as a new generation</strong>, which says where it came from. The old generations stay, and restores still reach them, until retention lets them go.</li>
 <li><strong>The new cluster's Raft terms start far above the old history's</strong>, so its log never mixes with the old cluster's.</li>
 <li><strong>Stop the old cluster first</strong>, or keep clients away from it. Restoring rolls back retry history, transaction records and fencing counters with the data. If you use <a href="../reference/access.html#retention">retry retention</a>, give the restored service a new incarnation before it takes traffic, as <a href="https://github.com/xmit-dev/flower/blob/main/RETENTION.md">RETENTION.md</a> describes. Restoring one group of several doesn't reconcile transactions that span groups.</li>
-<li><strong>A restore needs a binary</strong> with the same snapshot and value formats as the one that wrote the backups, and state machine commands at least as new.</li>
+<li><strong>A restore needs a binary</strong> with the same snapshot and value formats as the one that wrote the backups, and state machine commands at least as new. Backup objects have a format of their own, which each generation records: a binary continues and restores only generations in its own, so one that changes it starts a new generation (reason <code>format</code>), and <code>backup list</code> shows the older ones as not restorable by it.</li>
 </ul>
 </section>
 <section id="layout" data-toc="Objects">
 <h2>What the store holds</h2>
-<p>Under the prefix, each generation has a directory of its own. Every object ends with the SHA-256 of what precedes it, and a restore refuses a damaged one.</p><div class="code-block"><div class="code-head"><span>Object keys</span><button type="button" class="copy-button" aria-label="Copy Object keys">Copy</button></div><pre tabindex="0"><code class="language-text">generations/{created}-{random}/generation.json   why it began, and after what
+<p>Under the prefix, each generation has a directory of its own. Every object ends with the SHA-256 of what precedes it, and a restore refuses a damaged one.</p><div class="code-block"><div class="code-head"><span>Object keys</span><button type="button" class="copy-button" aria-label="Copy Object keys">Copy</button></div><pre tabindex="0"><code class="language-text">generations/{created}-{random}/generation.json   why it began, after what, in which format
 generations/{created}-{random}/tip.json          the newest shipped entry, every 10 s
 generations/{created}-{random}/bases/{index}-{time}.base
 generations/{created}-{random}/log/{first}-{last}-{time}.seg</code></pre></div>

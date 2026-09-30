@@ -381,9 +381,45 @@ async fn a_new_leader_and_a_restarted_cluster_continue_the_generation() {
     write(&nodes[third], 3, 20, &mut revision).await;
     let status = shipped(&nodes[third]).await;
     assert_eq!(status["generation"], generation.as_str());
-    assert_eq!(generations(&backups), vec![generation]);
+    assert_eq!(generations(&backups), vec![generation.clone()]);
     let latest = restored(&config, RestorePoint::Latest).await;
     assert_eq!(latest.state, nodes[third].raft().local_snapshot().await);
+
+    // A generation in another backup format (1: no `format`) isn't
+    // continued: the next leader starts one of its own, and restores skip it.
+    for node in &mut nodes {
+        node.stop().await;
+    }
+    let record = backups
+        .path()
+        .join("generations")
+        .join(&generation)
+        .join("generation.json");
+    let mut old: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    assert_eq!(old["format"], 2);
+    old.as_object_mut().unwrap().remove("format");
+    std::fs::write(&record, serde_json::to_vec(&old).unwrap()).unwrap();
+    for node in &mut nodes {
+        node.restart().await;
+    }
+    let fourth = leader(&nodes).await;
+    write(&nodes[fourth], 4, 10, &mut revision).await;
+    let status = shipped(&nodes[fourth]).await;
+    let newer = status["generation"].as_str().unwrap().to_owned();
+    assert_ne!(newer, generation);
+    assert_eq!(
+        generations(&backups),
+        vec![generation.clone(), newer.clone()]
+    );
+    let listed = crate::consensus::list_backups(&config, None).await.unwrap();
+    let listed = listed["generations"].as_array().unwrap();
+    assert_eq!(listed[0]["format"], 1);
+    assert!(listed[0]["restorable"].is_null());
+    assert_eq!(listed[1]["reason"], "format");
+    assert_eq!(listed[1]["previous"], generation.as_str());
+    let latest = restored(&config, RestorePoint::Latest).await;
+    assert_eq!(latest.state, nodes[fourth].raft().local_snapshot().await);
     for node in &mut nodes {
         node.stop().await;
     }

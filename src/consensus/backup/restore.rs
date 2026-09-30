@@ -156,8 +156,9 @@ pub async fn list(config: &Config, replica: Option<&str>) -> anyhow::Result<Valu
     let mut listed = Vec::new();
     for generation in generations(&target).await? {
         let newest = newest_entry(&target, &generation).await?;
+        let ours = generation.record.as_ref().map(|record| record.format) == Some(format::FORMAT);
         let restorable = match (generation.bases.first(), newest) {
-            (Some(base), Some((index, at))) => json!({
+            (Some(base), Some((index, at))) if ours => json!({
                 "from": {"index": base.index, "at": base.at, "time": base.time},
                 "to": {"index": index, "at": at, "time": format_time(at)},
             }),
@@ -168,6 +169,7 @@ pub async fn list(config: &Config, replica: Option<&str>) -> anyhow::Result<Valu
             "created": generation.record.as_ref().map(|record| format_time(record.created)),
             "node": generation.record.as_ref().map(|record| record.node),
             "reason": generation.record.as_ref().map(|record| record.reason.clone()),
+            "format": generation.record.as_ref().map(|record| record.format),
             "previous": generation.record.as_ref().and_then(|record| record.previous.clone()),
             "restoredFrom": generation.record.as_ref().and_then(|record| record.restored_from.clone()),
             "bases": generation.bases,
@@ -189,13 +191,30 @@ pub async fn restore(options: RestoreOptions) -> anyhow::Result<Value> {
     };
     let all = generations(&target).await?;
     ensure!(!all.is_empty(), "no backups at {}", target.describe());
+    let readable =
+        |generation: &GenerationInfo| generation.record.as_ref().map(|record| record.format);
     let candidates: Vec<&GenerationInfo> = match &options.generation {
-        Some(id) => vec![
-            all.iter()
+        Some(id) => {
+            let generation = all
+                .iter()
                 .find(|generation| generation.id == *id)
-                .with_context(|| format!("no generation {id} at {}", target.describe()))?,
-        ],
-        None => all.iter().collect(),
+                .with_context(|| format!("no generation {id} at {}", target.describe()))?;
+            let format = readable(generation);
+            ensure!(
+                format == Some(format::FORMAT),
+                "generation {id} is in backup format {}; this binary reads format {}",
+                format.map_or_else(
+                    || "unknown (no generation.json)".into(),
+                    |format| format.to_string()
+                ),
+                format::FORMAT
+            );
+            vec![generation]
+        }
+        None => all
+            .iter()
+            .filter(|generation| readable(generation) == Some(format::FORMAT))
+            .collect(),
     };
     let qualifies = |base: &BaseInfo| match options.point {
         Point::Latest => true,

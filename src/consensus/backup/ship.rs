@@ -345,7 +345,18 @@ impl Shipper {
         let mut reason = "new";
         if let Some(generation) = &newest {
             reason = "continuity";
-            if let Some(found) = self.find_tip(generation).await? {
+            let record: Option<Generation> = self
+                .target
+                .get(&format::generation_key(generation))
+                .await?
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            let format = record.as_ref().map(|record| record.format);
+            if format != Some(format::FORMAT) {
+                // Its objects can't take ours: a restore reads one format.
+                tracing::info!(target: "flower::backup", generation = %generation,
+                    format = ?format, "the newest backup generation is in another format");
+                reason = "format";
+            } else if let Some(found) = self.find_tip(generation).await? {
                 let ours = self.store.entry_mark(found.index).await?;
                 if found.mark.is_some() && ours == found.mark {
                     tracing::info!(target: "flower::backup", generation = %generation,
@@ -490,6 +501,7 @@ impl Shipper {
             reason: reason.into(),
             restored_from: restored.clone(),
             contract: Contract::current(),
+            format: format::FORMAT,
         };
         self.target
             .put(

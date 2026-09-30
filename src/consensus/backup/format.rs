@@ -83,12 +83,24 @@ pub(super) struct Generation {
     /// The newest generation when this one began.
     pub previous: Option<String>,
     /// Why it began: `empty`, `new`, `continuity` (the last one could not
-    /// be continued) or `restored`.
+    /// be continued), `format` (the last one was in another backup format)
+    /// or `restored`.
     pub reason: String,
     /// The backup point a restored node started from.
     #[serde(default)]
     pub restored_from: Option<serde_json::Value>,
     pub contract: Contract,
+    /// The format its objects are in (`FORMAT`); 1, LZ4 blocks, without one.
+    #[serde(default = "first_format")]
+    pub format: u32,
+}
+
+/// The format of the objects this binary writes and reads: zstd blocks, and
+/// segments of unpacked entries. A generation continues only in its own.
+pub(super) const FORMAT: u32 = 2;
+
+fn first_format() -> u32 {
+    1
 }
 
 /// The newest shipped entry of a generation, written every few seconds:
