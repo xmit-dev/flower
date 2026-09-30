@@ -94,6 +94,8 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
+Push only the tag at first: the handbook's download commands name the version in `package.json`, and pushing `main` republishes the handbook on GitHub Pages. Once the release and the npm package are published, push `main` and run `bin/web-deploy` (see [publishing the handbook](PUBLISHING.md)).
+
 Use the actual new version in those commands. `node scripts/check-release.mjs`
 checks package identities/versions locally; the workflow additionally checks its
 tag. `npm pack` automatically builds the SDK through `prepack`. For a dry run,

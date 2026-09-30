@@ -2,8 +2,8 @@
 <div class="definition-grid"><article><span class="small-label">SOURCE</span><h3>collection</h3><p>Named JSON records. An optional schema checks every write.</p></article><article><span class="small-label">DEPENDENCY</span><h3>derive</h3><p>A synchronous function of records and other derived values. Always private.</p></article><article><span class="small-label">BOUNDARY</span><h3>query / mutation</h3><p>Read a snapshot, or make one atomic change. Public only if you list it in <code>http</code>.</p></article></div>
 <section id="example">
 <h2>A complete example</h2>
-<p>Save this as <code>examples/counter.ts</code>:</p>
-<div class="code-block"><div class="code-head"><span>examples/counter.ts</span><button type="button" class="copy-button" aria-label="Copy examples/counter.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, derive, fail, mutation, query, v } from "@flower-js/sdk";
+<p>Save this as <code>counter.ts</code> in the project from <a href="./">Get started</a>:</p>
+<div class="code-block"><div class="code-head"><span>counter.ts</span><button type="button" class="copy-button" aria-label="Copy counter.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, derive, fail, mutation, query, v } from "@flower-js/sdk";
 
 const counterId = v.string({ min: 1, max: 64 });
 const counters = collection("counters", v.int({ min: 0 }));
@@ -33,11 +33,11 @@ const app = define({
 });
 export default app;</code></pre></div>
 <p>Deploy it and call it:</p>
-<div class="code-block"><div class="code-head"><span>Deploy and call</span><button type="button" class="copy-button" aria-label="Copy Deploy and call">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts deploy examples/counter.ts
-node sdk/cli.ts call counter.increment '{"id":"visits","by":1}' --request-id visit-001
-node sdk/cli.ts call counter.get '"visits"'
+<div class="code-block"><div class="code-head"><span>Deploy and call</span><button type="button" class="copy-button" aria-label="Copy Deploy and call">Copy</button></div><pre tabindex="0"><code class="language-sh">npx flower deploy counter.ts
+npx flower call counter.increment '{"id":"visits","by":1}' --request-id visit-001
+npx flower call counter.get '"visits"'
 # value: { count: 1, doubled: 2 }
-node sdk/cli.ts call counter.increment '{"id":"visits","by":0}'
+npx flower call counter.increment '{"id":"visits","by":0}'
 # flower: INVALID_ARGUMENT: by: must be at least 1 {"path":["by"]}</code></pre></div>
 <ul>
 <li>Only aliases listed in <code>http</code> are public. Everything else stays private.</li>

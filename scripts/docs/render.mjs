@@ -11,6 +11,9 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const docs = resolve(root, "docs");
 const origin = "https://flower.xmit.dev/";
 const redirects = JSON.parse(readFileSync(resolve(root, "scripts/docs/redirects.json"), "utf8"));
+// Download commands name the release this checkout builds: package.json's
+// version, which scripts/check-release.mjs keeps equal to Cargo's and the tag's.
+const version = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")).version;
 const START = "<!-- content:start -->";
 const END = "<!-- content:end -->";
 
@@ -25,7 +28,7 @@ export function prepareContent(file, html) {
     const { report, others } = publishedReports(resolve(docs, "bench"));
     html = replaceSummary(html, renderPublishedSummary(report, { root: prefixOf(file), workload: file === "index.html", others }));
   }
-  return highlight(includes(file, html.trim()), file);
+  return highlight(includes(file, html.trim().replaceAll("@FLOWER_VERSION@", version)), file);
 }
 
 // Top-level <section id> elements of the content become the on-page contents.

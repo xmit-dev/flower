@@ -1,4 +1,4 @@
-<p>This app marks an invoice ready five seconds after its last update. Save it as <code>examples/invoices.ts</code> and deploy it.</p><div class="code-block"><div class="code-head"><span>examples/invoices.ts</span><button type="button" class="copy-button" aria-label="Copy examples/invoices.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, mutation, query, v } from "@flower-js/sdk";
+<p>This app marks an invoice ready five seconds after its last update. Save it as <code>invoices.ts</code> and deploy it.</p><div class="code-block"><div class="code-head"><span>invoices.ts</span><button type="button" class="copy-button" aria-label="Copy invoices.ts">Copy</button></div><pre tabindex="0"><code class="language-ts">import { collection, define, mutation, query, v } from "@flower-js/sdk";
 import { scheduler } from "@flower-js/sdk/scheduler";
 
 const invoiceId = v.string({ min: 1 });
@@ -25,10 +25,10 @@ const app = define({
   uses: [timers],
   http: { "invoice.update": update, "invoice.get": get },
 });
-export default app;</code></pre></div><div class="code-block"><div class="code-head"><span>Try the delayed update</span><button type="button" class="copy-button" aria-label="Copy Try the delayed update">Copy</button></div><pre tabindex="0"><code class="language-sh">node sdk/cli.ts deploy examples/invoices.ts
-node sdk/cli.ts call invoice.update '{"id":"inv-1","total":2400}' \
+export default app;</code></pre></div><div class="code-block"><div class="code-head"><span>Try the delayed update</span><button type="button" class="copy-button" aria-label="Copy Try the delayed update">Copy</button></div><pre tabindex="0"><code class="language-sh">npx flower deploy invoices.ts
+npx flower call invoice.update '{"id":"inv-1","total":2400}' \
   --request-id invoice-edit-1
-node sdk/cli.ts watch invoice.get '"inv-1"'</code></pre></div>
+npx flower watch invoice.get '"inv-1"'</code></pre></div>
 <ul>
 <li><code>uses: [timers]</code> adds the timer collection and the task that runs due timers.</li>
 <li>Handler names and arguments are type-checked against the handlers you passed. The handler's schema checks the arguments when you schedule (<code>INVALID_ARGUMENT</code>) and again when the timer runs.</li>

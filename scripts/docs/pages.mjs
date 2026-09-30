@@ -10,8 +10,8 @@ export const pages = [
   {
     path: "guide/index.html", group: "guide", label: "Get started",
     title: "Run Flower in five minutes.",
-    lead: "Build the server, start one node, deploy an app and call it.",
-    description: "Build Flower, start a local node, deploy a TypeScript application, and call its methods.",
+    lead: "Download the server, start one node, deploy an app and call it.",
+    description: "Download Flower, start a local node, deploy a TypeScript application, and call its methods.",
   },
   {
     path: "guide/applications.html", group: "guide", label: "Applications",

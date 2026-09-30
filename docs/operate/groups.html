@@ -39,12 +39,12 @@ export FLOWER_CATALOG_GROUP=west
 export FLOWER_GROUPS='{"west":["127.0.0.1:7101","127.0.0.1:7102","127.0.0.1:7103"],"east":["127.0.0.1:7201","127.0.0.1:7202","127.0.0.1:7203"]}'
 
 # Run one command per terminal, with the environment above in each:
-./target/release/flower --id 1 --listen 127.0.0.1:7201 --data .flower/east/node1
-./target/release/flower --id 2 --listen 127.0.0.1:7202 --data .flower/east/node2
-./target/release/flower --id 3 --listen 127.0.0.1:7203 --data .flower/east/node3</code></pre></div>
+./flower --id 1 --listen 127.0.0.1:7201 --data .flower/east/node1
+./flower --id 2 --listen 127.0.0.1:7202 --data .flower/east/node2
+./flower --id 3 --listen 127.0.0.1:7203 --data .flower/east/node3</code></pre></div>
 <p>Bootstrap <code>east</code> once, using only its own members. The explicit URL selects the new group:</p>
 <div class="code-block"><div class="code-head"><span>Operator terminal · new group only</span><button class="copy-button" type="button" aria-label="Copy east group initialization">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='same-operator-token-as-west'
-node sdk/cli.ts init --url http://127.0.0.1:7201 \
+npx flower init --url http://127.0.0.1:7201 \
   --members 1=127.0.0.1:7201,2=127.0.0.1:7202,3=127.0.0.1:7203
 
 curl -fsS -H "Authorization: Bearer $FLOWER_ADMIN_TOKEN" \

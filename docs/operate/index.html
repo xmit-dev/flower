@@ -3,16 +3,16 @@
 <h2>Start three nodes</h2>
 <p>Stop any single-node server first, since it holds port 7101. Run each server in its own terminal with the same operator token. Each node needs its own ID, address and data directory.</p><div class="code-block"><div class="code-head"><span>Each server terminal · same token</span><button type="button" class="copy-button" aria-label="Copy Each server terminal · same token">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='replace-with-a-shared-operator-secret'
 # Run one of these commands per terminal:
-./target/release/flower --id 1 --listen 127.0.0.1:7101 --data .flower/cluster/node1
-./target/release/flower --id 2 --listen 127.0.0.1:7102 --data .flower/cluster/node2
-./target/release/flower --id 3 --listen 127.0.0.1:7103 --data .flower/cluster/node3</code></pre></div><div class="code-block"><div class="code-head"><span>Operator terminal · bootstrap once</span><button type="button" class="copy-button" aria-label="Copy Operator terminal · bootstrap once">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='replace-with-a-shared-operator-secret'
-node sdk/cli.ts init \
+./flower --id 1 --listen 127.0.0.1:7101 --data .flower/cluster/node1
+./flower --id 2 --listen 127.0.0.1:7102 --data .flower/cluster/node2
+./flower --id 3 --listen 127.0.0.1:7103 --data .flower/cluster/node3</code></pre></div><div class="code-block"><div class="code-head"><span>Operator terminal · bootstrap once</span><button type="button" class="copy-button" aria-label="Copy Operator terminal · bootstrap once">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_ADMIN_TOKEN='replace-with-a-shared-operator-secret'
+npx flower init \
   --members 1=127.0.0.1:7101,2=127.0.0.1:7102,3=127.0.0.1:7103
 
 curl -fsS -H "Authorization: Bearer $FLOWER_ADMIN_TOKEN" \
   http://127.0.0.1:7101/raft/metrics</code></pre></div>
 <p>Point clients at any node. Writes and deployments go to the leader for you; queries and watches run on the node you called.</p><div class="code-block"><div class="code-head"><span>Select any reachable member</span><button type="button" class="copy-button" aria-label="Copy Select any reachable member">Copy</button></div><pre tabindex="0"><code class="language-sh">export FLOWER_URL='http://127.0.0.1:7102'
-node sdk/cli.ts deploy examples/orders.ts
+npx flower deploy terrarium.ts
 # Or pass --url http://127.0.0.1:7102 on an individual command.</code></pre></div>
 <ul>
 <li><strong>Separate hosts:</strong> use addresses the other nodes can reach. <code>--listen</code> is the socket to bind; <code>--advertise HOST:PORT</code> is the address peers use, if different. Member addresses have no <code>http://</code>.</li>
