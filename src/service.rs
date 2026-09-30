@@ -107,6 +107,7 @@ pub fn router(consensus: Consensus, admin_token: String) -> Router {
         )
         .route("/v1/identity", post(retention::identity))
         .route("/v1/session", post(retention::session_handle))
+        .route("/admin/backup", get(backup_status))
         .route("/admin/deploy", post(deploy))
         .route("/admin/deployments", post(deployment_control))
         .route("/admin/keys", post(keys::handle))
@@ -1270,6 +1271,29 @@ pub fn seal_key_import(
     format: &str,
 ) -> anyhow::Result<Value> {
     crate::crypto::managed::seal_import_file(wrapping_key_file, bytes, format)
+}
+
+/// This replica's backups: what the leader has shipped, its newest base,
+/// retention, errors, and what the store holds for them.
+async fn backup_status(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    if headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        != Some(format!("Bearer {}", app.admin_token).as_str())
+    {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHORIZED",
+            "operator bearer token required".into(),
+        ));
+    }
+    Ok(Json(match app.consensus.backup_status() {
+        Some(status) => json!({"enabled": true, "status": status}),
+        None => json!({"enabled": false}),
+    }))
 }
 
 async fn resource_metrics(

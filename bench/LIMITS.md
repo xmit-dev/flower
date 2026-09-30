@@ -432,3 +432,37 @@ pending until capacity is available, including after freeze. Base/tail limits
 are transfer policy and do not replace this aggregate node admission. The
 workspace estimate is deliberately conservative, and this remains allocation
 accounting rather than an RSS bound or streaming migration serialization.
+
+## Continuous backups
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `FLOWER_BACKUP_INTERVAL_MS` | 1000 | How often the leader ships applied log entries. |
+| `FLOWER_BACKUP_SEGMENT_MAX_BYTES` | 16 MiB | Stored log bytes per uploaded segment, at most (one entry larger than that ships alone). |
+| `FLOWER_BACKUP_BASE_INTERVAL_MS` | 24 h | A new base once the newest one is this old. |
+| `FLOWER_BACKUP_BASE_AFTER_BYTES` | 64 MiB | A new base once this much log has shipped since the newest one, or that base's size if larger. |
+| `FLOWER_BACKUP_RETENTION_MS` | 30 days | How far back restores reach. |
+| `FLOWER_BACKUP_HOLD_MAX_BYTES` | 1 GiB | Stored log bytes each node keeps from compaction for its backup. |
+| `FLOWER_BACKUP_PART_BYTES` | 16 MiB | Multipart part size for bases; at least 5 MiB. |
+
+Only the leader ships. Memory: one segment being encoded (up to the segment
+maximum plus one entry), and one base part buffered per upload; a base streams
+the state captured at one applied index through LZ4 into multipart parts,
+without a local copy. Uploads retry six times with backoff on 5xx, 429, S3
+throttling and transport errors, then the next interval tries again. A failed
+base is retried after a minute. The hold is counted in the log's stored
+encoding; past it the oldest held entries are purged anyway, with a warning, and
+the leader starts a new generation once the store is reachable. Held entries
+survive restart: startup holds again whatever the log table still keeps below
+the purge point. The hold lives only on the node's own disk; a node that joins
+from a snapshot holds nothing before it.
+
+Restore is offline. It streams the base into a temporary file in the data
+directory before installing it, so it needs about twice the restored state's
+size of free disk, and prefetches eight segments (up to 8 × the segment maximum
+of memory) while replaying batches of at most 256 entries or 16 MiB. It does
+not run application code: entries replay through the state machine as the log
+recorded them. Retention runs hourly and after each base, with at most 16
+concurrent deletions; its correctness assumes one shipping leader per prefix,
+which the generation check (log mark of the tip) enforces only when leadership
+changes normally.

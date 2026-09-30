@@ -19,6 +19,7 @@ use super::{
 };
 use std::sync::Arc;
 
+mod backup;
 mod compact;
 mod deep_json;
 mod fenced;
@@ -492,6 +493,7 @@ struct Node {
     directory: TempDir,
     // A process hosting this replica with others: its database and prefix.
     host: Option<(Host, String)>,
+    backup: Option<super::BackupConfig>,
     consensus: Option<Consensus>,
     server: Option<JoinHandle<()>>,
     stop_server: Option<tokio::sync::oneshot::Sender<()>>,
@@ -535,6 +537,18 @@ impl Node {
     }
 
     async fn start_new(id: u64, host: Option<(Host, String)>) -> Self {
+        Self::start_backed_up(id, host, None).await
+    }
+
+    async fn backed_up(id: u64, backup: super::BackupConfig) -> Self {
+        Self::start_backed_up(id, None, Some(backup)).await
+    }
+
+    async fn start_backed_up(
+        id: u64,
+        host: Option<(Host, String)>,
+        backup: Option<super::BackupConfig>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap().to_string();
         let mut node = Self {
@@ -542,6 +556,7 @@ impl Node {
             address,
             directory: tempfile::tempdir().unwrap(),
             host,
+            backup,
             consensus: None,
             server: None,
             stop_server: None,
@@ -559,9 +574,15 @@ impl Node {
             },
             None => self.directory.path().into(),
         };
-        let consensus = Consensus::open(self.id, self.address.clone(), storage, TEST_TOKEN.into())
-            .await
-            .unwrap();
+        let consensus = Consensus::open_backed_up(
+            self.id,
+            self.address.clone(),
+            storage,
+            TEST_TOKEN.into(),
+            self.backup.clone(),
+        )
+        .await
+        .unwrap();
         let router = consensus.router();
         let (stop_server, stopped) = tokio::sync::oneshot::channel();
         self.stop_server = Some(stop_server);

@@ -110,6 +110,12 @@ export const pages = [
     description: "Change the number of Flower Raft groups: provision replicas, register groups, rebalance partitions, monitor progress and remove drained groups.",
   },
   {
+    path: "operate/backups.html", group: "operate", label: "Backups & restores",
+    title: "Restore any moment.",
+    lead: "Back up continuously to S3 or a compatible store, and restore the state as of any point in the last 30 days.",
+    description: "Continuous Flower backups to S3, S3-compatible stores or a directory, their settings, monitoring, and point-in-time restores.",
+  },
+  {
     path: "operate/capacity.html", group: "operate", label: "Capacity & budgets",
     title: "Size it for your machine.",
     lead: "The settings that control how much work each node accepts, and how long each call may run.",

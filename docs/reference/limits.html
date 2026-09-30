@@ -25,7 +25,7 @@
 <h2>Durability and history</h2>
 <ul>
 <li>Data is stored in redb. After a crash, nodes rebuild from the Raft log without rerunning your code.</li>
-<li>Backups must keep node identity and data, for every group involved.</li>
+<li>Continuous backups to S3, an S3-compatible store or a directory restore the state as of any point within their retention (see <a href="../operate/backups.html">backups</a>). A restore starts a new single-node cluster; restoring one group of several doesn't reconcile transactions that span groups.</li>
 <li>Retry results, finished jobs, timer failures and transaction records grow until you clean them up (see <a href="access.html#retention">retry retention</a>). Don't delete this metadata by hand; that breaks guarantees.</li>
 </ul>
 </section>

@@ -677,6 +677,10 @@ Initialization rejects duplicate peer addresses. Raft RPCs check the target and 
 
 Public queries are linearizable by default: a replica obtains the leader's quorum-backed applied-index fence, waits for local application, then captures a snapshot. After the startup recovery barrier, explicit replica-local queries skip per-read fences and can return older state and code. Query execution has no durable effects and never sees the writer's speculative successor batch. Every acknowledged mutation publishes its final source records and materialized results at one revision.
 
+### Backups and point-in-time restores
+
+With `FLOWER_BACKUP_URL` set (`s3://BUCKET/PREFIX`, with `FLOWER_BACKUP_S3_*` for an S3-compatible endpoint and credentials, or `file:///PATH`), the leader ships every applied log entry, as stored and stamped with its apply time, about once a second, and writes a compressed base of the whole state daily or once the log shipped since the last base is as large as it. Each node keeps purged log entries its backup has not shipped yet, up to `FLOWER_BACKUP_HOLD_MAX_BYTES`, so Raft's log compaction never outruns shipping, and a new leader continues the same generation when its log holds the last shipped entry. Retention (30 days by default) keeps, per generation, the newest base at or before the horizon and everything after it. `flower backup restore --data DIR --id N --advertise HOST:PORT [--at TIME | --index N]` rebuilds the state as of any moment in that window, offline, by replaying entries after the newest base before it, into the data directory of a new single-node cluster; `flower backup list` shows what each generation can restore, and `GET /admin/backup` what a node's backup is doing. The [backups guide](https://flower.xmit.dev/operate/backups.html) has the settings and procedure.
+
 ### Upgrading existing storage
 
 Current builds use redb 4.3. Legacy redb v2 data files are unsupported.

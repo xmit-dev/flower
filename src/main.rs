@@ -64,7 +64,7 @@ extern "C" fn allocator_settings() {
 #[command(
     version,
     about = "A Raft-backed database of reactive TypeScript values",
-    after_help = "Offline provisioning: flower key seal --wrapping-key-file PATH [--format raw|pem|der] < private-key"
+    after_help = "Offline provisioning: flower key seal --wrapping-key-file PATH [--format raw|pem|der] < private-key\nBackups (FLOWER_BACKUP_URL and FLOWER_BACKUP_*): flower backup list | flower backup restore --help"
 )]
 struct Args {
     /// Unique positive ID of this Raft node.
@@ -139,8 +139,114 @@ struct SealArgs {
     format: String,
 }
 
+#[derive(Parser)]
+#[command(
+    name = "flower backup",
+    about = "List or restore Flower backups; FLOWER_BACKUP_URL and FLOWER_BACKUP_S3_* say where they are"
+)]
+struct BackupCli {
+    #[command(subcommand)]
+    command: BackupCommand,
+}
+
+#[derive(clap::Subcommand)]
+enum BackupCommand {
+    /// The generations of backups, and the points each can restore.
+    List {
+        /// The backups, instead of FLOWER_BACKUP_URL: s3://BUCKET/PREFIX or file:///PATH.
+        #[arg(long)]
+        from: Option<String>,
+        /// A hosted replica's backups (under NAME/).
+        #[arg(long)]
+        replica: Option<String>,
+    },
+    /// Restore into an empty data directory as a new single-node cluster.
+    /// Start it with the same --id (and --replica) and it elects itself;
+    /// add other nodes with /raft/membership.
+    Restore {
+        /// The backups, instead of FLOWER_BACKUP_URL: s3://BUCKET/PREFIX or file:///PATH.
+        #[arg(long)]
+        from: Option<String>,
+        /// The data directory to create (with --replica, the hosted replicas' directory).
+        #[arg(long)]
+        data: PathBuf,
+        /// The restored node's ID.
+        #[arg(long)]
+        id: u64,
+        /// The address other nodes reach the restored node at, host:port.
+        #[arg(long)]
+        advertise: String,
+        /// Restore a hosted replica's backups (under NAME/) into DATA/flower.redb.
+        #[arg(long)]
+        replica: Option<String>,
+        /// Restore the state as of this time: RFC 3339 (2026-09-30T19:23:00Z) or Unix ms.
+        #[arg(long, conflicts_with = "index")]
+        at: Option<String>,
+        /// Restore through this log index.
+        #[arg(long)]
+        index: Option<u64>,
+        /// Restore from this generation instead of the one the point picks.
+        #[arg(long)]
+        generation: Option<String>,
+    },
+}
+
+async fn backup_command(command: BackupCommand) -> anyhow::Result<serde_json::Value> {
+    use flower::consensus::{BackupConfig, RestoreOptions, RestorePoint};
+    let config = |from: Option<String>| -> anyhow::Result<BackupConfig> {
+        BackupConfig::from_env_with_url(from.as_deref())?.ok_or_else(|| {
+            anyhow::anyhow!("say where the backups are: --from URL or FLOWER_BACKUP_URL")
+        })
+    };
+    match command {
+        BackupCommand::List { from, replica } => {
+            flower::consensus::list_backups(&config(from)?, replica.as_deref()).await
+        }
+        BackupCommand::Restore {
+            from,
+            data,
+            id,
+            advertise,
+            replica,
+            at,
+            index,
+            generation,
+        } => {
+            let point = match (at, index) {
+                (Some(at), _) => RestorePoint::Time(flower::consensus::parse_time(&at)?),
+                (None, Some(index)) => RestorePoint::Index(index),
+                (None, None) => RestorePoint::Latest,
+            };
+            flower::consensus::restore_backup(RestoreOptions {
+                config: config(from)?,
+                data,
+                id,
+                advertise,
+                replica,
+                point,
+                generation,
+                progress: true,
+            })
+            .await
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let arguments: Vec<_> = std::env::args_os().collect();
+    if arguments.get(1).is_some_and(|value| value == "backup") {
+        let cli = BackupCli::parse_from(
+            std::iter::once(arguments[0].clone()).chain(arguments.into_iter().skip(2)),
+        );
+        let result = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(backup_command(cli.command))?;
+        let mut output = std::io::stdout().lock();
+        serde_json::to_writer_pretty(&mut output, &result)?;
+        writeln!(output)?;
+        return Ok(());
+    }
     if arguments.get(1).is_some_and(|value| value == "key") {
         anyhow::ensure!(
             arguments.get(2).is_some_and(|value| value == "seal"),
@@ -204,8 +310,18 @@ async fn run_server(args: Args) -> anyhow::Result<()> {
     let id = args.id.expect("--id is required without --replica");
     let listen = args.listen.unwrap_or(DEFAULT_LISTEN);
     let address = args.advertise.unwrap_or_else(|| listen.to_string());
-    let consensus =
-        Consensus::open(id, address, args.data.into(), args.admin_token.clone()).await?;
+    let backup = flower::consensus::BackupConfig::from_env()?;
+    if let Some(backup) = &backup {
+        tracing::info!(target: "flower::backup", target_url = %backup.describe(), "backing up");
+    }
+    let consensus = Consensus::open_backed_up(
+        id,
+        address,
+        args.data.into(),
+        args.admin_token.clone(),
+        backup,
+    )
+    .await?;
     let app = service::router(consensus.clone(), args.admin_token);
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!(id, listen = %listen,
@@ -239,6 +355,7 @@ async fn host_replicas(args: Args, server_config: server::Config) -> anyhow::Res
         SharedDatabase::open(&data.join("flower.redb"))
     })
     .await??;
+    let backup = flower::consensus::BackupConfig::from_env()?;
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let mut servers = Vec::new();
     let mut hosted = Vec::new();
@@ -253,8 +370,21 @@ async fn host_replicas(args: Args, server_config: server::Config) -> anyhow::Res
                 prefix: format!("{}/", replica.name),
                 directory: args.data.join(&replica.name),
             };
-            let consensus =
-                Consensus::open(replica.id, address, storage, args.admin_token.clone()).await?;
+            let backup = backup
+                .as_ref()
+                .map(|backup| backup.for_replica(&replica.name));
+            if let Some(backup) = &backup {
+                tracing::info!(target: "flower::backup", replica = %replica.name,
+                    target_url = %backup.describe(), "backing up");
+            }
+            let consensus = Consensus::open_backed_up(
+                replica.id,
+                address,
+                storage,
+                args.admin_token.clone(),
+                backup,
+            )
+            .await?;
             hosted.push(consensus.clone());
             let app = service::router(consensus, args.admin_token.clone());
             let listener = tokio::net::TcpListener::bind(replica.listen).await?;

@@ -914,6 +914,7 @@ fn store_with_database(directory: &std::path::Path, db: Database) -> Store {
             replaced_partitions: Default::default(),
             holders: Default::default(),
             changes: super::super::changes::sender(),
+            backup: Default::default(),
         }),
         raft_lifetime: None,
     }

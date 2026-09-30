@@ -31,6 +31,8 @@ Moving a tenant preserves its logical ID, history incarnation, receipts, and ret
 
 A disaster restore is different. Restoring an old snapshot also restores its old rejection floors, key policy, transaction records, and worker fencing counters. The restored service must receive a new incarnation, and the old deployment must be fenced before traffic resumes. A random new ID distinguishes histories; it does not by itself disable the old cluster or tell an external system which history to trust. That needs operator-controlled isolation or an authority outside the restored backup.
 
+`flower backup restore` (continuous backups, [docs/operate/backups.html](docs/operate/backups.html)) is such a restore: it rebuilds the state as of a point in time into a new single-node cluster, with Raft terms far above the old history's, but it neither fences the old cluster nor changes the incarnation. Stop the old deployment, or keep traffic away from it, then run the retention `reincarnate` action on the restored service before it takes traffic.
+
 Do not automatically resubmit uncertain old-incarnation mutations under the new incarnation. Their business effects might already have happened. A cross-group restore additionally needs a consistent recovery cut or explicit reconciliation of durable transaction decisions. Restoring one unrelated old participant or coordinator is not a supported recovery protocol.
 
 ## 2. Expiry-safe request identities

@@ -25,6 +25,8 @@ mod snapshots;
 use snapshots::*;
 mod snapshot_data;
 use snapshot_data::DeferredImage;
+mod backup;
+pub(super) use backup::{BackupImage, EntryMark, Shippable, decode_stored_entry, holds_replica};
 pub use snapshot_data::SnapshotData;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -449,6 +451,8 @@ struct Inner {
     holders: Arc<persistence::Holders>,
     // What each publication wrote, for watches.
     changes: super::changes::Sender,
+    // Apply times and held log entries, for backups.
+    backup: Arc<backup::Hooks>,
 }
 
 #[derive(Clone)]
@@ -643,6 +647,7 @@ impl Store {
                 replaced_partitions: Arc::default(),
                 holders: Arc::default(),
                 changes: super::changes::sender(),
+                backup: Arc::default(),
             }),
             raft_lifetime: None,
         };
@@ -1450,14 +1455,15 @@ impl RaftLogStorage<TypeConfig> for Store {
                 .filter_map(|entries| entries.last())
                 .map(|entry| entry.log_id)
                 .max_by_key(|log| log.index);
+            // Entries a backup holds lie below the purge point.
             Ok(LogState {
                 last_purged_log_id: last_purged,
                 last_log_id: last
                     .map(|entry| entry.log_id)
                     .into_iter()
                     .chain(buffered)
-                    .max_by_key(|log| log.index)
-                    .or(last_purged),
+                    .chain(last_purged)
+                    .max_by_key(|log| log.index),
             })
         })
         .await
@@ -1607,6 +1613,7 @@ impl RaftLogStorage<TypeConfig> for Store {
 
     async fn purge(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
         let tables = self.inner.tables;
+        let hooks = self.inner.backup.clone();
         // Keep the log until the state it would replay is written. This purge's
         // Immediate commit then persists that state too.
         self.inner
@@ -1621,14 +1628,9 @@ impl RaftLogStorage<TypeConfig> for Store {
                 transaction.set_durability(Durability::Immediate)?;
                 profile.phase(StoragePhase::Begin);
                 {
+                    // Backups may hold purged entries they have not shipped.
                     let mut table = transaction.open_table(tables.logs)?;
-                    let keys = table
-                        .range(..=log_id.index)?
-                        .map(|item| item.map(|(key, _)| key.value()))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    for key in keys {
-                        table.remove(key)?;
-                    }
+                    hooks.purge(&mut table, log_id.index)?;
                     let mut meta = transaction.open_table(tables.meta)?;
                     meta.insert("last_purged", profile.encode(&log_id)?.as_slice())?;
                 }
@@ -1685,6 +1687,7 @@ impl RaftStateMachine<TypeConfig> for Store {
         let weak = Arc::downgrade(&self.inner);
         let holders = self.inner.holders.clone();
         let changes = self.inner.changes.clone();
+        let backup = self.inner.backup.clone();
         let responses = tokio::task::spawn_blocking(move || work.run(|db| -> anyhow::Result<_> {
             let span = profile.span();
             let _entered = span.enter();
@@ -1843,6 +1846,9 @@ impl RaftStateMachine<TypeConfig> for Store {
             lazy.update_membership(&guard.membership);
             snapshot_accounting.applied(applied_bytes,guard.last_applied.map(|id|id.index));
             publish(&published, &guard);
+            if let Some(applied) = guard.last_applied {
+                backup.applied(applied.index);
+            }
             // Under the guard, so readers learn of writes in publication order.
             for written in written {
                 let _ = changes.send(Arc::new(written));
@@ -2009,6 +2015,9 @@ impl RaftStateMachine<TypeConfig> for Store {
                 .store(next_installation, Ordering::Release);
             inner
                 .snapshot_accounting
+                .installed(guard.last_applied.map(|id| id.index));
+            inner
+                .backup
                 .installed(guard.last_applied.map(|id| id.index));
             profile.phase(StoragePhase::Publish);
             Ok(())

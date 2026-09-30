@@ -278,6 +278,7 @@ async fn recovered_leader_serves_no_fence_before_tail_replay_in_a_new_term() {
         });
         nodes.push(Node {
             host: None,
+            backup: None,
             id,
             address: members[&id].clone(),
             directory,
@@ -559,6 +560,7 @@ async fn recovery_gate_rejects_local_queries_without_quorum_then_allows_replica_
         let id = index as u64 + 1;
         let mut node = Node {
             host: None,
+            backup: None,
             id,
             address: members[&id].clone(),
             directory,
@@ -629,6 +631,7 @@ async fn recovery_replaces_uncommitted_conflicting_suffix_before_opening_local_r
         let id = index as u64 + 1;
         let mut node = Node {
             host: None,
+            backup: None,
             id,
             address: members[&id].clone(),
             directory,

@@ -2,6 +2,7 @@
 //! application code is never executed by a replica's state machine.
 
 mod backing;
+mod backup;
 mod cache;
 pub mod changes;
 mod command_fields;
@@ -39,6 +40,10 @@ use openraft::{BasicNode, CommittedLeaderId, Config, RaftMetrics, SnapshotPolicy
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use backup::{
+    Config as BackupConfig, Point as RestorePoint, RestoreOptions, format_time,
+    list as list_backups, parse_time, restore as restore_backup,
+};
 #[cfg(test)]
 pub(crate) use cache::parses;
 pub use limits::Limits;
@@ -443,6 +448,8 @@ pub struct Consensus {
     // Set once the process stops accepting connections, so that responses
     // that never end, like watches, end rather than hold up the drain.
     draining: Arc<tokio::sync::watch::Sender<bool>>,
+    // Continuous backups, when configured.
+    backup: Option<Arc<backup::Backup>>,
 }
 
 impl Consensus {
@@ -458,12 +465,35 @@ impl Consensus {
         Self::open_with_tokens(id, address, storage, token, peer_token).await
     }
 
+    /// Open a replica that backs up as `backup` says (see `BackupConfig`).
+    pub async fn open_backed_up(
+        id: u64,
+        address: String,
+        storage: Storage,
+        token: String,
+        backup: Option<BackupConfig>,
+    ) -> anyhow::Result<Self> {
+        let peer_token = crate::transport::peer_token(&token)?;
+        Self::open_configured(id, address, storage, token, peer_token, backup).await
+    }
+
     pub async fn open_with_tokens(
         id: u64,
         address: String,
         storage: Storage,
         token: String,
         peer_token: String,
+    ) -> anyhow::Result<Self> {
+        Self::open_configured(id, address, storage, token, peer_token, None).await
+    }
+
+    async fn open_configured(
+        id: u64,
+        address: String,
+        storage: Storage,
+        token: String,
+        peer_token: String,
+        backup: Option<BackupConfig>,
     ) -> anyhow::Result<Self> {
         crate::transport::validate_configuration()?;
         validate_address(&address)?;
@@ -496,6 +526,9 @@ impl Consensus {
         })?;
         let network = network::Network::with_limits(&peer_token, limits.clone())?;
         let store = store::Store::open(id, storage).await?;
+        if let Some(backup) = &backup {
+            backup::Backup::prepare(backup, &store).await?;
+        }
         let log_state =
             openraft::storage::RaftLogStorage::get_log_state(&mut store.clone()).await?;
         let applied = store.read_fence().ok().map(|fence| fence.applied);
@@ -524,6 +557,9 @@ impl Consensus {
         let snapshot_scheduler =
             snapshot_policy::spawn(raft.clone(), store.snapshot_accounting(), limits.clone());
         let (progress_lifetime, progress) = progress::spawn(raft.clone(), lease);
+        let backup = backup
+            .map(|backup| backup::Backup::start(backup, id, raft.clone(), store.clone()))
+            .transpose()?;
         let reads = read::Dispatchers::new(
             id,
             raft.clone(),
@@ -551,6 +587,7 @@ impl Consensus {
             progress,
             _progress: progress_lifetime,
             draining: Arc::new(tokio::sync::watch::Sender::new(false)),
+            backup,
         })
     }
 
@@ -874,7 +911,16 @@ impl Consensus {
         }
     }
 
+    /// What this replica's backup is doing, if it backs up.
+    pub fn backup_status(&self) -> Option<Value> {
+        self.backup.as_ref().map(|backup| backup.status())
+    }
+
     pub async fn shutdown(&self) -> anyhow::Result<()> {
+        // The leader ships what it applied last while Raft still runs.
+        if let Some(backup) = &self.backup {
+            backup.stop().await;
+        }
         self.reads.shutdown().await;
         self.raft.shutdown().await.context("shut down Raft")?;
         // OpenRaft 0.9 joins its core/tick, while replication/state-machine
