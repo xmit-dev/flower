@@ -94,6 +94,12 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         env:
           E2E_FLOWER_BIN: target/release/flower
+          # The README's timing for heavily scheduled hosts: on a shared runner a
+          # follower applying a deployment can miss the default 50 ms heartbeat
+          # RPC, and a fresh read then fails UNAVAILABLE (503).
+          FLOWER_RAFT_HEARTBEAT_MS: '200'
+          FLOWER_RAFT_ELECTION_MIN_MS: '800'
+          FLOWER_RAFT_ELECTION_MAX_MS: '1600'
         run: |
           npm ci
           cargo build --release --locked --bin flower-bench-driver
