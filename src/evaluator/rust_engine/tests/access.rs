@@ -207,6 +207,7 @@ fn install_with(
                 .map(|rules| serde_json::from_value(rules).unwrap())
                 .unwrap_or_default(),
             aggregate_versions: BTreeMap::new(),
+            references: Vec::new(),
         }),
     )
     .unwrap();
@@ -1348,6 +1349,7 @@ fn log_setup() -> (Records, Fixture) {
             policies: log_policies(),
             derived_access: BTreeMap::new(),
             aggregate_versions: BTreeMap::new(),
+            references: Vec::new(),
         }),
     )
     .unwrap();

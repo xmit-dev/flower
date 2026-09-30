@@ -212,7 +212,35 @@ pub(super) struct RangeQuery {
     offset: usize,
     scan: bool,
     source_keys: bool,
+    /// For a scan in source-key order, text every key it can return starts
+    /// with: the rows walked are those alone.
+    key_prefix: Option<String>,
 }
+/// What every source key a scan's options admit starts with, if anything:
+/// the exact key of a prefix, or the text two bounds share (a key between
+/// them in UTF-16 order starts with whatever both start with). The escaped
+/// source IDs of such keys start with the escaped text too, so a walk in ID
+/// order visits them alone.
+fn key_prefix(options: &serde_json::Map<String, Value>) -> Option<String> {
+    let text = |name: &str| options.get(name).and_then(Value::as_str);
+    if let Some(key) = options
+        .get("prefix")
+        .and_then(Value::as_array)
+        .and_then(|parts| parts.first())
+        .and_then(Value::as_str)
+    {
+        return Some(key.to_owned());
+    }
+    let (lower, upper) = (text("gte").or(text("gt"))?, text("lt").or(text("lte"))?);
+    let shared: String = lower
+        .chars()
+        .zip(upper.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a)
+        .collect();
+    (!shared.is_empty()).then_some(shared)
+}
+
 impl RangeQuery {
     pub(super) fn parse_scan(reference: &Value, options: &Value) -> EngineResult<Self> {
         let collection = reference_name(reference, "collection")?;
@@ -288,6 +316,9 @@ impl RangeQuery {
         query.offset = offset;
         query.scan = true;
         query.source_keys = source_keys;
+        if source_keys {
+            query.key_prefix = key_prefix(options);
+        }
         Ok(query)
     }
 
@@ -444,6 +475,7 @@ impl RangeQuery {
             offset: 0,
             scan: false,
             source_keys: false,
+            key_prefix: None,
         })
     }
     fn entry(&self, spec: &IndexSpec, key: &str, value: &Value) -> Option<String> {
@@ -626,10 +658,13 @@ impl Engine<'_> {
         };
         // Overlay mutations before walking the durable index. Skipped old entries
         // and inserted positions preserve read-your-writes without a full preview.
-        let source_prefix = format!(
-            "source:[{},",
-            serde_json::to_string(&query.collection).unwrap()
-        );
+        let source_prefix = match &query.key_prefix {
+            Some(prefix) => super::references::source_key_prefix(&query.collection, prefix),
+            None => format!(
+                "source:[{},",
+                serde_json::to_string(&query.collection).unwrap()
+            ),
+        };
         for (position, (id, value)) in self.writes.range(source_prefix.clone()..).enumerate() {
             if !id.starts_with(&source_prefix) {
                 break;

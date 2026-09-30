@@ -10,7 +10,8 @@ export type {
   Principal, AuthorizationRequest, HistoryIdentity, Context, QueryContext, MutationContext, SetOptions,
   AggregateMetadata, Derived, Materialization, DeriveOptions, QueryConsistency, Access, MethodSpec, MutationSpec, QuerySpec,
   QueryMethod, MutationMethod, TransactionTarget, TransactionCall, TransactionPlan, TransactionMethod, TransactionResult,
-  Definition, HttpMethod, HttpMap, ManifestMethod, CollectionManifest, FlowerModule,
+  Definition, HttpMethod, HttpMap, ManifestMethod, CollectionManifest, ReferenceManifest, FlowerModule,
+  OnDelete, ReferencePlace, ReferenceOptions, ReferenceTarget,
   ApiOf, ArgsOf, ResultOf, AliasOf, QueryAliasOf, MutationAliasOf, ArgsParameter,
   TaskFailure, Task, Change, Trigger, Usable, ComponentParts, Component,
 } from "./core.ts";

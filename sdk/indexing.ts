@@ -1,6 +1,6 @@
 import { canonicalJson, type Json } from "./json.ts";
 import { collectionInfo, declareDerivedAccess, plainObject, requireName } from "./core.ts";
-import type { AggregateMetadata, Collection, CollectionManifest, Derived, EqualityValue, IndexMap } from "./core.ts";
+import type { AggregateMetadata, Collection, CollectionManifest, Derived, EqualityValue, IndexMap, ReferenceInfo, ReferenceManifest } from "./core.ts";
 import type { DerivedAccess } from "./access.ts";
 
 export interface Aggregate<G = Json, V = Json> extends Derived<G, V> { readonly aggregate: AggregateMetadata }
@@ -64,8 +64,40 @@ function aggregateVersion(value: unknown): string {
   return version;
 }
 
-/** Merge collection declarations by name; one name must always carry the same indexes. */
-export function collectionManifest(references: Iterable<Collection<any, any, any>>): CollectionManifest[] {
+/** The collection a reference's target names, resolving a function. */
+export function referenceTarget(reference: ReferenceInfo): Collection<any, any, any> {
+  const target = typeof reference.target === "function" ? reference.target() : reference.target;
+  if (!collectionInfo(target)) throw new TypeError("A reference's target must be a collection, or a function returning one");
+  return target;
+}
+
+/** A reference as the server takes it, checked against how both collections are keyed. */
+export function referenceManifest(collection: Collection<any, any, any>, reference: ReferenceInfo): ReferenceManifest {
+  const target = referenceTarget(reference);
+  const json = Boolean(collectionInfo(target)!.key);
+  const keyed = Boolean(collectionInfo(collection)?.key);
+  const label = `${JSON.stringify(collection.name)}'s reference to ${JSON.stringify(target.name)}`;
+  if (reference.key === true) {
+    if (keyed !== json) throw new TypeError(`${label}: a row whose key is the target's is keyed as the target is, both with collection.key(schema) or neither`);
+  } else if (reference.key !== undefined) {
+    if (!keyed) throw new TypeError(`${label}: components of a key need tuple keys, declared with collection.key(v.tuple(…))`);
+    if (reference.key > 1 && !json) throw new TypeError(`${label}: several key components make a tuple key, which the target lacks (collection.key(schema))`);
+  } else if (reference.fields!.length > 1 && !json) {
+    throw new TypeError(`${label}: several fields make a tuple key, which the target lacks (collection.key(schema))`);
+  }
+  return Object.freeze({
+    target: target.name,
+    ...(reference.key === undefined ? { fields: reference.fields! } : { key: reference.key }),
+    ...(json ? { json: true as const } : {}),
+  });
+}
+
+/**
+ * Merge collection declarations by name; one name must always carry the same indexes. With `references`,
+ * entries list those the declarations carry (resolving their targets): declarations without any don't
+ * conflict with them, but two different sets do.
+ */
+export function collectionManifest(references: Iterable<Collection<any, any, any>>, withReferences = true): CollectionManifest[] {
   const byName = new Map<string, CollectionManifest>();
   for (const reference of references) {
     for (const field of ["kind", "name", "indexes"]) {
@@ -85,7 +117,12 @@ export function collectionManifest(references: Iterable<Collection<any, any, any
     if (access && !collectionInfo(reference)?.key && usesKeyParts(access)) {
       throw new TypeError(`Access rules of ${JSON.stringify(reference.name)} read key parts; declare its keys with collection.key(schema)`);
     }
-    const entry: CollectionManifest = Object.freeze({ name: reference.name, indexes: Object.freeze(indexes), ...(access ? { access } : {}) });
+    const declaredReferences = withReferences ? collectionInfo(reference)?.references ?? [] : [];
+    const referring = [...new Map(declaredReferences.map((each) => referenceManifest(reference, each)).map((each) => [canonicalJson(each as unknown as Json), each])).entries()]
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, each]) => each);
+    const entry: CollectionManifest = Object.freeze({
+      name: reference.name, indexes: Object.freeze(indexes), ...(access ? { access } : {}), ...(referring.length ? { references: Object.freeze(referring) } : {}),
+    });
     const previous = byName.get(reference.name);
     if (previous && canonicalJson(previous.indexes) !== canonicalJson(entry.indexes)) {
       throw new TypeError(`Collection ${JSON.stringify(reference.name)} is declared with different indexes`);
@@ -95,7 +132,16 @@ export function collectionManifest(references: Iterable<Collection<any, any, any
     if (previous?.access && entry.access && canonicalJson(previous.access as unknown as Json) !== canonicalJson(entry.access as unknown as Json)) {
       throw new TypeError(`Collection ${JSON.stringify(reference.name)} is declared with different access`);
     }
-    byName.set(reference.name, previous?.access || !entry.access ? previous ?? entry : entry);
+    if (previous?.references && entry.references && canonicalJson(previous.references as unknown as Json) !== canonicalJson(entry.references as unknown as Json)) {
+      throw new TypeError(`Collection ${JSON.stringify(reference.name)} is declared with different references`);
+    }
+    // What each declaration adds: its access, its references.
+    const kept = previous ?? entry;
+    byName.set(reference.name, Object.freeze({
+      ...kept,
+      ...(entry.access && !kept.access ? { access: entry.access } : {}),
+      ...(entry.references && !kept.references ? { references: entry.references } : {}),
+    }));
   }
   return [...byName.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }
@@ -150,7 +196,7 @@ export function aggregate<T, K extends Json, I extends IndexMap, N extends Extra
 ): Aggregate<EqualityValue<T, I[N]>, V> {
   requireName(name, "Aggregate name");
   const settings = plainObject(options, "Aggregate options", ["source", "index", "initial", "add", "remove", "access", "version"]);
-  const [declaration] = collectionManifest([options.source]);
+  const [declaration] = collectionManifest([options.source], false);
   requireName(settings.index, "Aggregate index");
   if (!Object.hasOwn(declaration.indexes, options.index)) throw new TypeError(`Unknown aggregate index ${JSON.stringify(options.index)}`);
   for (const callback of ["initial", "add", "remove"] as const) {

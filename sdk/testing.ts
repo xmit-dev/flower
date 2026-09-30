@@ -5,6 +5,7 @@ import { FlowerClient, FlowerError } from "./client.ts";
 import type { AliasOf, ApiOf, ArgsOf, ArgsParameter, Failure, FlowerModule, MutationAliasOf, Principal, QueryAliasOf, ResultOf } from "./core.ts";
 import { canonicalJson, type Json } from "./json.ts";
 import { enforceAccess } from "./access.ts";
+import { checkReferences } from "./references.ts";
 
 type Engine = { flowerInvoke(data: Record<string, Json>, invocation: Json, method: Function, cell: Function, now?: number): { puts: Record<string, Json>; deletes: string[]; value: Json } };
 type Manifest = FlowerModule<any>;
@@ -199,8 +200,10 @@ export class TestDatabase<App = FlowerModule> {
   private run(data: Record<string, Json>, kind: "query" | "mutation", name: string, args: Json, principal: Principal | null, caller = true) {
     const definitions = this.module.definitions as Record<string, any>;
     const identity = principal === null ? null : this.local(principal);
+    // References held in fields have an index of them, as on the server.
     const declared = new Set((this.module.collections ?? []).flatMap((entry) =>
-      Object.values(entry.indexes).map((fields) => canonicalJson([entry.name, [...fields]]))));
+      [...Object.values(entry.indexes), ...(entry.references ?? []).flatMap((reference) => reference.fields ? [reference.fields] : [])]
+        .map((fields) => canonicalJson([entry.name, [...fields]]))));
     const indexed = (collection: string, fields: readonly string[]) => {
       if (!declared.has(canonicalJson([collection, [...fields]]))) {
         throw Object.assign(new Error(`Index [${fields.join(", ")}] on ${collection} is not declared in define(); the server would scan the whole collection`),
@@ -245,7 +248,10 @@ export class TestDatabase<App = FlowerModule> {
         .map(({ key, value }) => ({ key, new: value }));
       return definition.compute(undefined, { initialize: true, group: input, previous: null, changes });
     };
-    return this.engine.flowerInvoke(data, { kind, name, args, requestId: `test-${++this.sequence}` } as unknown as Json, method, cell, this.now);
+    const output = this.engine.flowerInvoke(data, { kind, name, args, requestId: `test-${++this.sequence}` } as unknown as Json, method, cell, this.now);
+    // As the server does at the end of every mutation: rows refer only to rows that exist.
+    if (kind === "mutation") checkReferences(this.module.collections ?? [], data, output.puts, output.deletes);
+    return output;
   }
 
   private commit(store: Store, output: { puts: Record<string, Json>; deletes: string[] }) {

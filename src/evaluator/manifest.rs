@@ -5,7 +5,8 @@ use super::{
     AuthorizationMethod, AuthorizationResult, HttpMethod, MaintenanceMethod, Manifest, MethodKind,
     QueryConsistency,
     rust_engine::{
-        IndexSpec, Policy, Rule, Schema, valid_version, validate_derived_targets, validate_targets,
+        IndexSpec, KeyPart, Policy, ReferenceSpec, Rule, Schema, valid_version,
+        validate_derived_targets, validate_targets,
     },
 };
 use anyhow::{Result, anyhow, bail, ensure};
@@ -108,6 +109,62 @@ fn index_fields(value: Option<&Value>) -> Result<Vec<String>> {
     }
 }
 
+/// A collection's `references`: `{target, fields | key, json?}` each, where
+/// `key` is true (the whole key) or how many leading components of it.
+fn references(collection: &str, value: Option<&Value>) -> Result<Vec<ReferenceSpec>> {
+    let references = match value {
+        None => return Ok(Vec::new()),
+        Some(Value::Array(references)) => references,
+        Some(_) => bail!("Collection references must be an array"),
+    };
+    references
+        .iter()
+        .map(|value| {
+            let entry = object(Some(value), "Reference")?;
+            ensure!(
+                only(entry, &["target", "fields", "key", "json"]),
+                "A reference of {collection} has unknown fields"
+            );
+            let target = text(entry, "target").filter(|target| !target.is_empty());
+            let json = match entry.get("json") {
+                None => false,
+                Some(Value::Bool(json)) => *json,
+                Some(_) => bail!("A reference's json is a boolean"),
+            };
+            let key = match entry.get("key") {
+                None => None,
+                Some(Value::Bool(true)) => Some(KeyPart::Whole(true)),
+                Some(value) => Some(KeyPart::Leading(
+                    value
+                        .as_u64()
+                        .filter(|count| (1..=64).contains(count))
+                        .map(|count| count as usize)
+                        .ok_or_else(|| {
+                            anyhow!("A reference's key is true or a count of leading components")
+                        })?,
+                )),
+            };
+            let fields = match entry.get("fields") {
+                None => Vec::new(),
+                fields => index_fields(fields)?,
+            };
+            let reference = ReferenceSpec {
+                collection: collection.to_owned(),
+                target: target
+                    .ok_or_else(|| anyhow!("A reference of {collection} names its target"))?
+                    .to_owned(),
+                fields,
+                key,
+                json,
+            };
+            reference
+                .validate()
+                .map_err(|error| anyhow!("Invalid reference of {collection}: {error}"))?;
+            Ok(reference)
+        })
+        .collect()
+}
+
 fn keys(value: Option<&Value>) -> Result<Vec<Value>> {
     let keys = match value {
         None => return Ok(Vec::new()),
@@ -145,11 +202,12 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
     let (mut indexes, mut identities, mut declared) =
         (Vec::new(), BTreeSet::new(), BTreeSet::new());
     let mut policies = BTreeMap::new();
+    let mut declared_references = Vec::new();
     for value in collections {
         let collection = object(Some(value), "Collection declaration")?;
         let name = text(collection, "name");
         let Some(name) = name.filter(|name| {
-            only(collection, &["name", "indexes", "access"])
+            only(collection, &["name", "indexes", "access", "references"])
                 && !name.is_empty()
                 && declared.insert(*name)
         }) else {
@@ -171,6 +229,15 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
                     fields,
                 });
             }
+        }
+        // A reference held by fields finds its rows through an index of them.
+        for reference in references(name, collection.get("references"))? {
+            if let Some(index) = reference.index()
+                && identities.insert((index.collection.clone(), index.fields.clone()))
+            {
+                indexes.push(index);
+            }
+            declared_references.push(reference);
         }
     }
     validate_targets(&policies).map_err(|error| anyhow!("Invalid access policy: {error}"))?;
@@ -227,12 +294,15 @@ fn schema(app: &Map<String, Value>, definitions: &BTreeMap<&str, Definition>) ->
     }
     validate_derived_targets(&derived_access, &policies)
         .map_err(|error| anyhow!("Invalid access rule for derived {error}"))?;
+    declared_references.sort();
+    declared_references.dedup();
     Ok(Schema {
         indexes,
         aggregates,
         aggregate_versions,
         policies,
         derived_access,
+        references: declared_references,
     })
 }
 

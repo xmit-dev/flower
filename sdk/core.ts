@@ -95,12 +95,42 @@ export interface Index<T = Json, K = string, F extends readonly string[] = reado
   range(options: RangeOptions<T, F>): RangeQuery<T, K>;
 }
 
+/**
+ * What happens to rows that refer to a row when it is deleted: nothing, so that the mutation deleting it
+ * fails while any still does (`restrict`, the default), they are deleted too (`cascade`), or their fields
+ * that refer to it become null (`setNull`, for references held in fields).
+ */
+export type OnDelete = "restrict" | "cascade" | "setNull";
+/**
+ * Where a row holds the key of the row it refers to: a field; several fields, in order, whose values make
+ * the target's tuple key; or its own key (`collection.key(v.tuple(…))`): its first `key` components, or
+ * with `key: true` all of it, one row extending the other.
+ */
+export type ReferencePlace<T> = FieldOf<T> | readonly [FieldOf<T>, ...FieldOf<T>[]] | { readonly key: true | number };
+export interface ReferenceOptions { readonly onDelete?: OnDelete }
+/** A collection, or a function returning one: for a collection declared later, or the collection itself. */
+export type ReferenceTarget = Collection<any, any, any> | (() => Collection<any, any, any>);
+export interface ReferenceInfo {
+  readonly target: ReferenceTarget;
+  readonly fields?: readonly string[];
+  readonly key?: true | number;
+  readonly onDelete: OnDelete;
+}
+
 export interface Collection<T = Json, K extends Json = string, I extends IndexMap = {}> {
   readonly kind: "collection";
   readonly name: string;
   readonly indexes: I;
   /** A new reference with one more durable index. */
   index<const N extends string, const F extends readonly [FieldOf<T>, ...FieldOf<T>[]]>(name: N, fields: F): Collection<T, K, Simplify<I & { readonly [P in N]: F }>>;
+  /**
+   * A new reference whose rows refer to rows of `target` (a foreign key): where `on` says, each holds a
+   * target row's key, or null (or no such field) for none. At the end of every mutation, each row it wrote
+   * refers only to rows that exist, and no row it deleted is still referred to, unless `onDelete` removes
+   * or clears those that were; otherwise it fails with FOREIGN_KEY_VIOLATION. Deploying one checks the rows
+   * already there. References held by fields get an index of them.
+   */
+  references(target: ReferenceTarget, on: ReferencePlace<T>, options?: ReferenceOptions): Collection<T, K, I>;
   /** A new reference whose keys are validated JSON values, stored as canonical JSON. */
   key<K2 extends Json>(schema: SchemaLike<K2>): Collection<T, K2, I>;
   by<N extends Extract<keyof I, string>>(name: N): Index<T, K, I[N]>;
@@ -112,7 +142,12 @@ export interface Collection<T = Json, K extends Json = string, I extends IndexMa
   access<U extends T>(this: Collection<U, K, I>, rules: CollectionAccess<U>): Collection<U, K, I>;
 }
 
-export interface CollectionInfo { readonly key: Schema<Json> | null; readonly value: Schema<unknown> | null; readonly access?: AccessManifest }
+export interface CollectionInfo {
+  readonly key: Schema<Json> | null;
+  readonly value: Schema<unknown> | null;
+  readonly access?: AccessManifest;
+  readonly references?: readonly ReferenceInfo[];
+}
 const collectionInfos = new WeakMap<object, CollectionInfo>();
 const rangeOwners = new WeakMap<object, Collection<any, any, any>>();
 
@@ -197,6 +232,35 @@ class CollectionReference {
     if (Object.hasOwn(this.indexes, indexName)) throw new TypeError(`Index ${JSON.stringify(indexName)} is already declared`);
     return new CollectionReference(this.name, Object.assign(Object.create(null), this.indexes, { [indexName]: Object.freeze([...fields]) }),
       collectionInfos.get(this)!);
+  }
+  references(target: unknown, on: unknown, options?: unknown): CollectionReference {
+    if (typeof target !== "function" && !collectionInfos.has(target as object)) {
+      throw new TypeError("references requires a collection, or a function returning one");
+    }
+    const settings = options === undefined ? {} : plainObject(options, "Reference options", ["onDelete"]);
+    const onDelete = settings.onDelete ?? "restrict";
+    if (onDelete !== "restrict" && onDelete !== "cascade" && onDelete !== "setNull") {
+      throw new TypeError("onDelete must be \"restrict\", \"cascade\" or \"setNull\"");
+    }
+    let place: { fields: readonly string[] } | { key: true | number };
+    if (typeof on === "string" || Array.isArray(on)) {
+      const fields = typeof on === "string" ? [on] : [...on];
+      if (fields.length === 0 || fields.some((field) => typeof field !== "string" || !field) || new Set(fields).size !== fields.length) {
+        throw new TypeError("A reference's fields must be distinct nonempty strings");
+      }
+      place = { fields: Object.freeze(fields) };
+    } else {
+      const { key } = plainObject(on, "Reference place", ["key"]);
+      if (key !== true && !(Number.isSafeInteger(key) && (key as number) >= 1 && (key as number) <= 64)) {
+        throw new TypeError("A reference's key is true (the whole key) or how many of its leading components, 1 to 64");
+      }
+      if (onDelete === "setNull") throw new TypeError("setNull clears fields: a reference in a key can't be set null");
+      place = { key: key as true | number };
+    }
+    const info = collectionInfos.get(this)!;
+    const reference: ReferenceInfo = Object.freeze({ target: target as ReferenceTarget, ...place, onDelete });
+    return new CollectionReference(this.name, Object.assign(Object.create(null), this.indexes),
+      { ...info, references: Object.freeze([...(info.references ?? []), reference]) });
   }
   key(keySchema: SchemaLike<Json>): CollectionReference {
     return new CollectionReference(this.name, Object.assign(Object.create(null), this.indexes), { ...collectionInfos.get(this)!, key: adopt(keySchema) });
@@ -456,7 +520,22 @@ export function transaction(name: string, specOrPlan: unknown, maybePlan?: unkno
 /** A committed transaction: each call's result, and the plan's value when it has one. */
 export interface TransactionResult<V = Json> { results: Json[]; value?: V }
 export interface ManifestMethod { readonly name: string; readonly kind: "query" | "mutation" | "transaction"; readonly consistency?: "replica-local"; readonly receipt?: false }
-export interface CollectionManifest { readonly name: string; readonly indexes: Readonly<Record<string, readonly string[]>>; readonly access?: AccessManifest }
+/**
+ * A reference as the server enforces it: the target's name, where the row holds its key, and whether the
+ * target's keys are JSON (`collection.key(schema)`), which the parts then make as one value or a tuple.
+ */
+export interface ReferenceManifest {
+  readonly target: string;
+  readonly fields?: readonly string[];
+  readonly key?: true | number;
+  readonly json?: true;
+}
+export interface CollectionManifest {
+  readonly name: string;
+  readonly indexes: Readonly<Record<string, readonly string[]>>;
+  readonly access?: AccessManifest;
+  readonly references?: readonly ReferenceManifest[];
+}
 export interface FlowerModule<H extends HttpMap = HttpMap> {
   readonly definitions: Readonly<Record<string, Definition>>;
   readonly http: { readonly [K in keyof H]: ManifestMethod };

@@ -15,7 +15,7 @@
 <ul>
 <li>Only advance <code>backfill</code>/<code>rebuilding</code>, activate <code>ready</code>, and collect <code>active</code>/<code>canceled</code>.</li>
 <li>After an uncertain response, check status and confirm <code>requestId</code> and <code>bundleHash</code> before resuming. A repeated <code>advance</code> may do the next page rather than repeat the last one.</li>
-<li>A failed page or activation keeps earlier progress. Fix the budget and retry, or cancel and collect.</li>
+<li>A failed page or activation keeps earlier progress. Fix the budget and retry, or cancel and collect.</li><li>Activating new <a href="data.html#references">references</a> checks the rows already there. If one breaks them, <code>activate</code> fails with <code>FOREIGN_KEY_VIOLATION</code> and the job stays <code>ready</code>: fix the rows with the old code, then activate again.</li>
 <li>If the new code fails while handling a normal write, the job becomes <code>failed</code> with an <code>error</code>; the write itself still commits. Cancel and collect, then stage fixed code.</li>
 <li>While a cross-group transaction is prepared, controls return <code>TRANSACTION_PREPARED</code>.</li>
 <li>After cleanup, status shows the last <code>collected</code> job instead of <code>null</code>.</li>

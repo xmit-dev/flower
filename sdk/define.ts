@@ -6,7 +6,7 @@ import type {
   Access, AuthorizationRequest, Collection, Component, ComponentParts, Definition, Derived, Failure, FlowerModule, HttpMap,
   ManifestMethod, MutationContext, Principal, QueryContext, SetOptions, Task, TaskFailure, Trigger,
 } from "./core.ts";
-import { aggregateSource, checkReadable, collectionManifest, normalizeAggregateMetadata } from "./indexing.ts";
+import { aggregateSource, checkReadable, collectionManifest, normalizeAggregateMetadata, referenceManifest, referenceTarget } from "./indexing.ts";
 import { keyManifest, type ManagedKey } from "./keys.ts";
 import { ValidationError, type Schema } from "./schema.ts";
 
@@ -56,6 +56,8 @@ interface Runtime {
   readonly sessions: Map<object, Session>;
   /** Collections whose access policy the manifest carries, so the server enforces it. */
   guarded: ReadonlySet<string>;
+  /** Collections whose references the manifest carries, so the server enforces them. */
+  referring: ReadonlySet<string>;
   /** The server enforces rules (collection policies, derived access) this app declares. */
   enforced: boolean;
 }
@@ -184,6 +186,9 @@ function bind(host: Host, runtime: Runtime): Session {
     const owner = (reference as { kind?: unknown })?.kind === "collection" ? reference as Collection<any, any, any> : rangeOwner(reference);
     if (owner && collectionInfo(owner)?.access && !runtime.guarded.has(owner.name)) {
       throw new TypeError(`Collection ${JSON.stringify(owner.name)} declares access; list it in define({ collections }) so the server enforces it`);
+    }
+    if (owner && collectionInfo(owner)?.references?.length && !runtime.referring.has(owner.name)) {
+      throw new TypeError(`Collection ${JSON.stringify(owner.name)} declares references; list it in define({ collections }) so the server enforces them`);
     }
   }
   // Triggers act with the application's rights, like derived values: they see rows and
@@ -461,6 +466,94 @@ function materialization(definitions: readonly Definition[]): { tasks: Task[]; t
   };
 }
 
+// ---- Foreign keys: what deleting a row does to the rows that refer to it
+
+/**
+ * The server keeps every reference whole (restrict); cascade and setNull are triggers on the target, one per
+ * target collection, that delete or clear the rows referring to a row that is gone, through the mutation's
+ * context: their own triggers see those writes, and a cascade goes on in the next round. They run with the
+ * application's rights, as triggers do, so rows the caller can't see go too.
+ */
+function referenceTriggers(collections: readonly Collection<any, any, any>[]): Trigger[] {
+  type Act = (ctx: MutationContext, raw: string) => void;
+  const acts = new Map<string, { target: Collection<any, any, any>; acts: Act[] }>();
+  // One action for each reference however many declarations carry it; the manifest checks that they agree.
+  const seen = new Map<string, string>();
+  // A target joins the manifest as its trigger's source, so its own references count too.
+  const queue = [...collections];
+  for (let index = 0; index < queue.length; index++) {
+    const child = queue[index]!;
+    for (const reference of collectionInfo(child)?.references ?? []) {
+      const shape = referenceManifest(child, reference);
+      const id = canonicalJson([child.name, shape as unknown as Json]);
+      const previous = seen.get(id);
+      if (previous !== undefined && previous !== reference.onDelete) {
+        throw new TypeError(`Collection ${JSON.stringify(child.name)} is declared with different references`);
+      }
+      if (previous !== undefined) continue;
+      seen.set(id, reference.onDelete);
+      if (reference.onDelete === "restrict") continue;
+      const target = referenceTarget(reference);
+      const entry = acts.get(target.name) ?? { target, acts: [] };
+      if (!acts.has(target.name)) queue.push(target);
+      acts.set(target.name, entry);
+      entry.acts.push(referenceAct(child, target, shape, reference.onDelete));
+    }
+  }
+  return [...acts.values()].map(({ target, acts: list }) => {
+    const act = (ctx: MutationContext, key: Json, exists: boolean) => {
+      if (exists) return;
+      const raw = collectionInfo(target)?.key ? canonicalJson(key) : key as string;
+      for (const each of list) each(ctx, raw);
+    };
+    const each = trigger("$flower.references", target, (ctx, change) => {
+      if (change.before !== null && change.after === null) act(ctx, change.key, false);
+    });
+    existenceTriggers.set(each, act);
+    return each;
+  });
+}
+
+function referenceAct(child: Collection<any, any, any>, target: Collection<any, any, any>,
+  shape: { readonly fields?: readonly string[]; readonly key?: true | number; readonly json?: true }, onDelete: "cascade" | "setNull") {
+  const plain = Object.freeze({ kind: "collection" as const, name: child.name });
+  const indexed = shape.fields && Object.freeze({ kind: "collection" as const, name: child.name, indexes: Object.freeze({ $references: shape.fields }) });
+  const cleared = shape.fields && Object.fromEntries(shape.fields.map((field) => [field, null]));
+  return (ctx: MutationContext, raw: string) => {
+    // Called while triggers settle, with the application's rights: the raw host reads every row.
+    const host = hostContext(ctx);
+    const rows: { key: string; value: Json }[] = [];
+    if (shape.key === true) {
+      const value = host.get(plain, raw) as Json;
+      if (value !== null) rows.push({ key: raw, value });
+    } else {
+      // The parts a referring row holds: one, the key itself, or the target's tuple key.
+      const count = shape.key ?? shape.fields!.length;
+      const key = shape.json ? JSON.parse(raw) as Json : raw;
+      const parts = count === 1 ? [key] : Array.isArray(key) && key.length === count ? key : null;
+      if (parts === null) return;
+      if (shape.key !== undefined) {
+        // Tuple keys are canonical JSON: the key `[a,b]` itself, then `[a,b,…]`.
+        const head = canonicalJson(parts).slice(0, -1);
+        const exact = host.get(plain, head + "]") as Json;
+        if (exact !== null) rows.push({ key: head + "]", value: exact });
+        rows.push(...host.scan(plain, { gte: head + ",", lt: head + "-" }) as { key: string; value: Json }[]);
+      } else {
+        if (parts.some((part) => part !== null && typeof part === "object")) {
+          fail("INVALID_REFERENCE", `${child.name} rows that refer to ${target.name} row ${JSON.stringify(raw)} can't be found: ` +
+            "only strings, numbers and booleans are found by their fields", { collection: child.name, target: target.name, targetKey: raw });
+        }
+        rows.push(...host.scan(indexed, { index: "$references", prefix: parts }) as { key: string; value: Json }[]);
+      }
+    }
+    for (const row of rows) {
+      const key = decodeKey(child, row.key);
+      if (onDelete === "cascade") ctx.delete(child, key);
+      else ctx.set(child, key, { ...(row.value as Record<string, Json>), ...cleared });
+    }
+  };
+}
+
 // ---- Authorization: per-method access compiled into the single host hook
 
 function checkedPrincipal(value: unknown): Principal {
@@ -670,27 +763,37 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
   if (authorize) register(authorize, true);
 
   const triggers = new Map<string, Trigger[]>();
-  for (const each of [...flat.triggers, ...materialized.triggers]) {
-    if (each?.kind !== "trigger") throw new TypeError("triggers requires trigger definitions");
+  function addTrigger(each: Trigger) {
     const list = triggers.get(each.source.name) ?? [];
     if (list.some((existing) => existing.name === each.name)) throw new TypeError(`Duplicate trigger ${JSON.stringify(each.name)}`);
     list.push(each);
     triggers.set(each.source.name, list);
   }
+  const listed = [...flat.triggers, ...materialized.triggers];
+  for (const each of listed) {
+    if (each?.kind !== "trigger") throw new TypeError("triggers requires trigger definitions");
+    addTrigger(each);
+  }
+  // The collections the manifest declares: those listed, the sources of triggers and aggregates, and the
+  // targets of the references they hold whose deletion acts on them.
+  const collections = [...flat.collections, ...listed.map((each) => each.source)];
+  for (const definition of originals.values()) {
+    const source = definition.kind === "derived" && definition.aggregate !== undefined ? aggregateSource(definition) : undefined;
+    if (source) collections.push(source);
+  }
+  for (const each of referenceTriggers(collections)) {
+    addTrigger(each);
+    collections.push(each.source);
+  }
   const existence = new Set([...triggers].filter(([, list]) => list.every((each) => existenceTriggers.has(each))).map(([name]) => name));
-  const runtime: Runtime = { triggers, existence, sessions: new Map(), guarded: new Set(), enforced: false };
+  const runtime: Runtime = { triggers, existence, sessions: new Map(), guarded: new Set(), referring: new Set(), enforced: false };
   if (typeof __flowerContexts !== "undefined") {
     for (const host of __flowerContexts) runtime.sessions.set(host, bind(host, runtime));
   }
 
   const definitions: Record<string, Definition> = Object.create(null);
-  const collections = [...flat.collections, ...[...triggers.values()].flat().map((each) => each.source)];
   for (const [name, definition] of originals) {
     const aggregate = definition.kind === "derived" && definition.aggregate !== undefined ? normalizeAggregateMetadata(definition.aggregate) : undefined;
-    if (aggregate) {
-      const source = aggregateSource(definition);
-      if (source) collections.push(source);
-    }
     definitions[name] = Object.freeze({
       kind: definition.kind, name, compute: bound(definition, runtime),
       ...(aggregate ? { aggregate } : {}),
@@ -706,6 +809,7 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
   checkReadable(manifest, Object.fromEntries(Object.entries(definitions).flatMap(([name, definition]) =>
     Object.hasOwn(definition, "access") ? [[name, (definition as { access?: unknown }).access]] : [])));
   runtime.guarded = new Set(manifest.filter((entry) => entry.access).map((entry) => entry.name));
+  runtime.referring = new Set(manifest.filter((entry) => entry.references).map((entry) => entry.name));
   // Triggers and SDK bookkeeping must also read derived values whose rule the caller fails.
   runtime.enforced = runtime.guarded.size > 0 || Object.values(definitions).some((definition) => Object.hasOwn(definition, "access"));
   return Object.freeze({

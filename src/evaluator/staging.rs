@@ -132,6 +132,8 @@ pub(crate) fn activate(data: Records, mut input: Value, now: u64) -> Result<Eval
             "DEPLOYMENT_CONFLICT: staged deployment is not ready for this request"
         );
         input["$keysChanged"] = Value::Bool(true);
+        // The schema it publishes: its new references must hold for the rows there.
+        input["$activation"] = Value::Bool(true);
         let mut result = evaluate_selected(
             data.graph_view(Some(&generation)),
             input,

@@ -841,4 +841,5 @@ mod managed_keys;
 mod persistent_graph;
 mod propagation;
 mod ranges;
+mod references;
 mod scans;

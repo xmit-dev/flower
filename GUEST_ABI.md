@@ -150,7 +150,9 @@ Entropy (opcode 0) is available only to mutations.
                      "consistency": "replica-local", "receipt": false}},
   "maintenance": {"name": "…", "kind": "mutation", "onError": {…}} ,
   "authorize": {"name": "…", "result": "decision"},
-  "collections": [{"name": "…", "indexes": {"index": ["field", …]}, "access": {…}}],
+  "collections": [{"name": "…", "indexes": {"index": ["field", …]}, "access": {…},
+                   "references": [{"target": "…", "fields": ["field", …] | "key": true | 1-64,
+                                   "json": true}]}],
   "keys": [{"kind": "key", "name": "…", "algorithm": "…", "usages": ["…"]}]
 }
 ```
@@ -188,6 +190,19 @@ when `ctx.set(…, {clear})` lists fields). A derived definition's optional
 `access` is one such rule over `principal`, `args` (the arguments it is read
 with) and `now`: a method with a caller may `get` the value only where it
 holds, and otherwise fails with `ACCESS_DENIED`.
+A collection's optional `references` are foreign keys to its `target`
+collection: a row holds a target row's key in `fields` (their values, in
+order), in its whole key (`"key": true`), or in the first `key` components
+of its tuple key. With `json` the target's keys are canonical JSON, a single
+part being the key and several a tuple; otherwise a single part, a string, is
+the key. A missing or null part refers to nothing. At the end of every
+mutation, after its triggers, the host fails it with `FOREIGN_KEY_VIOLATION`
+if a source row it wrote refers to a row that does not exist or a row it
+deleted is still referred to, whatever the access rules; a deployment checks
+the rows already there for the references it adds. The host enforces
+references only: deleting or clearing referring rows (`onDelete`) is the
+SDK's, as a trigger. A reference held in fields gets an index of them, as if
+declared. See `src/evaluator/rust_engine/references.rs`.
 
 ## Resource limits
 

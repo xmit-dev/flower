@@ -59,8 +59,10 @@ pub fn compatibility() -> &'static Compatibility {
         raft_wire: 10,
         // Mutations may be declared without receipts, which older binaries
         // can neither parse in the method registry nor honor; partitions may be
-        // retired in place (PartitionCommand::Discard), which they cannot apply.
-        state_machine: 17,
+        // retired in place (PartitionCommand::Discard), which they cannot apply;
+        // schemas may declare references, which they would neither parse nor
+        // enforce, so the same mutation could fail on one replica and not another.
+        state_machine: 18,
         snapshot_format: 4,
         value_format: 1,
         quickjs_sha256: crate::evaluator::hash(include_bytes!(

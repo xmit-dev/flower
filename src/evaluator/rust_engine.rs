@@ -14,10 +14,12 @@ mod access;
 mod indexes;
 mod ranges;
 mod reducers;
+mod references;
 mod windows;
 pub use access::{Policy, Rule, validate_derived_targets, validate_targets};
 pub use indexes::{IndexSpec, Schema, valid_version};
 pub(crate) use indexes::{staged_entries, staged_prefixes, staged_schema, staged_schema_bytes};
+pub use references::{KeyPart, ReferenceSpec};
 mod json;
 #[cfg(test)]
 mod tests;
@@ -469,6 +471,7 @@ fn run_with_limit_and_schema(
         let value = normalize(value, "INVALID_VALUE")?;
         if mode == "mutation" {
             engine.run_preview(true, false)?;
+            engine.check_references()?;
         }
         depth(&value, 2, "INPUT_INVALID")?;
         engine.finish(value)
@@ -1446,6 +1449,11 @@ impl Engine<'_> {
                 "Staged deployment metadata is missing",
             ));
         }
+        // A deployment, or a staged one's activation, publishes its schema: its new
+        // references hold for the rows already there. A staged graph's pages and
+        // the writes replayed into it never do.
+        let publishing = !graph || command["$activation"] == true;
+        let previous = self.schema.clone();
         let schema_changed = self.install_schema(staged || graph)?;
         if let Some(keys) = command.get("keyDeclarations")
             && (keys.as_array().is_none_or(|keys| !keys.is_empty())
@@ -1529,7 +1537,12 @@ impl Engine<'_> {
             }
         }
         self.preview_dirty = true;
-        self.run_preview(true, bundle_changed)
+        self.run_preview(true, bundle_changed)?;
+        if publishing {
+            self.validate_new_references(&previous)?;
+            self.check_references()?;
+        }
+        Ok(())
     }
 
     fn finish(mut self, value: Value) -> EngineResult<Evaluation> {

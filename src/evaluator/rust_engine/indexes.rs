@@ -132,6 +132,10 @@ pub struct Schema {
     /// Who may read each derived value from a method, by definition name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub derived_access: BTreeMap<String, super::Rule>,
+    /// Foreign keys, checked at the end of every mutation: rows refer only to
+    /// rows that exist. Each one held by fields has its index among `indexes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<super::ReferenceSpec>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -200,6 +204,9 @@ impl Schema {
             .fold(policies, |bytes, (name, version)| {
                 bytes.saturating_add(128 + name.len() + version.len())
             });
+        let policies = self.references.iter().fold(policies, |bytes, reference| {
+            bytes.saturating_add(reference.allocation_cost())
+        });
         policies.saturating_add(
             self.indexes.iter().chain(self.aggregates.values()).fold(
                 self.aggregates
@@ -265,6 +272,22 @@ impl Schema {
         super::validate_derived_targets(&self.derived_access, &self.policies).map_err(|error| {
             EngineError::new("INPUT_INVALID", format!("Malformed access rule: {error}"))
         })?;
+        for reference in &self.references {
+            reference.validate().map_err(|error| {
+                EngineError::new("INPUT_INVALID", format!("Malformed reference: {error}"))
+            })?;
+            if reference
+                .index()
+                .is_some_and(|index| !self.indexes.contains(&index))
+            {
+                return Err(EngineError::new(
+                    "INPUT_INVALID",
+                    "A reference's fields need their index declared",
+                ));
+            }
+        }
+        self.references.sort();
+        self.references.dedup();
         Ok(self)
     }
     pub(super) fn load(value: Option<&Value>) -> EngineResult<Self> {
@@ -284,6 +307,7 @@ impl Schema {
             && self.aggregate_versions.is_empty()
             && self.policies.is_empty()
             && self.derived_access.is_empty()
+            && self.references.is_empty()
     }
 }
 
@@ -305,7 +329,7 @@ fn index_prefix(collection: &str, fields: &[String]) -> String {
         canonical_json(&json!([collection, fields]))
     )
 }
-fn bucket_prefix(collection: &str, fields: &[String], encoded: &str) -> String {
+pub(super) fn bucket_prefix(collection: &str, fields: &[String], encoded: &str) -> String {
     format!("{}{encoded}:", index_prefix(collection, fields))
 }
 pub(super) fn bucket_id(collection: &str, fields: &[String], value: &Value) -> String {

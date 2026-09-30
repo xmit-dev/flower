@@ -24,6 +24,7 @@ fn install(data: &mut Records, fixture: &Fixture) {
             policies: Default::default(),
             derived_access: Default::default(),
             aggregate_versions: Default::default(),
+            references: Vec::new(),
             indexes: vec![IndexSpec {
                 collection: "items".into(),
                 fields: vec!["tenant".into(), "score".into()],
@@ -872,6 +873,7 @@ fn undeclared_equality_queries_rerun_only_for_their_bucket() {
         policies: Default::default(),
         derived_access: Default::default(),
         aggregate_versions: Default::default(),
+        references: Vec::new(),
         indexes: vec![IndexSpec {
             collection: "items".into(),
             fields: vec!["state".into()],
@@ -1189,4 +1191,104 @@ fn bucketed_and_spanning_windows_find_the_readers_a_linear_scan_does() {
             assert_eq!(found, expected, "step {step}");
         }
     }
+}
+
+#[test]
+fn source_key_scans_between_bounds_sharing_a_prefix_walk_only_its_rows() {
+    // A mutation that writes some rows, then scans in source-key order.
+    let fixture = Fixture::new([(
+        "writeAndRead",
+        (|args, host| {
+            let target = json!({"kind":"collection","name":"keys"});
+            for key in args["writes"].as_array().unwrap() {
+                host("set", json!([target, key, {"pending":true}]))?;
+            }
+            host("scan", json!([target, args["options"]]))
+        }) as Callback,
+    )]);
+    let stored = [
+        "a\"",
+        "a\"1",
+        "a\"2",
+        "a#",
+        "a!",
+        "a\\",
+        "a\\b",
+        "a\nb",
+        "b",
+        "[\"x\",1]",
+        "[\"x\",2]",
+        "[\"xy\",1]",
+        "[\"x\"]",
+        "😀a",
+        "😀b",
+        "\u{e000}",
+    ];
+    let data = Records::from_iter(
+        stored
+            .iter()
+            .map(|key| (source_id("keys", key), json!({"stored":true}))),
+    );
+    let scan = |writes: Value, options: Value| -> Vec<String> {
+        let result = run(
+            data.clone(),
+            json!({"name":"writeAndRead","args":{"writes":writes,"options":options}}),
+            "mutation",
+            None,
+            &fixture,
+        )
+        .unwrap();
+        result
+            .value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["key"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        scan(json!([]), json!({"gte":"a\"","lt":"a#"})),
+        ["a\"", "a\"1", "a\"2"]
+    );
+    assert_eq!(
+        scan(json!([]), json!({"gt":"a\"","lte":"a\"2"})),
+        ["a\"1", "a\"2"]
+    );
+    assert_eq!(
+        scan(
+            json!(["a\"0", "a#0"]),
+            json!({"gte":"a\"","lt":"a#","reverse":true})
+        ),
+        ["a\"2", "a\"1", "a\"0", "a\""]
+    );
+    assert_eq!(
+        scan(json!([]), json!({"gte":"a\\","lt":"a\\c"})),
+        ["a\\", "a\\b"]
+    );
+    assert_eq!(
+        scan(json!([]), json!({"gte":"a\n","lt":"a\u{b}"})),
+        ["a\nb"]
+    );
+    // A tuple's rows, as the SDK asks for them by their first component.
+    assert_eq!(
+        scan(
+            json!(["[\"x\",0]", "[\"x\"-"]),
+            json!({"gte":"[\"x\",","lt":"[\"x\"-"})
+        ),
+        ["[\"x\",0]", "[\"x\",1]", "[\"x\",2]"]
+    );
+    assert_eq!(
+        scan(json!([]), json!({"gte":"😀","lt":"😀c","limit":1})),
+        ["😀a"]
+    );
+    assert_eq!(scan(json!([]), json!({"prefix":["a#"]})), ["a#"]);
+    // Bounds without a shared prefix walk every row, as before.
+    assert_eq!(
+        scan(json!([]), json!({"gte":"a#","lt":"b"})),
+        ["a#", "a\\", "a\\b"]
+    );
+    assert_eq!(
+        scan(json!([]), json!({"gte":"😀","lt":"\u{e000}"})),
+        ["😀a", "😀b"]
+    );
 }
