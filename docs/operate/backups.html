@@ -41,16 +41,16 @@ export FLOWER_BACKUP_S3_ACCESS_KEY_ID='GK…' FLOWER_BACKUP_S3_SECRET_ACCESS_KEY
 <p><code>GET /admin/backup</code> (operator token) says what this node's backup is doing: its role (<code>leader</code> ships, <code>follower</code> holds), the generation, the newest entry shipped and when it was applied, how many applied entries are not shipped yet (<code>lagEntries</code>), the newest base, retention's last run, and errors. <code>hold</code> says how much log the node keeps for it. Failures are retried every interval and logged under <code>flower::backup</code>.</p><div class="code-block"><div class="code-head"><span>Operator terminal</span><button type="button" class="copy-button" aria-label="Copy Operator terminal">Copy</button></div><pre tabindex="0"><code class="language-sh">curl -fsS -H "Authorization: Bearer $FLOWER_ADMIN_TOKEN" http://127.0.0.1:7101/admin/backup
 
 # What can be restored, generation by generation:
-./target/release/flower backup list</code></pre></div>
+./flower backup list</code></pre></div>
 </section>
 <section id="restore" data-toc="Restore">
 <h2>Restore to a point in time</h2>
 <p>A restore runs offline. It writes a new data directory holding the state as of the point you give, for a new single-node cluster, then exits. Start a node on it with the same ID and it elects itself; add other nodes with the <a href="https://github.com/xmit-dev/flower/blob/main/MEMBERSHIP.md">membership API</a>.</p><div class="code-block"><div class="code-head"><span>Restore · the same FLOWER_BACKUP_* settings</span><button type="button" class="copy-button" aria-label="Copy Restore · the same FLOWER_BACKUP_* settings">Copy</button></div><pre tabindex="0"><code class="language-sh"># The state as of 12:23 Pacific time (or --at 1790796180000, Unix ms):
-./target/release/flower backup restore --data .flower/restored --id 1 \
+./flower backup restore --data .flower/restored --id 1 \
   --advertise 127.0.0.1:7101 --at 2026-09-30T12:23:00-07:00
 
 # Or through a log index (--index 123456), or everything the backups hold (neither).
-./target/release/flower --id 1 --listen 127.0.0.1:7101 --data .flower/restored</code></pre></div>
+./flower --id 1 --listen 127.0.0.1:7101 --data .flower/restored</code></pre></div>
 <ul>
 <li><strong>A point in time</strong> restores every entry the old leader had applied by then. <code>--from URL</code> reads other backups than <code>FLOWER_BACKUP_URL</code>'s, <code>--replica NAME</code> a hosted replica's, and <code>--generation</code> picks a generation other than the newest one covering the point.</li>
 <li><strong>The restored node backs up as a new generation</strong>, which says where it came from. The old generations stay, and restores still reach them, until retention lets them go.</li>
