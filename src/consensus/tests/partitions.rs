@@ -509,6 +509,160 @@ async fn partition_freeze_rejects_in_doubt_transactions_and_control_checks_full_
     ));
 }
 
+#[tokio::test]
+async fn partition_retires_in_place_drops_its_state_and_keeps_its_name_after_restart() {
+    let discard = |operation: &str, epoch: u64| {
+        control(PartitionCommand::Discard {
+            partition: "shop".into(),
+            epoch,
+            operation: operation.into(),
+        })
+    };
+    // A prepared transaction holds it, as it holds a move's freeze.
+    for record in [
+        "transaction:participant",
+        "transaction:coordinator:unfinished",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(1, directory.path().into()).await.unwrap();
+        let mut index = 0;
+        create(&mut store, &mut index, "shop").await;
+        let mut command = commit("pending", 0, 1);
+        command
+            .puts
+            .insert(record.into(), json!({"phase":"preparing","complete":false}));
+        apply(&mut store, &mut index, scoped("shop", 1, command)).await;
+        assert!(matches!(
+            apply(&mut store, &mut index, discard("retire", 1)).await,
+            ApplyResult::Rejected(_)
+        ));
+        assert_eq!(
+            store.partition_info("shop").unwrap().phase,
+            PartitionPhase::Active
+        );
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(1, directory.path().into()).await.unwrap();
+    let mut index = 0;
+    // Nothing to retire yet, and a staged partition is not served either.
+    assert!(matches!(
+        apply(&mut store, &mut index, discard("retire", 1)).await,
+        ApplyResult::Rejected(_)
+    ));
+    assert!(matches!(
+        apply(
+            &mut store,
+            &mut index,
+            control(PartitionCommand::Create {
+                partition: "shop".into(),
+                epoch: 1,
+                operation: "create-shop".into()
+            })
+        )
+        .await,
+        ApplyResult::Partition(_)
+    ));
+    assert!(matches!(
+        apply(&mut store, &mut index, discard("retire", 1)).await,
+        ApplyResult::Rejected(_)
+    ));
+    assert!(matches!(
+        apply(
+            &mut store,
+            &mut index,
+            control(PartitionCommand::Activate {
+                partition: "shop".into(),
+                epoch: 1,
+                operation: "create-shop".into()
+            })
+        )
+        .await,
+        ApplyResult::Partition(_)
+    ));
+    let mut seed = commit("seed", 0, 7);
+    seed.puts.insert(
+        "bundle".into(),
+        json!({"hash":"shop","javascript":"const shop = 1;"}),
+    );
+    assert!(matches!(
+        apply(&mut store, &mut index, scoped("shop", 1, seed)).await,
+        ApplyResult::Committed(_)
+    ));
+    create(&mut store, &mut index, "next").await;
+    assert!(matches!(
+        apply(
+            &mut store,
+            &mut index,
+            scoped("next", 1, commit("next", 0, 3))
+        )
+        .await,
+        ApplyResult::Committed(_)
+    ));
+    // Only at its current epoch.
+    assert!(matches!(
+        apply(&mut store, &mut index, discard("retire", 2)).await,
+        ApplyResult::Rejected(_)
+    ));
+    assert!(matches!(
+        apply(&mut store, &mut index, discard("retire", 1)).await,
+        ApplyResult::Partition(_)
+    ));
+    // The same operation again is the same answer; another cannot retire it anew.
+    assert!(matches!(
+        apply(&mut store, &mut index, discard("retire", 1)).await,
+        ApplyResult::Partition(_)
+    ));
+    assert!(matches!(
+        apply(&mut store, &mut index, discard("other", 1)).await,
+        ApplyResult::Rejected(_)
+    ));
+    // Nothing runs there any more, receipts included, and the name cannot be created again.
+    assert!(matches!(
+        apply(
+            &mut store,
+            &mut index,
+            scoped("shop", 1, commit("seed", 1, 8))
+        )
+        .await,
+        ApplyResult::Rejected(_)
+    ));
+    assert!(matches!(
+        apply(
+            &mut store,
+            &mut index,
+            control(PartitionCommand::Create {
+                partition: "shop".into(),
+                epoch: 1,
+                operation: "create-shop".into()
+            })
+        )
+        .await,
+        ApplyResult::Rejected(_)
+    ));
+    store.close().await.unwrap();
+    drop(store);
+    let store = Store::open(1, directory.path().into()).await.unwrap();
+    let info = store.partition_info("shop").unwrap();
+    assert_eq!(info.phase, PartitionPhase::Retired);
+    assert_eq!(info.operation, "retire");
+    assert_eq!(info.epoch, 1);
+    let state = store.partition_state("shop").unwrap();
+    assert!(state.snapshot.data.is_empty() && state.snapshot.requests.is_empty());
+    assert!(
+        store
+            .partition_snapshot(&binding("shop", 1), None, true)
+            .is_err()
+    );
+    // Its neighbours keep theirs.
+    assert_eq!(
+        store
+            .partition_snapshot(&binding("next", 1), None, true)
+            .unwrap()
+            .revision,
+        1
+    );
+}
+
 #[test]
 fn partition_wire_rejects_nested_scopes_before_recursive_decode() {
     let command = scoped("shop", 1, commit("request", 0, 1));

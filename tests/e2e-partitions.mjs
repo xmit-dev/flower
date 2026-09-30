@@ -220,7 +220,59 @@ export default define({uses:[jobs,timers],collections:[rows],definitions:[total,
   });
   const restartedReplay = await mutate("tenant-a", "seed", 10, "same-request");
   assert.equal(restartedReplay.duplicate, true); assert.equal(restartedReplay.revision, seeded.revision);
-  console.log("PASS: Unicode physical group identity, native isolated partitions, durable chunked move, paused-tenant isolation, coordinator restart recovery, ownership-watch termination/reconnect/outage, exact-budget admission, receipts, timers without first read, lease fencing, derived/index state, shrink/expand and full-cluster restart");
+  // Retiring a partition in place: a tenant that is gone stops serving, its owner drops its state, and its name stays taken.
+  // On a: 🌻 admits no command as large as a deploy.
+  await cluster().createPartition("tenant-gone", "a", { requestId: "create-tenant-gone" });
+  await cluster().waitForPartition("tenant-gone", { timeoutMs: timeout });
+  await cluster().partition("tenant-gone").deploy(bundle, { requestId: "same-deploy" });
+  assert.deepEqual((await mutate("tenant-gone", "seed", 7)).value, { total: 7, count: 1 });
+  const goneWatch = client("tenant-gone", "a").watch("local", null, {
+    signal: AbortSignal.any([watchController.signal, AbortSignal.timeout(timeout)]),
+  });
+  watches.add(goneWatch);
+  assert.equal((await goneWatch.next()).value.value.summary.total, 7);
+  const retiring = await cluster().retirePartition("tenant-gone", { requestId: "retire-tenant-gone" });
+  assert.equal(retiring.status, "retiring");
+  assert.equal(retiring.operation, "retire-tenant-gone");
+  await assert.rejects((async () => { for await (const _ of goneWatch) {} })(),
+    error => ["PARTITION_RETIRED", "UNAVAILABLE"].includes(error.code), "a retired partition's watches end");
+  await goneWatch.return(); watches.delete(goneWatch);
+  const retired = await until("tenant-gone retired", async () => {
+    const state = await placement("tenant-gone");
+    return state.status === "retired" && state;
+  });
+  assert.equal(retired.owner.id, "a"); assert.equal(retired.epoch, 1);
+  await delay(1_500); // Past FLOWER_ROUTE_CACHE_MS, so that no server serves a cached route.
+  for (const gateway of ["catalog", "a", "🌻"]) {
+    await assert.rejects(client("tenant-gone", gateway).query("read", null, { signal: AbortSignal.timeout(5000) }),
+      error => error.status === 410 && error.code === "PARTITION_RETIRED", `${gateway} refuses the retired partition`);
+  }
+  await assert.rejects(mutate("tenant-gone", "seed", 7), error => error.code === "PARTITION_RETIRED");
+  await assert.rejects(cluster().partition("tenant-gone").deploy(bundle, { requestId: "deploy-after-retirement" }), error => error.code === "PARTITION_RETIRED");
+  await assert.rejects(cluster().waitForPartition("tenant-gone", { timeoutMs: 1000 }), error => error.code === "PARTITION_RETIRED");
+  // The same request again is the same answer; another cannot retire, move, revive or recreate it.
+  assert.equal((await cluster().retirePartition("tenant-gone", { requestId: "retire-tenant-gone" })).status, "retired");
+  await assert.rejects(cluster().retirePartition("tenant-gone", { requestId: "retire-again" }));
+  await assert.rejects(cluster().movePartition("tenant-gone", "🌻", { requestId: "revive-tenant-gone" }));
+  await assert.rejects(cluster().createPartition("tenant-gone", "a", { requestId: "recreate-tenant-gone" }));
+  await assert.rejects(cluster().retirePartition("no-such-tenant", { requestId: "retire-nothing" }));
+  // The owner kept only the name: its neighbours kept theirs, and a rebalance leaves it be.
+  assert.deepEqual((await client("tenant-a").query("read")).value.summary, { total: 15, count: 2 });
+  assert.deepEqual((await client("tenant-b").query("read")).value.summary, { total: 101, count: 1 });
+  await cluster().resize(["a", "🌻"], { requestId: "expand-with-retired" });
+  await until("plan with a retired partition complete", async () => (await catalog({ action: "list" })).rebalance?.complete);
+  const afterRetire = (await catalog({ action: "list" })).partitions;
+  assert.deepEqual(afterRetire.map(value => `${value.partition}:${value.status}`).sort(), ["tenant-a:active", "tenant-b:active", "tenant-gone:retired"]);
+  assert.deepEqual(afterRetire.filter(value => value.status === "active").map(value => value.owner.id).sort(), ["a", "🌻"]);
+  // And it stays retired across a restart of its owner.
+  const neighbour = afterRetire.find(value => value.status === "active" && value.owner.id === "a").partition;
+  await stop(nodes.get("a")); start(nodes.get("a"));
+  await until("a back after retirement", async () => {
+    const state = await placement("tenant-gone");
+    return state.status === "retired" && (await client(neighbour).query("read")).value.summary.total > 0;
+  });
+  await assert.rejects(client("tenant-gone", "a").query("read", null, { signal: AbortSignal.timeout(5000) }), error => error.code === "PARTITION_RETIRED");
+  console.log("PASS: Unicode physical group identity, native isolated partitions, durable chunked move, paused-tenant isolation, coordinator restart recovery, ownership-watch termination/reconnect/outage, exact-budget admission, receipts, timers without first read, lease fencing, derived/index state, shrink/expand, full-cluster restart and retirement in place");
 } catch (error) {
   for (const node of nodes.values()) console.error(`--- ${node.id} ---\n${node.runtime?.logs ?? "not started"}`);
   throw error;

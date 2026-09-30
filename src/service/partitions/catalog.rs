@@ -26,6 +26,11 @@ pub(in crate::service) enum Status {
     Creating,
     Active,
     Moving,
+    /// Being retired where it is: no longer served, its owner about to drop its state.
+    Retiring,
+    /// Retired: its owner holds no application state, nothing serves it, and its
+    /// name cannot be created again. Final.
+    Retired,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,6 +129,16 @@ pub(super) enum CatalogRequest {
     StepRebalance {
         operation: String,
     },
+    /// Start retiring an active, settled partition in place.
+    Retire {
+        partition: String,
+        operation: String,
+    },
+    /// The coordinator's: the owner's retirement is durable.
+    Retired {
+        partition: String,
+        operation: String,
+    },
 }
 
 pub(in crate::service) fn serving(placement: &Placement) -> bool {
@@ -215,6 +230,10 @@ fn settled(value: &Placement) -> bool {
             .as_ref()
             .is_none_or(|movement| movement.phase == Phase::Complete)
 }
+/// Retiring or retired: never served again, moved or rebalanced.
+pub(in crate::service) fn retired(value: &Placement) -> bool {
+    matches!(value.status, Status::Retiring | Status::Retired)
+}
 
 fn begin(
     state: &Snapshot,
@@ -232,6 +251,7 @@ fn begin(
         return Ok(previous);
     }
     let mut owner = placement(state, partition)?;
+    ensure!(!retired(&owner), "partition is retired");
     ensure!(
         settled(&owner),
         "partition has an unfinished placement operation"
@@ -284,6 +304,8 @@ fn plan(state: &Snapshot, groups: Vec<String>, operation: String) -> anyhow::Res
     }
     quiet_plan(state)?;
     let mut owners = entries::<Placement>(state, PARTITION)?;
+    // Retired partitions hold nothing: they neither move nor count.
+    owners.retain(|owner| owner.status != Status::Retired);
     ensure!(
         owners.iter().all(settled),
         "finish existing partition operations before rebalancing"
@@ -412,12 +434,14 @@ pub(super) async fn apply(runtime: &Runtime, request: CatalogRequest) -> anyhow:
             ensure!(
                 !entries::<Placement>(&state, PARTITION)?
                     .iter()
-                    .any(|owner| owner.owner.id == id
-                        || owner
-                            .movement
-                            .as_ref()
-                            .is_some_and(|m| m.phase != Phase::Complete
-                                && (m.source.id == id || m.destination.id == id))),
+                    .any(
+                        |owner| (owner.owner.id == id && owner.status != Status::Retired)
+                            || owner
+                                .movement
+                                .as_ref()
+                                .is_some_and(|m| m.phase != Phase::Complete
+                                    && (m.source.id == id || m.destination.id == id))
+                    ),
                 "group still owns or is moving a partition"
             );
             ensure!(
@@ -594,6 +618,61 @@ pub(super) async fn apply(runtime: &Runtime, request: CatalogRequest) -> anyhow:
             }
             json!(value)
         }
+        CatalogRequest::Retire {
+            partition,
+            operation,
+        } => {
+            validate_name(&operation)?;
+            let mut value = placement(&state, &partition)?;
+            if retired(&value) {
+                ensure!(
+                    value.operation == operation,
+                    "partition is already retired by another operation"
+                );
+            } else {
+                // A plan names the partitions it moves: retiring one would strand it.
+                quiet_plan(&state)?;
+                ensure!(
+                    settled(&value),
+                    "partition has an unfinished placement operation"
+                );
+                value.status = Status::Retiring;
+                value.operation = operation;
+                put(&mut puts, PARTITION, &partition, &value)?;
+            }
+            json!(value)
+        }
+        CatalogRequest::Retired {
+            partition,
+            operation,
+        } => {
+            let mut value = placement(&state, &partition)?;
+            ensure!(
+                retired(&value) && value.operation == operation,
+                "partition is not being retired by this operation"
+            );
+            if value.status == Status::Retiring {
+                // Like Ready: the catalog checks the owner's durable state itself.
+                let info: Value = runtime
+                    .send(
+                        &value.owner,
+                        super::CONTROL_PATH,
+                        &super::coordinator::ControlRequest::Info {
+                            partition: partition.clone(),
+                        },
+                    )
+                    .await?;
+                ensure!(
+                    info["phase"] == "retired"
+                        && info["epoch"].as_u64() == Some(value.epoch)
+                        && info["operation"] == operation,
+                    "partition retirement is not durable"
+                );
+                value.status = Status::Retired;
+                put(&mut puts, PARTITION, &partition, &value)?;
+            }
+            json!(value)
+        }
         CatalogRequest::Resolve { .. } | CatalogRequest::List => unreachable!(),
     };
     puts.retain(|key, value| state.data.get(key) != Some(value));
@@ -732,6 +811,45 @@ mod tests {
         assert!(begin(&state, &mut puts, "tenant-0", "b", "exhausted").is_err());
         assert!(puts.is_empty());
         assert!(settled(&placement(&state, "tenant-0").unwrap()));
+    }
+
+    #[test]
+    fn retired_partitions_neither_move_nor_count_while_retiring_ones_hold_plans() {
+        let mut state = fixture(&["a", "a", "a", "b"]);
+        let retire = |state: &mut Snapshot, partition: &str, status: Status| {
+            let mut owner = placement(state, partition).unwrap();
+            owner.status = status;
+            owner.operation = format!("retire-{partition}");
+            state.data.insert(key(PARTITION, partition), json!(owner));
+        };
+        retire(&mut state, "tenant-0", Status::Retired);
+        retire(&mut state, "tenant-1", Status::Retired);
+        // Two live partitions on a and one on b: over a and b nothing moves.
+        let spread = plan(&state, vec!["a".into(), "b".into()], "spread".into()).unwrap();
+        assert!(spread.moves.is_empty() && spread.complete);
+        // Draining a moves its live partition only.
+        let drain = plan(&state, vec!["b".into(), "c".into()], "drain".into()).unwrap();
+        assert_eq!(
+            drain
+                .moves
+                .iter()
+                .map(|item| item.partition.as_str())
+                .collect::<Vec<_>>(),
+            ["tenant-2"]
+        );
+        let mut puts = BTreeMap::new();
+        let error = begin(&state, &mut puts, "tenant-0", "b", "revive").unwrap_err();
+        assert_eq!(error.to_string(), "partition is retired");
+        assert!(puts.is_empty());
+        assert!(
+            retired(&placement(&state, "tenant-0").unwrap())
+                && !serving(&placement(&state, "tenant-0").unwrap())
+        );
+        // One still retiring is unfinished work: no plan starts until it is done.
+        retire(&mut state, "tenant-2", Status::Retiring);
+        assert!(plan(&state, vec!["b".into()], "blocked".into()).is_err());
+        assert!(begin(&state, &mut puts, "tenant-2", "b", "revive").is_err());
+        assert!(!serving(&placement(&state, "tenant-2").unwrap()));
     }
 
     #[test]

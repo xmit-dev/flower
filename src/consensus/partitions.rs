@@ -123,6 +123,14 @@ pub enum PartitionCommand {
     Retire {
         transfer: PartitionTransfer,
     },
+    /// Retire a partition where it is, without a move: its application state
+    /// goes and its name stays taken. The catalog authorizes it (the placement
+    /// `retiring` under the same operation) before its owner applies it.
+    Discard {
+        partition: String,
+        epoch: u64,
+        operation: String,
+    },
 }
 
 impl PartitionCommand {
@@ -131,7 +139,8 @@ impl PartitionCommand {
             Self::Create { partition, .. }
             | Self::ImportChunk { partition, .. }
             | Self::SealImport { partition, .. }
-            | Self::Activate { partition, .. } => partition,
+            | Self::Activate { partition, .. }
+            | Self::Discard { partition, .. } => partition,
             Self::Capture { transfer, .. }
             | Self::BeginCopy { transfer, .. }
             | Self::BeginDelta { transfer, .. }
@@ -319,8 +328,12 @@ fn validate_state_with(state: &PartitionState, records: bool) -> anyhow::Result<
             "partition transfer identity does not match its ownership metadata"
         );
     } else {
+        // A partition retired in place (PartitionCommand::Discard) has no transfer either.
         anyhow::ensure!(
-            matches!(info.phase, PartitionPhase::Staged | PartitionPhase::Active),
+            matches!(
+                info.phase,
+                PartitionPhase::Staged | PartitionPhase::Active | PartitionPhase::Retired
+            ),
             "partition lifecycle phase requires a transfer"
         );
     }
@@ -836,6 +849,54 @@ pub(super) fn transition(
             next.last_import = None;
             next.info.base_bytes = 0;
             replace_base = true;
+            replace = true;
+            next
+        }
+        PartitionCommand::Discard {
+            partition,
+            epoch,
+            operation,
+        } => {
+            anyhow::ensure!(
+                !operation.is_empty(),
+                "partition retirement requires an operation"
+            );
+            let current = current.context("partition to retire does not exist")?;
+            anyhow::ensure!(
+                current.info.partition == partition && current.info.epoch == epoch,
+                "partition to retire is at another ownership epoch"
+            );
+            if current.info.phase == PartitionPhase::Retired && current.info.operation == operation
+            {
+                return Ok(Change {
+                    state: current.clone(),
+                    replace,
+                    replace_base,
+                    data_keys,
+                    request_keys,
+                    chunk_keys,
+                    replace_chunks,
+                });
+            }
+            anyhow::ensure!(
+                current.info.phase == PartitionPhase::Active,
+                "only an active partition can be retired in place"
+            );
+            can_move(&current.snapshot)
+                .context("partition retirement waits for its transactions")?;
+            let mut next = current.clone();
+            next.info.phase = PartitionPhase::Retired;
+            next.info.operation = operation;
+            // Retired in place: no transfer names it any more (validate_state).
+            next.info.transfer = None;
+            next.snapshot.data = Records::default();
+            next.snapshot.requests = Receipts::default();
+            next.base = None;
+            next.last_import = None;
+            next.chunks = Records::default();
+            next.info.base_bytes = 0;
+            replace_base = true;
+            replace_chunks = true;
             replace = true;
             next
         }

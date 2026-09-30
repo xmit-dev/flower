@@ -43,10 +43,12 @@ test("operator actions preserve caller operation IDs and do not add raw data acc
   await client.createPartition("a", "west", options);
   await client.movePartition("a", "east", options);
   await client.resize(["west", "east"], options);
+  await client.retirePartition("a", options);
   await client.partitionStatus("a"); await client.layout(); await client.removeGroup("west");
-  assert.deepEqual(calls.map(c => c.body.action), ["register_group", "create", "begin_move", "rebalance", "resolve", "list", "remove_group"]);
+  assert.deepEqual(calls.map(c => c.body.action), ["register_group", "create", "begin_move", "rebalance", "retire", "resolve", "list", "remove_group"]);
   assert.ok(calls.every(c => c.url === "http://gateway:7101/admin/partitions/catalog" && c.init.headers.authorization === "Bearer operator"));
-  assert.ok(calls.slice(1, 4).every(c => c.body.operation === "stable" && c.init.signal === options.signal));
+  assert.ok(calls.slice(1, 5).every(c => c.body.operation === "stable" && c.init.signal === options.signal));
+  assert.deepEqual(calls[4].body, { action: "retire", partition: "a", operation: "stable" });
 });
 
 test("activation waits are cancellable and have a configurable deadline", async () => {
@@ -58,4 +60,10 @@ test("activation waits are cancellable and have a configurable deadline", async 
   const stop = new AbortController(); const work = waiting.admin.waitForPartition("a", { signal: stop.signal }); stop.abort(new Error("stopped"));
   await assert.rejects(work, /stopped/);
   for (const options of [{ timeoutMs: 0 }, { intervalMs: Infinity }, { timeoutMs: 2 ** 31 }]) await assert.rejects(client.waitForPartition("a", options), TypeError);
+  for (const status of ["retiring", "retired"]) {
+    let asked = 0;
+    const gone = fixture(() => ({ status: ++asked < 2 ? "moving" : status, epoch: 1 }));
+    await assert.rejects(gone.admin.waitForPartition("a", { timeoutMs: 500, intervalMs: 1 }), (e: any) => e instanceof FlowerError && e.code === "PARTITION_RETIRED");
+    assert.equal(asked, 2);
+  }
 });

@@ -545,7 +545,7 @@ export interface PartitionMove {
 }
 export interface PartitionPlacement {
   partition: string; epoch: number; owner: ClusterGroup;
-  status: "creating" | "active" | "moving"; operation: string; movement: PartitionMove | null;
+  status: "creating" | "active" | "moving" | "retiring" | "retired"; operation: string; movement: PartitionMove | null;
 }
 export interface RebalanceMove { partition: string; source: string; destination: string; operation: string }
 export interface RebalancePlan { operation: string; groups: ClusterGroup[]; moves: RebalanceMove[]; next: number; complete: boolean }
@@ -763,6 +763,11 @@ export class FlowerAdmin {
     return this.admin("/admin/partitions/catalog", { action: "rebalance", groups, operation: options.requestId ?? crypto.randomUUID() }, options.signal);
   }
 
+  /** Durably start retiring a settled partition where it is: it stops serving at once, and its owner drops its state. There is no undo. */
+  async retirePartition(partition: string, options: ControlOptions = {}): Promise<PartitionPlacement> {
+    return this.admin("/admin/partitions/catalog", { action: "retire", partition, operation: options.requestId ?? crypto.randomUUID() }, options.signal);
+  }
+
   async partitionStatus(partition: string, options: { signal?: AbortSignal } = {}): Promise<PartitionPlacement> {
     return this.admin("/admin/partitions/catalog", { action: "resolve", partition }, options.signal);
   }
@@ -779,6 +784,7 @@ export class FlowerAdmin {
       while (true) {
         const placement = await this.partitionStatus(partition, { signal });
         if (placement.status === "active") return placement;
+        if (placement.status === "retiring" || placement.status === "retired") throw new FlowerError("The partition is retired", 0, "PARTITION_RETIRED");
         await sleep(intervalMs, signal);
       }
     } catch (error) {

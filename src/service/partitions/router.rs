@@ -93,6 +93,11 @@ impl Routes {
                 *cached = None;
                 self.entries.lock().await.remove(partition);
                 match result {
+                    Ok(placement) if catalog::retired(&placement) => Err(ApiError::new(
+                        StatusCode::GONE,
+                        "PARTITION_RETIRED",
+                        "partition is retired".into(),
+                    )),
                     Ok(_) => Err(moving(
                         "partition is being created or moved; retry with the same request ID",
                     )),

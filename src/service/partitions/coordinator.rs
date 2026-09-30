@@ -224,6 +224,19 @@ fn authorize(command: &PartitionCommand, placement: &Placement, local: &str) -> 
         );
         return Ok(());
     }
+    if let PartitionCommand::Discard {
+        epoch, operation, ..
+    } = command
+    {
+        ensure!(
+            placement.status == Status::Retiring
+                && placement.owner.id == local
+                && placement.epoch == *epoch
+                && placement.operation == *operation,
+            "catalog does not authorize this retirement"
+        );
+        return Ok(());
+    }
     let movement = placement
         .movement
         .as_ref()
@@ -279,7 +292,7 @@ fn authorize(command: &PartitionCommand, placement: &Placement, local: &str) -> 
                 && *transfer == expected
                 && movement.phase == Phase::Retiring
         }
-        PartitionCommand::Create { .. } => false,
+        PartitionCommand::Create { .. } | PartitionCommand::Discard { .. } => false,
     };
     ensure!(
         allowed,
@@ -388,7 +401,10 @@ pub(super) async fn handle(runtime: &Runtime, request: ControlRequest) -> anyhow
             }
             let sealed = matches!(&command, PartitionCommand::SealImport { .. });
             let leader_id = CommittedLeaderId::new(term, runtime.consensus.metrics().id);
-            let retired = matches!(&command, PartitionCommand::Retire { .. });
+            let retired = matches!(
+                &command,
+                PartitionCommand::Retire { .. } | PartitionCommand::Discard { .. }
+            );
             let result = runtime
                 .consensus
                 .control_partition(command, Some(leader_id))
@@ -601,6 +617,25 @@ async fn copy_payload(
 }
 
 async fn drive(runtime: &Runtime, owner: Placement) -> anyhow::Result<()> {
+    if owner.status == Status::Retiring {
+        control(
+            runtime,
+            &owner.owner,
+            PartitionCommand::Discard {
+                partition: owner.partition.clone(),
+                epoch: owner.epoch,
+                operation: owner.operation.clone(),
+            },
+        )
+        .await?;
+        runtime
+            .catalog(CatalogRequest::Retired {
+                partition: owner.partition,
+                operation: owner.operation,
+            })
+            .await?;
+        return Ok(());
+    }
     if owner.status == Status::Creating {
         control(
             runtime,
@@ -806,6 +841,7 @@ pub(super) async fn run(weak: Weak<Runtime>) {
                 serde_json::from_value(catalog::apply(&runtime, CatalogRequest::List).await?)?;
             for owner in view.partitions {
                 if (owner.status == Status::Creating
+                    || owner.status == Status::Retiring
                     || owner
                         .movement
                         .as_ref()
@@ -893,6 +929,56 @@ mod tests {
         );
         owner.movement.as_mut().unwrap().phase = Phase::Complete;
         assert!(authorize(&activate, &owner, "b").is_err());
+    }
+
+    #[test]
+    fn retirement_in_place_requires_the_catalog_to_be_retiring_it_under_that_operation() {
+        let group = |id: &str| Group {
+            id: id.into(),
+            addresses: vec![format!("{id}:7101")],
+        };
+        let mut owner = Placement {
+            partition: "tenant".into(),
+            epoch: 2,
+            owner: group("a"),
+            status: Status::Active,
+            operation: "retire".into(),
+            movement: None,
+        };
+        let discard = |epoch: u64, operation: &str| PartitionCommand::Discard {
+            partition: "tenant".into(),
+            epoch,
+            operation: operation.into(),
+        };
+        // An active placement authorizes no retirement, even under the same operation.
+        assert!(authorize(&discard(2, "retire"), &owner, "a").is_err());
+        owner.status = Status::Retiring;
+        assert!(authorize(&discard(2, "retire"), &owner, "a").is_ok());
+        assert!(authorize(&discard(2, "retire"), &owner, "b").is_err());
+        assert!(authorize(&discard(1, "retire"), &owner, "a").is_err());
+        assert!(authorize(&discard(2, "other"), &owner, "a").is_err());
+        assert!(
+            authorize(
+                &PartitionCommand::Discard {
+                    partition: "elsewhere".into(),
+                    epoch: 2,
+                    operation: "retire".into()
+                },
+                &owner,
+                "a"
+            )
+            .is_err()
+        );
+        // Retiring authorizes nothing else, and a finished retirement nothing at all.
+        let activate = PartitionCommand::Activate {
+            partition: "tenant".into(),
+            epoch: 2,
+            operation: "retire".into(),
+        };
+        assert!(authorize(&activate, &owner, "a").is_err());
+        owner.status = Status::Retired;
+        assert!(authorize(&discard(2, "retire"), &owner, "a").is_err());
+        assert!(authorize(&activate, &owner, "a").is_err());
     }
 }
 
