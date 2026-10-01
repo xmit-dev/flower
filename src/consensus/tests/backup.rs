@@ -122,8 +122,12 @@ async fn write(node: &Node, round: u64, count: u64, revision: &mut u64) {
 async fn backups_restore_the_state_at_any_point_in_time_or_index_and_survive_an_outage() {
     let backups = tempfile::tempdir().unwrap();
     let mut config = config(&backups);
-    // A base every hundred or so commits, so restores start from several.
-    config.base_after_bytes = 30_000;
+    // A base is due once the segments shipped since the newest weigh as
+    // much as it does, and at least this, both as stored (compressed): about
+    // every hundred commits when a segment holds dozens of entries (on a
+    // fast machine), more often when it holds a few and its header outweighs
+    // them (on a loaded one). Restores then start from several.
+    config.base_after_bytes = 3_000;
     let mut node = Node::backed_up(1, config.clone()).await;
     node.raft()
         .initialize(BTreeMap::from([(node.id, node.address.clone())]))
@@ -182,12 +186,19 @@ async fn backups_restore_the_state_at_any_point_in_time_or_index_and_survive_an_
         "the outage broke the generation"
     );
 
-    for extra in 0..2 {
+    // Two rounds at least, and more until there are three bases to restore
+    // from, however well the segments compressed.
+    let mut extra = 0;
+    loop {
         write(&node, round + extra, 60, &mut revision).await;
         record(&node, &mut points).await;
+        extra += 1;
+        let status = shipped(&node).await;
+        if extra >= 2 && status["basesWritten"].as_u64().unwrap() >= 3 {
+            break;
+        }
+        assert!(extra < 10, "fewer than three bases: {status:#}");
     }
-    let status = shipped(&node).await;
-    assert!(status["basesWritten"].as_u64().unwrap() >= 3, "{status:#}");
     let bases = std::fs::read_dir(
         backups
             .path()
