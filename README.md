@@ -78,7 +78,7 @@ npm ci
 cargo build
 ```
 
-On Nix, `nix develop -c cargo build` uses the pinned Rust 1.98.1 toolchain; the development shell also includes Node 26.10.0. `nix build` builds the standalone server without Node.
+On Nix, `nix develop -c cargo build` uses the pinned Rust 1.99.0 toolchain; the development shell also includes Node 26.10.0. `nix build` builds the standalone server without Node.
 
 `nix build .#sdk` builds `@flower-js/sdk` as npm installs it, under `lib/node_modules/@flower-js/sdk`, with the SDK's own `flower` command in `bin/` (`nix run .#cli -- --help`). Other flakes get both packages from `overlays.default` (`pkgs.flower`, `pkgs.flower-sdk`). A NixOS host runs any number of nodes with `nixosModules.default`:
 

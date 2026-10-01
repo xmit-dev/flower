@@ -13,7 +13,7 @@ TypeScript declarations and documentation; it ships no Rust source, tests,
 server binary or native JavaScript engine. Its only production npm dependency
 is esbuild, used by the bundle helper and CLI.
 
-Four native jobs build with Rust 1.98.1 and run the Rust tests:
+Four native jobs build with Rust 1.99.0 and run the Rust tests:
 
 | Asset suffix | Build runner / runtime baseline |
 | --- | --- |

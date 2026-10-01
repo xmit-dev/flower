@@ -32,7 +32,7 @@
 
       # Pin the current stable toolchain independently of the Nixpkgs release
       # so local and CI builds use the same compiler.
-      rustVersion = "1.98.1";
+      rustVersion = "1.99.0";
 
       overlays = [ rust-overlay.overlays.default ];
 

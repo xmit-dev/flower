@@ -136,7 +136,7 @@ impl ResourceLimiter for MemoryLimit {
             || self
                 .shared
                 .used
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
                     used.checked_add(additional)
                         .filter(|total| *total <= self.shared.maximum)
                 })
