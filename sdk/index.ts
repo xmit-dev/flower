@@ -39,3 +39,6 @@ export type {
   TransactionClosureTarget, TransactionClosureState, TransactionClosureAction, StagedDeploymentState, StagedDeploymentAction,
 } from "./client.ts";
 export type { WatchDelta, WatchSnapshot, WatchPatch, JsonPatchOperation } from "./watch.ts";
+
+export { sqlTable, sqlCatalog } from "./sql.ts";
+export type { SqlCell, JsonScalar, SqlColumn, SqlIndex, SqlRelationship, SqlReadContext, SqlProviderContext, SqlAuthorityContext, SqlProviderInput, SqlProjectedRow, SqlProviderBatch, SqlAuthorityRequest, SqlAuthorityDecision, SqlTableSpec, SqlTable, SqlCatalogSpec, SqlCatalog, SqlQueryInput, SqlResultColumn, SqlResult, SqlExecution, SqlCatalogColumn, SqlCatalogInfo, SqlExplain, SqlContext } from "./sql.ts";

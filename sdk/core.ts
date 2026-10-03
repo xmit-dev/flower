@@ -1,5 +1,6 @@
 import { canonicalJson, type Json } from "./json.ts";
 import { schema as adopt, ValidationError, type Infer, type Schema, type SchemaLike } from "./schema.ts";
+import type { SqlCatalog, SqlContext } from "./sql.ts";
 import type { ManagedKey } from "./keys.ts";
 import { compileAccess, compileDerivedAccess, type AccessManifest, type CollectionAccess, type DerivedAccess } from "./access.ts";
 
@@ -330,6 +331,8 @@ export interface Context {
   range<T, K>(range: RangeQuery<T, K>): RangePage<T, K>;
 }
 export interface QueryContext extends Context {
+  /** Opt-in native SQL, restricted to explicitly registered catalogs and one-shot query methods. */
+  readonly sql: SqlContext;
   /** Stable across movement; changes on a fenced disaster restore. Null before retention initialization. */
   history(): HistoryIdentity | null;
   /** The authenticated caller, or null for anonymous and unauthenticated calls. */
@@ -412,6 +415,10 @@ export interface MethodSpec<A> {
   readonly access?: Access<A>;
 }
 export interface QuerySpec<A> extends MethodSpec<A> {
+  /** false bypasses result lookup, identical-request coalescing and result insertion. */
+  readonly cache?: boolean;
+  /** false refuses server watches before creating a watch producer. */
+  readonly watch?: boolean;
   /** Fresh by default. Replica-local reads may lag without bound. */
   readonly consistency?: QueryConsistency;
 }
@@ -429,6 +436,8 @@ export interface QueryMethod<A = Json, V = Json> {
   readonly name: string;
   readonly compute: (ctx: QueryContext, args: A) => V;
   readonly consistency?: "replica-local";
+  readonly cache?: false;
+  readonly watch?: false;
 }
 export interface MutationMethod<A = Json, V = Json> {
   readonly kind: "mutationMethod";
@@ -444,7 +453,12 @@ export interface TransactionMethod<A = Json, V = Json> {
   readonly name: string;
   readonly compute: (ctx: Context, args: A) => TransactionPlan<V>;
 }
-export type Definition = Derived<any, any> | QueryMethod<any, any> | MutationMethod<any, any> | TransactionMethod<any, any>;
+export interface SqlCallback {
+  readonly kind: "sqlAuthority" | "sqlProvider";
+  readonly name: string;
+  readonly compute: (ctx: any, args: any) => any;
+}
+export type Definition = Derived<any, any> | QueryMethod<any, any> | MutationMethod<any, any> | TransactionMethod<any, any> | SqlCallback;
 export type HttpMethod = QueryMethod<any, any> | MutationMethod<any, any> | TransactionMethod<any, any>;
 export type HttpMap = { readonly [alias: string]: HttpMethod };
 
@@ -484,11 +498,14 @@ export function query<A = null, V = Json>(name: string, compute: (ctx: QueryCont
 export function query<S extends SchemaLike<any>, V>(name: string, spec: QuerySpec<Infer<S>> & { readonly args: S }, compute: (ctx: QueryContext, args: Infer<S>) => V): QueryMethod<Infer<S>, V>;
 export function query<A = null, V = Json>(name: string, spec: QuerySpec<A>, compute: (ctx: QueryContext, args: A) => V): QueryMethod<A, V>;
 export function query(name: string, specOrCompute: unknown, maybeCompute?: unknown): QueryMethod {
-  return method("Query", name, specOrCompute, maybeCompute, ["consistency"], (compute, spec) => {
+  return method("Query", name, specOrCompute, maybeCompute, ["consistency", "cache", "watch"], (compute, spec) => {
     if (spec.consistency !== undefined && spec.consistency !== "linearizable" && spec.consistency !== "replica-local") {
       throw new TypeError("Query consistency must be linearizable or replica-local");
     }
+    for (const key of ["cache", "watch"] as const) if (spec[key] !== undefined && typeof spec[key] !== "boolean") throw new TypeError(`Query ${key} must be boolean`);
     return Object.freeze({ kind: "queryMethod" as const, name, compute,
+      ...(spec.cache === false ? { cache: false as const } : {}),
+      ...(spec.watch === false ? { watch: false as const } : {}),
       ...(spec.consistency === "replica-local" ? { consistency: "replica-local" as const } : {}) });
   });
 }
@@ -519,7 +536,7 @@ export function transaction(name: string, specOrPlan: unknown, maybePlan?: unkno
 
 /** A committed transaction: each call's result, and the plan's value when it has one. */
 export interface TransactionResult<V = Json> { results: Json[]; value?: V }
-export interface ManifestMethod { readonly name: string; readonly kind: "query" | "mutation" | "transaction"; readonly consistency?: "replica-local"; readonly receipt?: false }
+export interface ManifestMethod { readonly name: string; readonly kind: "query" | "mutation" | "transaction"; readonly consistency?: "replica-local"; readonly receipt?: false; readonly cache?: false; readonly watch?: false }
 /**
  * A reference as the server enforces it: the target's name, where the row holds its key, and whether the
  * target's keys are JSON (`collection.key(schema)`), which the parts then make as one value or a tuple.
@@ -543,6 +560,7 @@ export interface FlowerModule<H extends HttpMap = HttpMap> {
   /** The authorization hook. It returns `{ principal, readArgs }` (`result: "decision"`): whether deciding read the call's arguments. */
   readonly authorize?: { readonly name: string; readonly result: "decision" };
   readonly collections?: readonly CollectionManifest[];
+  readonly sql?: readonly unknown[];
   readonly keys?: readonly ManagedKey[];
   readonly [phantom]?: H;
 }

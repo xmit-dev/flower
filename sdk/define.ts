@@ -8,6 +8,7 @@ import type {
 } from "./core.ts";
 import { aggregateSource, checkReadable, collectionManifest, normalizeAggregateMetadata, referenceManifest, referenceTarget } from "./indexing.ts";
 import { keyManifest, type ManagedKey } from "./keys.ts";
+import { bindSql, sqlDeclaration, type SqlCatalog } from "./sql.ts";
 import { ValidationError, type Schema } from "./schema.ts";
 
 /** Principal subject the authorization hook returns for anonymous callers; methods see null. */
@@ -32,6 +33,7 @@ export interface AuthConfig {
 export interface ModuleConfig<H extends HttpMap = HttpMap> extends ComponentParts {
   readonly http?: H;
   readonly auth?: AuthConfig;
+  readonly sql?: readonly SqlCatalog[];
 }
 
 // ---- Context binding: typed keys, record schemas and triggers over the host context
@@ -227,6 +229,7 @@ function bind(host: Host, runtime: Runtime): Session {
     touched.set(id, { target, name, keyed, raw, before, triggers });
   }
   const ctx: MutationContext = Object.freeze({
+    sql: bindSql(host),
     now: () => host.now(),
     clock: () => host.clock(),
     changesAt: (time: number | null) => { host.changesAt(time); },
@@ -703,13 +706,18 @@ function flatten(root: Component) {
   return parts;
 }
 
-const definitionKinds = ["derived", "queryMethod", "mutationMethod", "transactionMethod"];
+const definitionKinds = ["derived", "queryMethod", "mutationMethod", "transactionMethod", "sqlAuthority", "sqlProvider"];
 
 /** Declare the application: its components, internals and complete public HTTP allowlist. */
 export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {}): FlowerModule<H> {
-  const settings = plainObject(config, "Module configuration", ["uses", "collections", "definitions", "tasks", "triggers", "keys", "http", "auth"]);
-  const { http: httpSetting, auth, ...parts } = settings as ModuleConfig<H>;
+  const settings = plainObject(config, "Module configuration", ["uses", "collections", "definitions", "tasks", "triggers", "keys", "http", "auth", "sql"]);
+  const { http: httpSetting, auth, sql: sqlSetting, ...parts } = settings as ModuleConfig<H>;
   const flat = flatten(component(parts));
+  if (sqlSetting !== undefined && !Array.isArray(sqlSetting)) throw new TypeError("SQL catalogs must be an array");
+  const sql = (sqlSetting ?? []).map(sqlDeclaration);
+  if (new Set(sql.map((entry) => entry.manifest.name)).size !== sql.length) throw new TypeError("SQL catalog names must be distinct");
+  flat.collections.push(...((sqlSetting ?? []) as readonly SqlCatalog[]).flatMap((catalog) => catalog.tables.flatMap((table) => table.sources)));
+  flat.definitions.push(...sql.flatMap((entry) => entry.definitions));
   const originals = new Map<string, Definition>();
   function register(value: unknown, internal = false): Definition {
     const definition = plainObject(value, "Definition") as unknown as Definition;
@@ -732,12 +740,14 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
     requireName(alias, "HTTP alias");
     if (alias.startsWith("$flower.")) throw new TypeError("HTTP aliases beginning with $flower. are reserved");
     const method = register(allowlist[alias]);
-    if (method.kind === "derived") throw new TypeError("Only query, mutation, and transaction methods may be exposed over HTTP");
+    if (method.kind !== "queryMethod" && method.kind !== "mutationMethod" && method.kind !== "transactionMethod") throw new TypeError("Only query, mutation, and transaction methods may be exposed over HTTP");
     exposed[alias] = method;
     http[alias] = Object.freeze({
       name: method.name,
       kind: method.kind === "queryMethod" ? "query" as const : method.kind === "transactionMethod" ? "transaction" as const : "mutation" as const,
       ...(method.kind === "queryMethod" && method.consistency === "replica-local" ? { consistency: "replica-local" as const } : {}),
+      ...(method.kind === "queryMethod" && method.cache === false ? { cache: false as const } : {}),
+      ...(method.kind === "queryMethod" && method.watch === false ? { watch: false as const } : {}),
       ...(method.kind === "mutationMethod" && method.receipt === false ? { receipt: false as const } : {}),
     });
   }
@@ -799,6 +809,8 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
       ...(aggregate ? { aggregate } : {}),
       ...(definition.kind === "derived" && derivedAccessOf(definition) !== undefined ? { access: derivedAccessOf(definition) } : {}),
       ...(definition.kind === "queryMethod" && definition.consistency === "replica-local" ? { consistency: "replica-local" as const } : {}),
+      ...(definition.kind === "queryMethod" && definition.cache === false ? { cache: false as const } : {}),
+      ...(definition.kind === "queryMethod" && definition.watch === false ? { watch: false as const } : {}),
       ...(definition.kind === "mutationMethod" && definition.receipt === false ? { receipt: false as const } : {}),
     }) as Definition;
   }
@@ -814,6 +826,7 @@ export function define<const H extends HttpMap = {}>(config: ModuleConfig<H> = {
   runtime.enforced = runtime.guarded.size > 0 || Object.values(definitions).some((definition) => Object.hasOwn(definition, "access"));
   return Object.freeze({
     definitions: Object.freeze(definitions),
+    ...(sql.length ? { sql: Object.freeze(sql.map((entry) => entry.manifest)) } : {}),
     http: Object.freeze(http),
     maintenance: maintenanceManifest,
     ...(authorize ? { authorize: Object.freeze({ name: authorize.name, result: "decision" as const }) } : {}),
